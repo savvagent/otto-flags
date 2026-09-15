@@ -1,0 +1,147 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/
+vendor/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+.turbo/
+
+# Java
+target/
+*.class
+*.jar
+*.war
+*.ear
+.settings/
+.project
+.classpath
+.factorypath
+.apt_generated/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# Swift/iOS (in case not caught by package-level .gitignore)
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+Package.resolved
+
+# Android/Kotlin (in case not caught by package-level .gitignore)
+.gradle/
+local.properties
+*.iml
+.idea/
+*.apk
+*.aab
+*.ap_
+*.dex
+.externalNativeBuild/
+.cxx/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env*.local
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Cache
+.cache/
+.eslintcache
+*.tgz
+
+# Temporary files
+.temp/
+.tmp/
+*.tmp
+
+# Changesets
+.changeset/*.md
+!.changeset/README.md
+!.changeset/config.json
+
+# ===========================================
+# Framework-specific (Examples & SDKs)
+# ===========================================
+
+# Angular
+.angular/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# SvelteKit
+.svelte-kit/
+
+# Vite
+.vite/
+
+# Astro
+.astro/
+
+# Parcel
+.parcel-cache/
+
+# Nuxt
+.nuxt/
+.output/
+
+# Remix
+.remix/
+
+# Solid
+.solid/
+
+# ===========================================
+# Lock files (keep only pnpm-lock.yaml at root)
+# ===========================================
+examples/**/package-lock.json
+examples/**/yarn.lock
+examples/**/pnpm-lock.yaml

@@ -1,0 +1,64 @@
+{
+  "name": "@savvagent/vue",
+  "version": "1.1.0",
+  "description": "Vue SDK for Savvagent feature flags with Composition API",
+  "author": "Savvagent",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external vue",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --external vue --watch",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "peerDependencies": {
+    "vue": ">=3.0.0"
+  },
+  "dependencies": {
+    "@savvagent/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "@vue/test-utils": "2.4.6",
+    "eslint": "^8.57.0",
+    "happy-dom": "20.0.11",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.14",
+    "vue": "^3.5.25"
+  },
+  "keywords": [
+    "savvagent",
+    "feature-flags",
+    "vue",
+    "composables",
+    "composition-api",
+    "feature-toggles"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savvagent/savvagent-sdks",
+    "directory": "packages/vue"
+  },
+  "bugs": {
+    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+  },
+  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/vue#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}

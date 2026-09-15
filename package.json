@@ -1,0 +1,30 @@
+{
+  "name": "@savvagent-sdks/monorepo",
+  "version": "0.0.0",
+  "private": false,
+  "description": "Savvagent SDKs, MCP servers, and example applications",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savvagent/savvagent-sdks.git"
+  },
+  "license": "MIT",
+  "author": "Savvagent",
+  "scripts": {
+    "build": "pnpm -r --filter='./packages/*' run build",
+    "test": "pnpm -r --filter='./packages/*' run test",
+    "lint": "pnpm -r --filter='./packages/*' run lint",
+    "format": "pnpm -r run format",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish",
+    "sync:types": "openapi-typescript ../savvagent-flags/docs/openapi.json -o packages/typescript/src/generated/api-types.ts"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.8",
+    "openapi-typescript": "^7.10.1"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

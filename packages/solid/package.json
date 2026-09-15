@@ -1,0 +1,68 @@
+{
+  "name": "@savvagent/solid",
+  "version": "1.1.0",
+  "description": "SolidJS SDK for Savvagent feature flags with reactive primitives",
+  "author": "Savvagent",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts,.tsx",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\""
+  },
+  "peerDependencies": {
+    "solid-js": ">=1.0.0"
+  },
+  "dependencies": {
+    "@savvagent/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@solidjs/testing-library": "0.8.10",
+    "@testing-library/jest-dom": "6.9.1",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "esbuild-plugin-solid": "0.6.0",
+    "eslint": "^8.57.0",
+    "jsdom": "27.2.0",
+    "solid-js": "^1.9.10",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vite-plugin-solid": "^2.11.10",
+    "vitest": "4.0.14"
+  },
+  "keywords": [
+    "savvagent",
+    "feature-flags",
+    "solidjs",
+    "solid",
+    "reactive",
+    "signals",
+    "feature-toggles"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savvagent/savvagent-sdks",
+    "directory": "packages/solid"
+  },
+  "bugs": {
+    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+  },
+  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/solid#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}

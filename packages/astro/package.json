@@ -1,0 +1,62 @@
+{
+  "name": "@savvagent/astro",
+  "version": "1.1.0",
+  "description": "Astro integration for Savvagent feature flags",
+  "author": "Savvagent",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --external astro",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --external astro --watch",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "peerDependencies": {
+    "astro": ">=3.0.0 || >=4.0.0"
+  },
+  "dependencies": {
+    "@savvagent/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "astro": "^4.16.19",
+    "eslint": "^8.57.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "4.0.14"
+  },
+  "keywords": [
+    "savvagent",
+    "feature-flags",
+    "astro",
+    "integration",
+    "middleware",
+    "feature-toggles"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/savvagent/savvagent-sdks",
+    "directory": "packages/astro"
+  },
+  "bugs": {
+    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+  },
+  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/astro#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
