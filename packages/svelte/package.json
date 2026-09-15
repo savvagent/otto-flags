@@ -1,8 +1,8 @@
 {
-  "name": "@savvagent/svelte",
+  "name": "@otto-flags/svelte",
   "version": "1.1.0",
-  "description": "Svelte SDK for Savvagent feature flags with stores and runes",
-  "author": "Savvagent",
+  "description": "Svelte SDK for Otto Flags feature flags with stores and runes",
+  "author": "Otto Flags",
   "license": "MIT",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -28,7 +28,7 @@
     "svelte": ">=4.0.0"
   },
   "dependencies": {
-    "@savvagent/sdk": "workspace:*"
+    "@otto-flags/sdk": "workspace:*"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",
@@ -40,7 +40,7 @@
     "vitest": "4.0.14"
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "feature-flags",
     "svelte",
     "stores",
@@ -49,13 +49,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/svelte"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/svelte#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/svelte#readme",
   "publishConfig": {
     "access": "public"
   }

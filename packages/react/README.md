@@ -1,27 +1,27 @@
-# @savvagent/react
+# @otto-flags/react
 
-React SDK for Savvagent - AI-powered feature flags that prevent production incidents.
+React SDK for Otto Flags - AI-powered feature flags that prevent production incidents.
 
 ## Installation
 
 ```bash
-npm install @savvagent/react
+npm install @otto-flags/react
 # or
-pnpm add @savvagent/react
+pnpm add @otto-flags/react
 # or
-yarn add @savvagent/react
+yarn add @otto-flags/react
 ```
 
 ## Quick Start
 
-### 1. Wrap your app with SavvagentProvider
+### 1. Wrap your app with OttoFlagsProvider
 
 ```tsx
-import { SavvagentProvider } from '@savvagent/react';
+import { OttoFlagsProvider } from '@otto-flags/react';
 
 function App() {
   return (
-    <SavvagentProvider
+    <OttoFlagsProvider
       config={{
         apiKey: 'sdk_your_api_key_here',
         applicationId: 'your-app-id', // Optional: for application-scoped flags
@@ -29,7 +29,7 @@ function App() {
       }}
     >
       <YourApp />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 ```
@@ -37,7 +37,7 @@ function App() {
 ### 2. Use the useFlag hook
 
 ```tsx
-import { useFlag } from '@savvagent/react';
+import { useFlag } from '@otto-flags/react';
 
 function MyFeature() {
   const { value: isEnabled, loading } = useFlag('new-checkout-flow', {
@@ -55,14 +55,14 @@ function MyFeature() {
 
 ## API Reference
 
-### `<SavvagentProvider>`
+### `<OttoFlagsProvider>`
 
-Provider component that initializes the Savvagent client and makes it available to all child components.
+Provider component that initializes the Otto Flags client and makes it available to all child components.
 
 #### Props
 
 ```tsx
-interface SavvagentProviderProps {
+interface OttoFlagsProviderProps {
   config: FlagClientConfig;
   children: React.ReactNode;
 }
@@ -72,7 +72,7 @@ interface FlagClientConfig {
   apiKey: string;
   /** Application ID for application-scoped flags */
   applicationId?: string;
-  /** Base URL for the Savvagent API */
+  /** Base URL for the Otto Flags API */
   baseUrl?: string;
   /** Enable real-time flag updates via SSE (default: true) */
   enableRealtime?: boolean;
@@ -159,14 +159,14 @@ function MyComponent() {
 }
 ```
 
-### `useSavvagent()`
+### `useOttoFlags()`
 
-Hook to access the underlying Savvagent client instance for advanced use cases.
+Hook to access the underlying Otto Flags client instance for advanced use cases.
 
 #### Returns
 
 ```tsx
-interface SavvagentContextValue {
+interface OttoFlagsContextValue {
   /** The FlagClient instance */
   client: FlagClient | null;
   /** Whether the client is ready */
@@ -178,7 +178,7 @@ interface SavvagentContextValue {
 
 ```tsx
 function AdvancedComponent() {
-  const { client, isReady } = useSavvagent();
+  const { client, isReady } = useOttoFlags();
 
   useEffect(() => {
     if (!isReady || !client) return;
@@ -356,18 +356,18 @@ import type {
   FlagEvaluationResult,
   UseFlagOptions,
   UseFlagResult,
-} from '@savvagent/react';
+} from '@otto-flags/react';
 ```
 
 ## Best Practices
 
-1. **Place SavvagentProvider high in your component tree** to ensure all components have access to the client.
+1. **Place OttoFlagsProvider high in your component tree** to ensure all components have access to the client.
 
 2. **Use the `defaultValue` option** to provide a safe fallback while flags are loading.
 
 3. **Enable real-time updates** for flags that change frequently or require immediate propagation.
 
-4. **Track errors** in new features to leverage Savvagent's AI-powered error correlation.
+4. **Track errors** in new features to leverage Otto Flags's AI-powered error correlation.
 
 5. **Use user context** for targeted rollouts based on user attributes, location, or behavior.
 

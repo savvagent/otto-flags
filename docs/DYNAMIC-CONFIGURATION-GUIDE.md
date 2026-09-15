@@ -3,7 +3,7 @@
 **Version:** 2.0
 **Last Updated:** November 2024
 
-This guide shows you how to use Savvagent's new **Dynamic Configuration** and **Multi-Variant Flags** features across all SDKs.
+This guide shows you how to use Otto Flags's new **Dynamic Configuration** and **Multi-Variant Flags** features across all SDKs.
 
 ---
 
@@ -74,7 +74,7 @@ No changes needed - use your existing SDK installation.
 
 **Node.js/TypeScript:**
 ```typescript
-import { FlagClient } from '@savvagent/node-server';
+import { FlagClient } from '@otto-flags/node-server';
 
 // Create a single SDK instance at application startup
 const client = new FlagClient({
@@ -148,11 +148,11 @@ See [SDK-DEVELOPER-GUIDE.md](./SDK-DEVELOPER-GUIDE.md) for the complete API resp
 ### Node.js / TypeScript
 
 ```typescript
-import { FlagClient } from '@savvagent/node-server';
+import { FlagClient } from '@otto-flags/node-server';
 
 // Create a single SDK instance at application startup
 const client = new FlagClient({
-  apiKey: process.env.SAVVAGENT_API_KEY,  // SDK key (sdk_) or Server key (srv_)
+  apiKey: process.env.OTTO_FLAGS_API_KEY,  // SDK key (sdk_) or Server key (srv_)
   applicationId: 'my-app'
 });
 
@@ -221,13 +221,13 @@ import (
 )
 
 func main() {
-	client, _ := savvagent.NewClient(savvagent.Config{
-		APIKey:        os.Getenv("SAVVAGENT_API_KEY"),
+	client, _ := ottoFlags.NewClient(ottoFlags.Config{
+		APIKey:        os.Getenv("OTTO_FLAGS_API_KEY"),
 		ApplicationID: "my-app",
 	})
 	defer client.Close()
 
-	ctx := &savvagent.Context{
+	ctx := &ottoFlags.Context{
 		UserID: "user-123",
 	}
 
@@ -277,11 +277,11 @@ func main() {
 ### Rust
 
 ```rust
-use savvagent_sdk::{Config, Context, FlagClient};
+use otto_flags_sdk::{Config, Context, FlagClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::new(env::var("SAVVAGENT_API_KEY")?)
+    let config = Config::new(env::var("OTTO_FLAGS_API_KEY")?)
         .with_application_id("my-app");
 
     let client = FlagClient::new(config)?;
@@ -324,13 +324,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Java
 
 ```java
-import com.savvagent.sdk.*;
+import com.savvagent.ottoflags.sdk.*;
 import com.google.gson.JsonObject;
 
 public class Example {
     public static void main(String[] args) {
         FlagClientConfig config = new FlagClientConfig.Builder()
-            .apiKey(System.getenv("SAVVAGENT_API_KEY"))
+            .apiKey(System.getenv("OTTO_FLAGS_API_KEY"))
             .applicationId("my-app")
             .build();
 
@@ -390,19 +390,19 @@ public class Example {
 ### Android (Kotlin)
 
 ```kotlin
-import com.savvagent.sdk.*
+import com.savvagent.ottoflags.sdk.*
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : AppCompatActivity() {
-    private lateinit var client: SavvagentClient
+    private lateinit var client: OttoFlagsClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        client = SavvagentClient(
-            config = SavvagentConfig(
-                sdkKey = BuildConfig.SAVVAGENT_API_KEY,
-                apiUrl = "https://flags-api.savvagent.com"
+        client = OttoFlagsClient(
+            config = OttoFlagsConfig(
+                sdkKey = BuildConfig.OTTO_FLAGS_API_KEY,
+                apiUrl = "https://flags-api.otto-flags.dev"
             ),
             context = this
         )
@@ -457,17 +457,17 @@ class MainActivity : AppCompatActivity() {
 ### iOS (Swift)
 
 ```swift
-import SavvagentSDK
+import OttoFlagsSDK
 
 class ViewController: UIViewController {
-    let client: SavvagentClient
+    let client: OttoFlagsClient
 
     init() {
-        let config = SavvagentConfig(
-            sdkKey: Bundle.main.infoDictionary?["SAVVAGENT_API_KEY"] as! String,
-            apiUrl: "https://flags-api.savvagent.com"
+        let config = OttoFlagsConfig(
+            sdkKey: Bundle.main.infoDictionary?["OTTO_FLAGS_API_KEY"] as! String,
+            apiUrl: "https://flags-api.otto-flags.dev"
         )
-        client = SavvagentClient(config: config)
+        client = OttoFlagsClient(config: config)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -543,7 +543,7 @@ class ViewController: UIViewController {
 
 **Goal:** Change app colors/typography without code deployment.
 
-**Flag Configuration (in Savvagent Dashboard):**
+**Flag Configuration (in Otto Flags Dashboard):**
 ```json
 {
   "production": {
@@ -973,9 +973,9 @@ See [MIGRATION-GUIDE.md](./MIGRATION-GUIDE.md) for detailed migration instructio
 ## Support
 
 - 📚 [Full API Reference](./SDK-REFERENCE.md)
-- 💬 [GitHub Discussions](https://github.com/savvagent/savvagent-sdks/discussions)
-- 🐛 [Report Issues](https://github.com/savvagent/savvagent-sdks/issues)
-- 📧 Email: support@savvagent.com
+- 💬 [GitHub Discussions](https://github.com/savvagent/otto-flags/discussions)
+- 🐛 [Report Issues](https://github.com/savvagent/otto-flags/issues)
+- 📧 Email: support@otto-flags.dev
 
 ---
 

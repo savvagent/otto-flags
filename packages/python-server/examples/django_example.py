@@ -1,7 +1,7 @@
 """
-Django Example for Savvagent SDK
+Django Example for Otto Flags SDK
 
-This example demonstrates how to use the Savvagent SDK with Django,
+This example demonstrates how to use the Otto Flags SDK with Django,
 including singleton client pattern, middleware for context injection,
 and usage in views.
 
@@ -9,12 +9,12 @@ This file shows the pattern - actual Django projects would split this
 across settings.py, middleware.py, and views.py files.
 
 Requirements:
-    pip install savvagent django
+    pip install otto_flags django
 
 Setup:
-    1. Add 'savvagent_app' to INSTALLED_APPS
-    2. Add SavvagentMiddleware to MIDDLEWARE
-    3. Set SAVVAGENT_API_KEY in settings
+    1. Add 'otto_flags_app' to INSTALLED_APPS
+    2. Add OttoFlagsMiddleware to MIDDLEWARE
+    3. Set OTTO_FLAGS_API_KEY in settings
 """
 
 import os
@@ -22,32 +22,32 @@ from functools import wraps
 from typing import Any
 
 # =============================================================================
-# savvagent_client.py - Singleton client pattern
+# otto_flags_client.py - Singleton client pattern
 # =============================================================================
 
-from savvagent import FlagClient, FlagClientConfig, FlagContext
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
 
 _client: FlagClient | None = None
 
 
-def get_savvagent_client() -> FlagClient:
-    """Get or create the Savvagent client singleton."""
+def get_otto_flags_client() -> FlagClient:
+    """Get or create the Otto Flags client singleton."""
     global _client
     if _client is None:
         from django.conf import settings
 
         config = FlagClientConfig(
-            api_key=getattr(settings, "SAVVAGENT_API_KEY", os.getenv("SAVVAGENT_API_KEY", "")),
-            application_id=getattr(settings, "SAVVAGENT_APP_ID", None),
-            enable_realtime=getattr(settings, "SAVVAGENT_ENABLE_REALTIME", True),
-            enable_telemetry=getattr(settings, "SAVVAGENT_ENABLE_TELEMETRY", True),
+            api_key=getattr(settings, "OTTO_FLAGS_API_KEY", os.getenv("OTTO_FLAGS_API_KEY", "")),
+            application_id=getattr(settings, "OTTO_FLAGS_APP_ID", None),
+            enable_realtime=getattr(settings, "OTTO_FLAGS_ENABLE_REALTIME", True),
+            enable_telemetry=getattr(settings, "OTTO_FLAGS_ENABLE_TELEMETRY", True),
         )
         _client = FlagClient(config)
     return _client
 
 
-def close_savvagent_client() -> None:
-    """Close the Savvagent client (call on shutdown)."""
+def close_otto_flags_client() -> None:
+    """Close the Otto Flags client (call on shutdown)."""
     global _client
     if _client is not None:
         _client.close()
@@ -61,17 +61,17 @@ def close_savvagent_client() -> None:
 from django.http import HttpRequest, HttpResponse
 
 
-class SavvagentMiddleware:
+class OttoFlagsMiddleware:
     """Django middleware to attach flag context to requests."""
 
     def __init__(self, get_response):
         self.get_response = get_response
-        self.client = get_savvagent_client()
+        self.client = get_otto_flags_client()
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         # Attach flag context to request
         request.flag_context = self._build_context(request)
-        request.savvagent = self.client
+        request.otto_flags = self.client
 
         response = self.get_response(request)
         return response
@@ -111,7 +111,7 @@ def require_feature(flag_key: str):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request: HttpRequest, *args, **kwargs):
-            client = get_savvagent_client()
+            client = get_otto_flags_client()
             context = getattr(request, "flag_context", FlagContext())
 
             if not client.is_enabled(flag_key, context):
@@ -132,7 +132,7 @@ def with_feature_flag(flag_key: str, attribute_name: str = "feature_enabled"):
     def decorator(view_func):
         @wraps(view_func)
         def wrapper(request: HttpRequest, *args, **kwargs):
-            client = get_savvagent_client()
+            client = get_otto_flags_client()
             context = getattr(request, "flag_context", FlagContext())
 
             setattr(request, attribute_name, client.is_enabled(flag_key, context))
@@ -152,12 +152,12 @@ from django.views import View
 
 def health_check(request: HttpRequest) -> JsonResponse:
     """Health check endpoint."""
-    return JsonResponse({"status": "ok", "service": "savvagent-django-example"})
+    return JsonResponse({"status": "ok", "service": "otto-flags-django-example"})
 
 
 def get_features(request: HttpRequest, user_id: str) -> JsonResponse:
     """Get feature flags for a user."""
-    client = request.savvagent
+    client = request.otto_flags
     context = request.flag_context
     context.user_id = user_id
 
@@ -177,7 +177,7 @@ def get_features(request: HttpRequest, user_id: str) -> JsonResponse:
 
 def get_settings(request: HttpRequest) -> JsonResponse:
     """Get dynamic configuration from a feature flag."""
-    client = request.savvagent
+    client = request.otto_flags
     context = request.flag_context
 
     processing_config = client.get_config(
@@ -193,7 +193,7 @@ def get_settings(request: HttpRequest) -> JsonResponse:
 
 def get_experiment(request: HttpRequest) -> JsonResponse:
     """Get A/B test variation for a user."""
-    client = request.savvagent
+    client = request.otto_flags
     context = request.flag_context
 
     variation = client.get_variation("checkout-experiment", context)
@@ -216,7 +216,7 @@ class FeatureGatedView(View):
     """Class-based view with feature flag."""
 
     def get(self, request: HttpRequest) -> JsonResponse:
-        client = request.savvagent
+        client = request.otto_flags
         context = request.flag_context
 
         if client.is_enabled("new-dashboard", context):
@@ -232,21 +232,21 @@ class FeatureGatedView(View):
 from django.apps import AppConfig
 
 
-class SavvagentAppConfig(AppConfig):
-    """Django app configuration for Savvagent integration."""
+class OttoFlagsAppConfig(AppConfig):
+    """Django app configuration for Otto Flags integration."""
 
-    name = "savvagent_app"
-    verbose_name = "Savvagent Feature Flags"
+    name = "otto_flags_app"
+    verbose_name = "Otto Flags Feature Flags"
 
     def ready(self) -> None:
-        """Initialize Savvagent client on app startup."""
+        """Initialize Otto Flags client on app startup."""
         import atexit
 
         # Initialize the client
-        get_savvagent_client()
+        get_otto_flags_client()
 
         # Register cleanup on shutdown
-        atexit.register(close_savvagent_client)
+        atexit.register(close_otto_flags_client)
 
 
 # =============================================================================
@@ -269,12 +269,12 @@ class SavvagentAppConfig(AppConfig):
 # settings.py additions
 # =============================================================================
 #
-# SAVVAGENT_API_KEY = os.getenv("SAVVAGENT_API_KEY", "sdk_your_key_here")
-# SAVVAGENT_APP_ID = os.getenv("SAVVAGENT_APP_ID")
-# SAVVAGENT_ENABLE_REALTIME = True
-# SAVVAGENT_ENABLE_TELEMETRY = True
+# OTTO_FLAGS_API_KEY = os.getenv("OTTO_FLAGS_API_KEY", "sdk_your_key_here")
+# OTTO_FLAGS_APP_ID = os.getenv("OTTO_FLAGS_APP_ID")
+# OTTO_FLAGS_ENABLE_REALTIME = True
+# OTTO_FLAGS_ENABLE_TELEMETRY = True
 #
 # MIDDLEWARE = [
 #     ...
-#     'your_app.middleware.SavvagentMiddleware',
+#     'your_app.middleware.OttoFlagsMiddleware',
 # ]

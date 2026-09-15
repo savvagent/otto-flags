@@ -1,13 +1,13 @@
-# Savvagent Svelte Example
+# Otto Flags Svelte Example
 
-Example Svelte application demonstrating how to use the Savvagent Svelte SDK with stores.
+Example Svelte application demonstrating how to use the Otto Flags Svelte SDK with stores.
 
 ## Features
 
 - Svelte 4 with reactive stores
 - TypeScript
 - Vite for fast development
-- Savvagent Svelte stores (`featureFlag`, `savvagentContext`)
+- Otto Flags Svelte stores (`featureFlag`, `ottoFlagsContext`)
 - Real-time feature flag updates
 - Hot module replacement
 
@@ -25,8 +25,8 @@ Example Svelte application demonstrating how to use the Savvagent Svelte SDK wit
 
    Edit `.env.local`:
    ```bash
-   VITE_SAVVAGENT_API_URL=http://localhost:8080
-   VITE_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   VITE_OTTO_FLAGS_API_URL=http://localhost:8080
+   VITE_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -42,7 +42,7 @@ Example Svelte application demonstrating how to use the Savvagent Svelte SDK wit
 
 ```svelte
 <script lang="ts">
-  import { featureFlag } from '@savvagent/svelte';
+  import { featureFlag } from '@otto-flags/svelte';
 
   const newFeature = featureFlag('new-feature', {
     userId: 'user-123',
@@ -66,11 +66,11 @@ Example Svelte application demonstrating how to use the Savvagent Svelte SDK wit
 
 ```svelte
 <script lang="ts">
-  import { setSavvagentContext } from '@savvagent/svelte';
+  import { setOttoFlagsContext } from '@otto-flags/svelte';
 
-  setSavvagentContext({
-    apiUrl: import.meta.env.VITE_SAVVAGENT_API_URL,
-    sdkKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY,
+  setOttoFlagsContext({
+    apiUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL,
+    sdkKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY,
   });
 </script>
 
@@ -80,5 +80,5 @@ Example Svelte application demonstrating how to use the Savvagent Svelte SDK wit
 ## Learn More
 
 - [Svelte Documentation](https://svelte.dev/)
-- [Savvagent Svelte SDK Documentation](../../packages/svelte/README.md)
+- [Otto Flags Svelte SDK Documentation](../../packages/svelte/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

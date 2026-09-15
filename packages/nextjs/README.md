@@ -1,15 +1,15 @@
-# @savvagent/nextjs
+# @otto-flags/nextjs
 
-Next.js SDK for Savvagent with full App Router support, including Server Components, Client Components, Middleware, and Server Actions.
+Next.js SDK for Otto Flags with full App Router support, including Server Components, Client Components, Middleware, and Server Actions.
 
 ## Installation
 
 ```bash
-npm install @savvagent/nextjs
+npm install @otto-flags/nextjs
 # or
-pnpm add @savvagent/nextjs
+pnpm add @otto-flags/nextjs
 # or
-yarn add @savvagent/nextjs
+yarn add @otto-flags/nextjs
 ```
 
 ## Quick Start
@@ -18,11 +18,11 @@ yarn add @savvagent/nextjs
 
 ```tsx
 // app/layout.tsx
-import { initServerClient } from '@savvagent/nextjs/server';
+import { initServerClient } from '@otto-flags/nextjs/server';
 
 initServerClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
-  applicationId: process.env.SAVVAGENT_APP_ID,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
+  applicationId: process.env.OTTO_FLAGS_APP_ID,
 });
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -40,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 // app/components/feature.tsx
 'use client';
 
-import { useFlag } from '@savvagent/nextjs/client';
+import { useFlag } from '@otto-flags/nextjs/client';
 
 export function Feature() {
   const { value, loading } = useFlag('new-feature');
@@ -55,7 +55,7 @@ export function Feature() {
 
 ```tsx
 // app/page.tsx
-import { isEnabled } from '@savvagent/nextjs/server';
+import { isEnabled } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const enabled = await isEnabled('new-layout');
@@ -68,10 +68,10 @@ export default async function Page() {
 
 ```ts
 // middleware.ts
-import { initMiddlewareClient, createMiddleware } from '@savvagent/nextjs/middleware';
+import { initMiddlewareClient, createMiddleware } from '@otto-flags/nextjs/middleware';
 
 initMiddlewareClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
 });
 
 export default createMiddleware({
@@ -99,12 +99,12 @@ export const config = {
 Initialize the server-side client. Call once in your root layout.
 
 ```tsx
-import { initServerClient } from '@savvagent/nextjs/server';
+import { initServerClient } from '@otto-flags/nextjs/server';
 
 initServerClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
-  applicationId: process.env.SAVVAGENT_APP_ID,
-  baseUrl: process.env.SAVVAGENT_BASE_URL,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
+  applicationId: process.env.OTTO_FLAGS_APP_ID,
+  baseUrl: process.env.OTTO_FLAGS_BASE_URL,
 });
 ```
 
@@ -113,7 +113,7 @@ initServerClient({
 Check if a flag is enabled in a Server Component.
 
 ```tsx
-import { isEnabled } from '@savvagent/nextjs/server';
+import { isEnabled } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const enabled = await isEnabled('premium-features', {
@@ -130,7 +130,7 @@ export default async function Page() {
 Get detailed flag evaluation result.
 
 ```tsx
-import { evaluate } from '@savvagent/nextjs/server';
+import { evaluate } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const result = await evaluate('beta-feature');
@@ -150,7 +150,7 @@ export default async function Page() {
 Execute code conditionally based on flag value.
 
 ```tsx
-import { withFlag } from '@savvagent/nextjs/server';
+import { withFlag } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const data = await withFlag('use-new-api', async () => {
@@ -167,7 +167,7 @@ export default async function Page() {
 Create a context object from Next.js request (automatically extracts cookies and headers).
 
 ```tsx
-import { createServerContext, isEnabled, getServerClient } from '@savvagent/nextjs/server';
+import { createServerContext, isEnabled, getServerClient } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const context = await createServerContext({
@@ -183,21 +183,21 @@ export default async function Page() {
 
 ### Client Components
 
-Use the `'use client'` directive and import from `@savvagent/nextjs/client`:
+Use the `'use client'` directive and import from `@otto-flags/nextjs/client`:
 
 ```tsx
 'use client';
 
 import {
-  SavvagentProvider,
+  OttoFlagsProvider,
   useFlag,
-  useSavvagent,
+  useOttoFlags,
   useUser,
   useTrackError,
-} from '@savvagent/nextjs/client';
+} from '@otto-flags/nextjs/client';
 ```
 
-All client-side APIs are the same as `@savvagent/react`. See the [@savvagent/react documentation](../react/README.md) for details.
+All client-side APIs are the same as `@otto-flags/react`. See the [@otto-flags/react documentation](../react/README.md) for details.
 
 #### Example: Wrap Client-Side App
 
@@ -205,18 +205,18 @@ All client-side APIs are the same as `@savvagent/react`. See the [@savvagent/rea
 // app/providers.tsx
 'use client';
 
-import { SavvagentProvider } from '@savvagent/nextjs/client';
+import { OttoFlagsProvider } from '@otto-flags/nextjs/client';
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
-    <SavvagentProvider
+    <OttoFlagsProvider
       config={{
-        apiKey: process.env.NEXT_PUBLIC_SAVVAGENT_API_KEY!,
+        apiKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_API_KEY!,
         enableRealtime: true,
       }}
     >
       {children}
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 ```
@@ -244,7 +244,7 @@ Evaluate flags in API routes with request context.
 
 ```tsx
 // app/api/data/route.ts
-import { evaluateForRequest } from '@savvagent/nextjs/server';
+import { evaluateForRequest } from '@otto-flags/nextjs/server';
 import { NextRequest } from 'next/server';
 
 export async function GET(request: NextRequest) {
@@ -264,7 +264,7 @@ export async function GET(request: NextRequest) {
 // app/actions.ts
 'use server';
 
-import { isEnabled, trackError } from '@savvagent/nextjs/server';
+import { isEnabled, trackError } from '@otto-flags/nextjs/server';
 
 export async function submitForm(formData: FormData) {
   const useNewValidation = await isEnabled('new-validation');
@@ -289,10 +289,10 @@ export async function submitForm(formData: FormData) {
 Initialize the middleware client.
 
 ```ts
-import { initMiddlewareClient } from '@savvagent/nextjs/middleware';
+import { initMiddlewareClient } from '@otto-flags/nextjs/middleware';
 
 initMiddlewareClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
 });
 ```
 
@@ -301,7 +301,7 @@ initMiddlewareClient({
 Create a middleware function with custom logic.
 
 ```ts
-import { createMiddleware } from '@savvagent/nextjs/middleware';
+import { createMiddleware } from '@otto-flags/nextjs/middleware';
 import { NextResponse } from 'next/server';
 
 export default createMiddleware({
@@ -323,7 +323,7 @@ export default createMiddleware({
 Redirect users when a flag is enabled.
 
 ```ts
-import { redirectIfEnabled } from '@savvagent/nextjs/middleware';
+import { redirectIfEnabled } from '@otto-flags/nextjs/middleware';
 
 export async function middleware(request: NextRequest) {
   const redirect = await redirectIfEnabled(
@@ -340,7 +340,7 @@ export async function middleware(request: NextRequest) {
 Rewrite requests when a flag is enabled (useful for A/B testing).
 
 ```ts
-import { rewriteIfEnabled } from '@savvagent/nextjs/middleware';
+import { rewriteIfEnabled } from '@otto-flags/nextjs/middleware';
 
 export async function middleware(request: NextRequest) {
   const rewrite = await rewriteIfEnabled(
@@ -359,7 +359,7 @@ export async function middleware(request: NextRequest) {
 ```tsx
 // app/dashboard/page.tsx
 import { cookies } from 'next/headers';
-import { isEnabled } from '@savvagent/nextjs/server';
+import { isEnabled } from '@otto-flags/nextjs/server';
 
 export default async function DashboardPage() {
   const cookieStore = await cookies();
@@ -377,7 +377,7 @@ export default async function DashboardPage() {
 
 ```tsx
 // app/page.tsx (Server Component)
-import { isEnabled } from '@savvagent/nextjs/server';
+import { isEnabled } from '@otto-flags/nextjs/server';
 import { ClientFeature } from './client-feature';
 
 export default async function Page() {
@@ -396,7 +396,7 @@ export default async function Page() {
 // app/client-feature.tsx (Client Component)
 'use client';
 
-import { useFlag } from '@savvagent/nextjs/client';
+import { useFlag } from '@otto-flags/nextjs/client';
 
 export function ClientFeature() {
   const { value } = useFlag('client-feature');
@@ -408,11 +408,11 @@ export function ClientFeature() {
 
 ```ts
 // middleware.ts
-import { initMiddlewareClient, getMiddlewareClient, getRequestContext } from '@savvagent/nextjs/middleware';
+import { initMiddlewareClient, getMiddlewareClient, getRequestContext } from '@otto-flags/nextjs/middleware';
 import { NextRequest, NextResponse } from 'next/server';
 
 initMiddlewareClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
 });
 
 export async function middleware(request: NextRequest) {
@@ -438,7 +438,7 @@ export const config = {
 
 ```tsx
 // Gradually migrate to new implementation
-import { isEnabled } from '@savvagent/nextjs/server';
+import { isEnabled } from '@otto-flags/nextjs/server';
 
 export default async function Page() {
   const useNewComponent = await isEnabled('use-new-component', {
@@ -455,14 +455,14 @@ export default async function Page() {
 
 ```env
 # Server-side API key (for Server Components, Route Handlers, Middleware)
-SAVVAGENT_API_KEY=sdk_...
+OTTO_FLAGS_API_KEY=sdk_...
 
 # Client-side API key (for Client Components with real-time updates)
-NEXT_PUBLIC_SAVVAGENT_API_KEY=sdk_...
+NEXT_PUBLIC_OTTO_FLAGS_API_KEY=sdk_...
 
 # Optional
-SAVVAGENT_APP_ID=your-app-id
-SAVVAGENT_BASE_URL=https://flags-api.savvagent.com
+OTTO_FLAGS_APP_ID=your-app-id
+OTTO_FLAGS_BASE_URL=https://flags-api.otto-flags.dev
 ```
 
 ## TypeScript Support
@@ -474,7 +474,7 @@ import type {
   FlagClientConfig,
   FlagContext,
   FlagEvaluationResult,
-} from '@savvagent/nextjs';
+} from '@otto-flags/nextjs';
 ```
 
 ## Best Practices

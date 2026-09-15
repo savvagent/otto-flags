@@ -1,18 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    initSavvagent,
-    getSavvagent,
+    initOttoFlags,
+    getOttoFlags,
     createFlagsStore,
     createUserIdStore,
     trackError,
     type FlagClientConfig,
     type DefaultFlagContext,
-  } from '@savvagent/svelte';
+  } from '@otto-flags/svelte';
   import FlagOverridePanel from '$lib/FlagOverridePanel.svelte';
 
   let initialized = $state(false);
-  let client: ReturnType<typeof getSavvagent> | null = null;
+  let client: ReturnType<typeof getOttoFlags> | null = null;
   let flagsStore: ReturnType<typeof createFlagsStore> | null = null;
   let userIdStore: ReturnType<typeof createUserIdStore> | null = null;
 
@@ -33,9 +33,9 @@
     // Per SDK Developer Guide: FlagClientConfig with proper authentication
     const config: FlagClientConfig = {
       // SDK API key (starts with sdk_) - safe to embed in client-side code
-      apiKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY || 'sdk_your_key_here',
-      // Base URL for the Savvagent API
-      baseUrl: import.meta.env.VITE_SAVVAGENT_API_URL || 'http://localhost:8080',
+      apiKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY || 'sdk_your_key_here',
+      // Base URL for the Otto Flags API
+      baseUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL || 'http://localhost:8080',
       // Application ID for application-scoped flags
       applicationId: 'f8209ef5-a661-4f46-8b84-4c855a97d5ef',
       // Enable real-time updates via SSE (default: true)
@@ -52,7 +52,7 @@
       },
       // Custom error handler
       onError: (error) => {
-        console.error('[App] Savvagent error:', error);
+        console.error('[App] Otto Flags error:', error);
       },
     };
 
@@ -75,9 +75,9 @@
       },
     };
 
-    // Initialize Savvagent with config and default context
-    initSavvagent({ config, defaultContext });
-    client = getSavvagent();
+    // Initialize Otto Flags with config and default context
+    initOttoFlags({ config, defaultContext });
+    client = getOttoFlags();
     initialized = true;
 
     // Create flags store for multiple flags
@@ -160,11 +160,11 @@
 </script>
 
 <svelte:head>
-  <title>Savvagent SvelteKit Example</title>
+  <title>Otto Flags SvelteKit Example</title>
 </svelte:head>
 
 <div class="container">
-  <h1>Savvagent SvelteKit Example</h1>
+  <h1>Otto Flags SvelteKit Example</h1>
   <p class="subtitle">SDK Developer Guide Best Practices Demo</p>
 
   {#if !initialized}

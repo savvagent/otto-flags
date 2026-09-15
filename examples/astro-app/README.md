@@ -1,12 +1,12 @@
-# Savvagent Astro Example
+# Otto Flags Astro Example
 
-Example Astro application demonstrating how to use the Savvagent Astro integration.
+Example Astro application demonstrating how to use the Otto Flags Astro integration.
 
 ## Features
 
 - Astro with server-side rendering
 - TypeScript
-- Savvagent Astro integration
+- Otto Flags Astro integration
 - Server-side feature flag evaluation
 - Static site generation support
 
@@ -24,8 +24,8 @@ Example Astro application demonstrating how to use the Savvagent Astro integrati
 
    Edit `.env`:
    ```bash
-   SAVVAGENT_API_URL=http://localhost:8080
-   SAVVAGENT_SDK_KEY=your-sdk-key-here
+   OTTO_FLAGS_API_URL=http://localhost:8080
+   OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -42,13 +42,13 @@ Example Astro application demonstrating how to use the Savvagent Astro integrati
 ```typescript
 // astro.config.mjs
 import { defineConfig } from 'astro/config';
-import savvagent from '@savvagent/astro';
+import ottoFlags from '@otto-flags/astro';
 
 export default defineConfig({
   integrations: [
-    savvagent({
-      apiUrl: process.env.SAVVAGENT_API_URL,
-      sdkKey: process.env.SAVVAGENT_SDK_KEY,
+    ottoFlags({
+      apiUrl: process.env.OTTO_FLAGS_API_URL,
+      sdkKey: process.env.OTTO_FLAGS_SDK_KEY,
     }),
   ],
 });
@@ -58,7 +58,7 @@ export default defineConfig({
 
 ```astro
 ---
-const isEnabled = await Astro.locals.savvagent.isEnabled('new-feature', {
+const isEnabled = await Astro.locals.ottoFlags.isEnabled('new-feature', {
   userId: 'user-123',
   attributes: {
     email: 'user@example.com',
@@ -76,5 +76,5 @@ const isEnabled = await Astro.locals.savvagent.isEnabled('new-feature', {
 ## Learn More
 
 - [Astro Documentation](https://docs.astro.build/)
-- [Savvagent Astro SDK Documentation](../../packages/astro/README.md)
+- [Otto Flags Astro SDK Documentation](../../packages/astro/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

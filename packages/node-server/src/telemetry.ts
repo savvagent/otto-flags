@@ -99,10 +99,10 @@ export class TelemetryService {
       });
 
       if (!response.ok) {
-        console.warn('[Savvagent] Failed to send evaluations:', response.statusText);
+        console.warn('[Otto Flags] Failed to send evaluations:', response.statusText);
       }
     } catch (error) {
-      console.warn('[Savvagent] Error sending evaluations:', error);
+      console.warn('[Otto Flags] Error sending evaluations:', error);
     }
   }
 
@@ -138,10 +138,10 @@ export class TelemetryService {
       });
 
       if (!response.ok) {
-        console.warn('[Savvagent] Failed to send errors:', response.statusText);
+        console.warn('[Otto Flags] Failed to send errors:', response.statusText);
       }
     } catch (error) {
-      console.warn('[Savvagent] Error sending errors:', error);
+      console.warn('[Otto Flags] Error sending errors:', error);
     }
   }
 

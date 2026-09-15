@@ -2,7 +2,7 @@
 
 **Last Updated:** November 2024
 
-This document describes the client-side override capabilities for Savvagent feature flags, enabling developers and users to override flag values locally for testing, debugging, and development purposes.
+This document describes the client-side override capabilities for Otto Flags feature flags, enabling developers and users to override flag values locally for testing, debugging, and development purposes.
 
 ---
 
@@ -23,7 +23,7 @@ This document describes the client-side override capabilities for Savvagent feat
 
 ## Overview
 
-Savvagent's architecture separates server-side flag evaluation from client-side override capabilities:
+Otto Flags's architecture separates server-side flag evaluation from client-side override capabilities:
 
 - **Server-side (API)**: Evaluates flags based on configuration, targeting rules, and context
 - **Client-side (SDK)**: Can override flag values locally without affecting the server evaluation
@@ -194,7 +194,7 @@ client.setOverride('dark-mode', true);
 
 **Storage format:**
 ```javascript
-// localStorage key: "savvagent_overrides"
+// localStorage key: "otto_flags_overrides"
 {
   "dark-mode": true,
   "beta-features": false,
@@ -368,7 +368,7 @@ The developer console should support editing configuration values visually:
 
 **LocalStorage Format:**
 ```javascript
-// localStorage key: "savvagent_config_overrides"
+// localStorage key: "otto_flags_config_overrides"
 {
   "checkout-experience": {
     "enabled": true,
@@ -826,7 +826,7 @@ let override = UserDefaults.standard.bool(forKey: "flag_override_dark_mode")
 **Android (SharedPreferences):**
 ```kotlin
 // Save override
-val prefs = context.getSharedPreferences("savvagent_overrides", MODE_PRIVATE)
+val prefs = context.getSharedPreferences("otto_flags_overrides", MODE_PRIVATE)
 prefs.edit().putBoolean("dark_mode", true).apply()
 
 // Read override
@@ -1278,7 +1278,7 @@ app.get('/api/beta-feature-data', async (req, res) => {
 ---
 
 **Questions or feedback?**
-- GitHub Issues: https://github.com/savvagent/savvagent/issues
-- Email: support@savvagent.com
+- GitHub Issues: https://github.com/savvagent/ottoFlags/issues
+- Email: support@otto-flags.dev
 
 **Last Updated:** November 2024

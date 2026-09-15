@@ -2,14 +2,14 @@
  * Server-side utilities for Remix loaders and actions
  */
 
-import { FlagClient, FlagClientConfig, FlagContext } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 
 // Module-level variable for the singleton client
 // Exported for testing purposes only - do not use in production code
 export let serverClient: FlagClient | null = null;
 
 /**
- * Initialize the server-side Savvagent client.
+ * Initialize the server-side Otto Flags client.
  * Call this once in your root route or entry.server.tsx.
  *
  * @param config - Client configuration
@@ -17,11 +17,11 @@ export let serverClient: FlagClient | null = null;
  * @example
  * ```tsx
  * // app/root.tsx
- * import { initRemixClient } from '@savvagent/remix';
+ * import { initRemixClient } from '@otto-flags/remix';
  *
  * initRemixClient({
- *   apiKey: process.env.SAVVAGENT_API_KEY!,
- *   applicationId: process.env.SAVVAGENT_APP_ID,
+ *   apiKey: process.env.OTTO_FLAGS_API_KEY!,
+ *   applicationId: process.env.OTTO_FLAGS_APP_ID,
  * });
  * ```
  */
@@ -32,7 +32,7 @@ export function initRemixClient(config: FlagClientConfig): void {
 }
 
 /**
- * Get the server-side Savvagent client instance.
+ * Get the server-side Otto Flags client instance.
  *
  * @returns The FlagClient instance
  * @throws Error if client is not initialized
@@ -79,7 +79,7 @@ export function getRequestContext(
 
   const context: FlagContext = {
     user_id: cookies.user_id,
-    anonymous_id: cookies.savvagent_anonymous_id,
+    anonymous_id: cookies.otto_flags_anonymous_id,
     session_id: cookies.session_id,
     language: request.headers.get('accept-language')?.split(',')[0],
     ...overrides,
@@ -97,7 +97,7 @@ export function getRequestContext(
  *
  * @example
  * ```tsx
- * import { isEnabled } from '@savvagent/remix';
+ * import { isEnabled } from '@otto-flags/remix';
  * import { LoaderFunctionArgs } from '@remix-run/node';
  *
  * export async function loader({ request }: LoaderFunctionArgs) {
@@ -126,7 +126,7 @@ export async function isEnabled(
  *
  * @example
  * ```tsx
- * import { evaluate } from '@savvagent/remix';
+ * import { evaluate } from '@otto-flags/remix';
  *
  * export async function loader({ request }: LoaderFunctionArgs) {
  *   const result = await evaluate('beta-features');
@@ -153,7 +153,7 @@ export async function evaluate(flagKey: string, context?: FlagContext) {
  *
  * @example
  * ```tsx
- * import { withFlag } from '@savvagent/remix';
+ * import { withFlag } from '@otto-flags/remix';
  *
  * export async function loader() {
  *   const data = await withFlag('use-new-api', async () => {
@@ -182,7 +182,7 @@ export async function withFlag<T>(
  *
  * @example
  * ```tsx
- * import { trackError } from '@savvagent/remix';
+ * import { trackError } from '@otto-flags/remix';
  * import { ActionFunctionArgs } from '@remix-run/node';
  *
  * export async function action({ request }: ActionFunctionArgs) {
@@ -215,7 +215,7 @@ export function trackError(
  *
  * @example
  * ```tsx
- * import { evaluateForRequest } from '@savvagent/remix';
+ * import { evaluateForRequest } from '@otto-flags/remix';
  * import { LoaderFunctionArgs } from '@remix-run/node';
  *
  * export async function loader({ request }: LoaderFunctionArgs) {
@@ -244,7 +244,7 @@ export async function evaluateForRequest(
  *
  * @example
  * ```tsx
- * import { setEnvironment } from '@savvagent/remix';
+ * import { setEnvironment } from '@otto-flags/remix';
  *
  * // In a loader or action
  * export async function loader() {
@@ -265,7 +265,7 @@ export function setEnvironment(environment: string): void {
  *
  * @example
  * ```tsx
- * import { getEnvironment } from '@savvagent/remix';
+ * import { getEnvironment } from '@otto-flags/remix';
  *
  * export async function loader() {
  *   const env = getEnvironment();

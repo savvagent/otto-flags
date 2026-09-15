@@ -1,6 +1,6 @@
-# @savvagent/mcp-datadog
+# @otto-flags/mcp-datadog
 
-Datadog MCP integration for Savvagent. Exposes Datadog APM, metrics, logs, and monitoring data via MCP tools using StreamableHTTP transport with Bearer token authentication.
+Datadog MCP integration for Otto Flags. Exposes Datadog APM, metrics, logs, and monitoring data via MCP tools using StreamableHTTP transport with Bearer token authentication.
 
 ## Features
 
@@ -15,14 +15,14 @@ Datadog MCP integration for Savvagent. Exposes Datadog APM, metrics, logs, and m
 ## Installation
 
 ```bash
-npm install @savvagent/mcp-datadog
+npm install @otto-flags/mcp-datadog
 ```
 
 ## Quick Start
 
 ```typescript
-import { DatadogMCPServer } from '@savvagent/mcp-datadog';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { DatadogMCPServer } from '@otto-flags/mcp-datadog';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import express from 'express';
 
 const server = new DatadogMCPServer(

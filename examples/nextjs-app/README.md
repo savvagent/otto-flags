@@ -1,6 +1,6 @@
-# Savvagent Next.js Example
+# Otto Flags Next.js Example
 
-Example Next.js application demonstrating how to use the Savvagent SDK with React Server Components and Client Components.
+Example Next.js application demonstrating how to use the Otto Flags SDK with React Server Components and Client Components.
 
 ## Features
 
@@ -24,8 +24,8 @@ Example Next.js application demonstrating how to use the Savvagent SDK with Reac
 
    Edit `.env.local`:
    ```bash
-   NEXT_PUBLIC_SAVVAGENT_API_URL=http://localhost:8080
-   NEXT_PUBLIC_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   NEXT_PUBLIC_OTTO_FLAGS_API_URL=http://localhost:8080
+   NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -42,16 +42,16 @@ Example Next.js application demonstrating how to use the Savvagent SDK with Reac
 ```typescript
 'use client';
 
-import { SavvagentClient } from '@savvagent/sdk';
+import { OttoFlagsClient } from '@otto-flags/sdk';
 import { useEffect, useState } from 'react';
 
 export default function MyComponent() {
   const [isEnabled, setIsEnabled] = useState(false);
 
   useEffect(() => {
-    const client = new SavvagentClient({
-      apiUrl: process.env.NEXT_PUBLIC_SAVVAGENT_API_URL!,
-      sdkKey: process.env.NEXT_PUBLIC_SAVVAGENT_SDK_KEY!,
+    const client = new OttoFlagsClient({
+      apiUrl: process.env.NEXT_PUBLIC_OTTO_FLAGS_API_URL!,
+      sdkKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY!,
     });
 
     client.isEnabled('new-feature', { userId: 'user-123' })
@@ -69,5 +69,5 @@ See `app/hooks/useFeatureFlag.ts` for a reusable hook.
 ## Learn More
 
 - [Next.js Documentation](https://nextjs.org/docs)
-- [Savvagent SDK Documentation](../../packages/typescript/README.md)
+- [Otto Flags SDK Documentation](../../packages/typescript/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

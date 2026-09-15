@@ -1,5 +1,5 @@
 /**
- * Comprehensive unit tests for @savvagent/remix server-side utilities
+ * Comprehensive unit tests for @otto-flags/remix server-side utilities
  *
  * Tests cover:
  * - Client initialization and lifecycle
@@ -9,15 +9,15 @@
  * - Loader/action integration patterns
  */
 
-import { FlagClient, FlagClientConfig, FlagContext } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 
 // Mock the FlagClient before importing server utilities
-jest.mock('@savvagent/sdk');
+jest.mock('@otto-flags/sdk');
 
 // Import after mocking
 import * as server from '../src/server';
 
-describe('@savvagent/remix - Server Utilities', () => {
+describe('@otto-flags/remix - Server Utilities', () => {
   let mockClient: any;
   const MockedFlagClient = FlagClient as jest.MockedClass<typeof FlagClient>;
 
@@ -45,7 +45,7 @@ describe('@savvagent/remix - Server Utilities', () => {
       const config: FlagClientConfig = {
         apiKey: 'sdk_test_key_123',
         applicationId: 'app_123',
-        baseUrl: 'https://flags-api.savvagent.com',
+        baseUrl: 'https://flags-api.otto-flags.dev',
       };
 
       server.initRemixClient(config);
@@ -129,7 +129,7 @@ describe('@savvagent/remix - Server Utilities', () => {
     it('should extract anonymous_id from cookies', () => {
       const request = new Request('https://example.com', {
         headers: {
-          cookie: 'savvagent_anonymous_id=anon_456',
+          cookie: 'otto_flags_anonymous_id=anon_456',
         },
       });
 
@@ -626,7 +626,7 @@ describe('@savvagent/remix - Server Utilities', () => {
       const request = new Request('https://example.com', {
         headers: {
           cookie:
-            'user_id=user123; savvagent_anonymous_id=anon_456; session_id=sess_789',
+            'user_id=user123; otto_flags_anonymous_id=anon_456; session_id=sess_789',
           'accept-language': 'fr-FR,en;q=0.9',
         },
       });

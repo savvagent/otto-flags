@@ -1,6 +1,6 @@
 import { PagerDutyMCPServer, PagerDutyConfig } from '../src';
 
-describe('@savvagent/mcp-pagerduty exports', () => {
+describe('@otto-flags/mcp-pagerduty exports', () => {
   it('should export PagerDutyMCPServer', () => {
     expect(PagerDutyMCPServer).toBeDefined();
     expect(typeof PagerDutyMCPServer).toBe('function');

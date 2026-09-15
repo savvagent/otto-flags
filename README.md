@@ -1,12 +1,12 @@
-# Savvagent SDKs
+# Otto Flags SDKs
 
-Official SDKs, MCP servers, and example applications for [Savvagent](https://flags.savvagent.com) - the AI-powered feature flag platform that prevents production incidents.
+Official SDKs, MCP servers, and example applications for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
 
 ## Packages
 
 ### Client SDKs
 
-- **[@savvagent/sdk](./packages/typescript)** - TypeScript/JavaScript SDK for feature flags
+- **[@otto-flags/sdk](./packages/typescript)** - TypeScript/JavaScript SDK for feature flags
   - Works with React, Next.js, SvelteKit, Node.js, and more
   - Real-time flag updates via WebSocket
   - Built-in caching and telemetry
@@ -14,24 +14,24 @@ Official SDKs, MCP servers, and example applications for [Savvagent](https://fla
 
 ### Framework SDKs
 
-- **[@savvagent/react](./packages/react)** - React hooks for feature flags
-- **[@savvagent/vue](./packages/vue)** - Vue 3 composables for feature flags
-- **[@savvagent/solid](./packages/solid)** - SolidJS primitives for feature flags
-- **[@savvagent/svelte](./packages/svelte)** - Svelte stores for feature flags
-- **[@savvagent/nextjs](./packages/nextjs)** - Next.js integration with App Router & Pages Router
-- **[@savvagent/remix](./packages/remix)** - Remix loaders and actions integration
-- **[@savvagent/sveltekit](./packages/sveltekit)** - SvelteKit server-side integration
-- **[@savvagent/astro](./packages/astro)** - Astro integration for feature flags
+- **[@otto-flags/react](./packages/react)** - React hooks for feature flags
+- **[@otto-flags/vue](./packages/vue)** - Vue 3 composables for feature flags
+- **[@otto-flags/solid](./packages/solid)** - SolidJS primitives for feature flags
+- **[@otto-flags/svelte](./packages/svelte)** - Svelte stores for feature flags
+- **[@otto-flags/nextjs](./packages/nextjs)** - Next.js integration with App Router & Pages Router
+- **[@otto-flags/remix](./packages/remix)** - Remix loaders and actions integration
+- **[@otto-flags/sveltekit](./packages/sveltekit)** - SvelteKit server-side integration
+- **[@otto-flags/astro](./packages/astro)** - Astro integration for feature flags
 
 ### Mobile SDKs
 
-- **[SavvagentSDK (iOS)](./packages/ios-sdk)** - iOS SDK
+- **[OttoFlagsSDK (iOS)](./packages/ios-sdk)** - iOS SDK
   - Native Swift with async/await
   - SwiftUI and UIKit support
   - Real-time updates via WebSocket
   - Works on iOS, macOS, tvOS, and watchOS
 
-- **[savvagent-android-sdk](./packages/android-sdk)** - Android SDK
+- **[otto-flags-android-sdk](./packages/android-sdk)** - Android SDK
   - Native Kotlin with Coroutines
   - Jetpack Compose integration
   - Flow-based reactive updates
@@ -39,25 +39,25 @@ Official SDKs, MCP servers, and example applications for [Savvagent](https://fla
 
 ### Server SDKs
 
-- **[@savvagent/node-server](./packages/node-server)** - Node.js Server SDK
+- **[@otto-flags/node-server](./packages/node-server)** - Node.js Server SDK
   - Built for Express, Fastify, NestJS, and more
   - Server-Sent Events for real-time updates
   - In-memory caching with configurable TTL
   - Full TypeScript support
 
-- **[savvagent-java-server-sdk](./packages/java-server)** - Java Server SDK
+- **[otto-flags-java-server-sdk](./packages/java-server)** - Java Server SDK
   - Maven and Gradle support
   - Thread-safe concurrent access
   - OkHttp-based HTTP client
   - Comprehensive JavaDocs
 
-- **[savvagent-go-server-sdk](./packages/go-server)** - Go Server SDK
+- **[otto-flags-go-server-sdk](./packages/go-server)** - Go Server SDK
   - Goroutine-safe concurrent access
   - Idiomatic Go patterns
   - Minimal dependencies
   - High-performance caching
 
-- **[savvagent (Rust)](./packages/rust-server)** - Rust Server SDK
+- **[otto-flags (Rust)](./packages/rust-server)** - Rust Server SDK
   - Async/await with Tokio runtime
   - Zero-cost abstractions
   - Memory-safe with Rust ownership
@@ -65,8 +65,8 @@ Official SDKs, MCP servers, and example applications for [Savvagent](https://fla
 
 ### MCP Servers
 
-- **[@savvagent/mcp-sdk](./packages/mcp-sdk)** - Base SDK for building MCP integrations
-- **[@savvagent/mcp-sentry](./packages/mcp-sentry)** - Sentry error tracking integration
+- **[@otto-flags/mcp-sdk](./packages/mcp-sdk)** - Base SDK for building MCP integrations
+- **[@otto-flags/mcp-sentry](./packages/mcp-sentry)** - Sentry error tracking integration
 
 ## Quick Start
 
@@ -74,22 +74,22 @@ Official SDKs, MCP servers, and example applications for [Savvagent](https://fla
 
 ```bash
 # Using pnpm (recommended)
-pnpm add @savvagent/sdk
+pnpm add @otto-flags/sdk
 
 # Using npm
-npm install @savvagent/sdk
+npm install @otto-flags/sdk
 
 # Using yarn
-yarn add @savvagent/sdk
+yarn add @otto-flags/sdk
 ```
 
 ### Basic Usage
 
 ```typescript
-import { SavvagentClient } from '@savvagent/sdk';
+import { OttoFlagsClient } from '@otto-flags/sdk';
 
-const client = new SavvagentClient({
-  apiUrl: 'https://flags-api.savvagent.com',
+const client = new OttoFlagsClient({
+  apiUrl: 'https://flags-api.otto-flags.dev',
   sdkKey: 'your-sdk-key',
   environment: 'production',
 });
@@ -146,7 +146,7 @@ Working example applications are available in the [examples](./examples) directo
 
 ## AI-Assisted Development
 
-Use AI coding assistants (Claude Code, Cursor, GitHub Copilot) to integrate Savvagent faster. We provide AI-optimized documentation:
+Use AI coding assistants (Claude Code, Cursor, GitHub Copilot) to integrate Otto Flags faster. We provide AI-optimized documentation:
 
 | File | Description | Use Case |
 |------|-------------|----------|
@@ -157,15 +157,15 @@ Use AI coding assistants (Claude Code, Cursor, GitHub Copilot) to integrate Savv
 
 **Claude Code / Cursor:**
 ```
-Add Savvagent feature flags to my React app.
-Reference: https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt
+Add Otto Flags feature flags to my React app.
+Reference: https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt
 ```
 
 **Add to project context** for better suggestions:
 ```bash
 # Claude Code - add to .claude/settings.json
 # Cursor - add to Settings > Features > Docs
-https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt
+https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt
 ```
 
 See **[AI-Assisted Development Guide](./docs/AI-ASSISTED-DEVELOPMENT.md)** for detailed instructions.
@@ -183,8 +183,8 @@ This is a pnpm workspace monorepo with independent package versioning.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/savvagent-sdks.git
-cd savvagent-sdks
+git clone https://github.com/yourusername/otto-flags.git
+cd otto-flags
 
 # Install dependencies
 pnpm install
@@ -206,7 +206,7 @@ To use local packages in another project:
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "file:../savvagent-sdks/packages/typescript"
+    "@otto-flags/sdk": "file:../otto-flags/packages/typescript"
   }
 }
 ```
@@ -229,25 +229,25 @@ When your PR is merged:
 ### Project Structure
 
 ```
-savvagent-sdks/
+otto-flags/
 ├── packages/
-│   ├── typescript/          # @savvagent/sdk (base TypeScript SDK)
-│   ├── react/              # @savvagent/react
-│   ├── vue/                # @savvagent/vue
-│   ├── solid/              # @savvagent/solid
-│   ├── svelte/             # @savvagent/svelte
-│   ├── nextjs/             # @savvagent/nextjs
-│   ├── remix/              # @savvagent/remix
-│   ├── sveltekit/          # @savvagent/sveltekit
-│   ├── astro/              # @savvagent/astro
+│   ├── typescript/          # @otto-flags/sdk (base TypeScript SDK)
+│   ├── react/              # @otto-flags/react
+│   ├── vue/                # @otto-flags/vue
+│   ├── solid/              # @otto-flags/solid
+│   ├── svelte/             # @otto-flags/svelte
+│   ├── nextjs/             # @otto-flags/nextjs
+│   ├── remix/              # @otto-flags/remix
+│   ├── sveltekit/          # @otto-flags/sveltekit
+│   ├── astro/              # @otto-flags/astro
 │   ├── ios-sdk/            # iOS SDK (Swift)
 │   ├── android-sdk/        # Android SDK (Kotlin)
-│   ├── node-server/        # @savvagent/node-server
+│   ├── node-server/        # @otto-flags/node-server
 │   ├── java-server/        # Java server SDK
 │   ├── go-server/          # Go server SDK
 │   ├── rust-server/        # Rust server SDK
-│   ├── mcp-sdk/            # @savvagent/mcp-sdk
-│   └── mcp-sentry/         # @savvagent/mcp-sentry
+│   ├── mcp-sdk/            # @otto-flags/mcp-sdk
+│   └── mcp-sentry/         # @otto-flags/mcp-sentry
 ├── examples/
 │   ├── ios-app/            # iOS SwiftUI example
 │   ├── android-app/        # Android Jetpack Compose example
@@ -319,10 +319,10 @@ We welcome contributions! Please see our contributing guidelines:
 pnpm test
 
 # Run tests for a specific package
-pnpm --filter @savvagent/sdk test
+pnpm --filter @otto-flags/sdk test
 
 # Watch mode
-pnpm --filter @savvagent/sdk test:watch
+pnpm --filter @otto-flags/sdk test:watch
 ```
 
 ## License
@@ -333,13 +333,13 @@ MIT License - see [LICENSE](./LICENSE) for details
 
 - **Documentation**: [docs/](./docs)
 - **Examples**: [examples/](./examples)
-- **Issues**: [GitHub Issues](https://github.com/savvagent/savvagent-sdks/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/savvagent/savvagent-sdks/discussions)
+- **Issues**: [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/savvagent/otto-flags/discussions)
 
 ## Related Projects
 
-- **[Savvagent Platform](https://flags.savvagent.com)** - The main platform repository
-- **[Savvagent Docs](https://flags.savvagent.com/docs)** - Official documentation
+- **[Otto Flags Platform](https://flags.otto-flags.dev)** - The main platform repository
+- **[Otto Flags Docs](https://flags.otto-flags.dev/docs)** - Official documentation
 
 ## Packages Status
 
@@ -347,35 +347,35 @@ MIT License - see [LICENSE](./LICENSE) for details
 
 | Package | Platform | Version | Status |
 |---------|----------|---------|--------|
-| [SavvagentSDK](./packages/ios-sdk) | iOS 13+ | v0.1.0 | Beta |
-| [savvagent-android-sdk](./packages/android-sdk) | Android 5.0+ | v0.1.0 | Beta |
+| [OttoFlagsSDK](./packages/ios-sdk) | iOS 13+ | v0.1.0 | Beta |
+| [otto-flags-android-sdk](./packages/android-sdk) | Android 5.0+ | v0.1.0 | Beta |
 
 ### Client & Framework SDKs
 
 | Package | Version | Status |
 |---------|---------|--------|
-| [@savvagent/sdk](./packages/typescript) | [![npm](https://img.shields.io/npm/v/@savvagent/sdk)](https://www.npmjs.com/package/@savvagent/sdk) | Stable |
-| [@savvagent/react](./packages/react) | [![npm](https://img.shields.io/npm/v/@savvagent/react)](https://www.npmjs.com/package/@savvagent/react) | Beta |
-| [@savvagent/vue](./packages/vue) | [![npm](https://img.shields.io/npm/v/@savvagent/vue)](https://www.npmjs.com/package/@savvagent/vue) | Beta |
-| [@savvagent/solid](./packages/solid) | [![npm](https://img.shields.io/npm/v/@savvagent/solid)](https://www.npmjs.com/package/@savvagent/solid) | Beta |
-| [@savvagent/svelte](./packages/svelte) | [![npm](https://img.shields.io/npm/v/@savvagent/svelte)](https://www.npmjs.com/package/@savvagent/svelte) | Beta |
-| [@savvagent/nextjs](./packages/nextjs) | [![npm](https://img.shields.io/npm/v/@savvagent/nextjs)](https://www.npmjs.com/package/@savvagent/nextjs) | Beta |
-| [@savvagent/remix](./packages/remix) | [![npm](https://img.shields.io/npm/v/@savvagent/remix)](https://www.npmjs.com/package/@savvagent/remix) | Beta |
-| [@savvagent/sveltekit](./packages/sveltekit) | [![npm](https://img.shields.io/npm/v/@savvagent/sveltekit)](https://www.npmjs.com/package/@savvagent/sveltekit) | Beta |
-| [@savvagent/astro](./packages/astro) | [![npm](https://img.shields.io/npm/v/@savvagent/astro)](https://www.npmjs.com/package/@savvagent/astro) | Beta |
+| [@otto-flags/sdk](./packages/typescript) | [![npm](https://img.shields.io/npm/v/@otto-flags/sdk)](https://www.npmjs.com/package/@otto-flags/sdk) | Stable |
+| [@otto-flags/react](./packages/react) | [![npm](https://img.shields.io/npm/v/@otto-flags/react)](https://www.npmjs.com/package/@otto-flags/react) | Beta |
+| [@otto-flags/vue](./packages/vue) | [![npm](https://img.shields.io/npm/v/@otto-flags/vue)](https://www.npmjs.com/package/@otto-flags/vue) | Beta |
+| [@otto-flags/solid](./packages/solid) | [![npm](https://img.shields.io/npm/v/@otto-flags/solid)](https://www.npmjs.com/package/@otto-flags/solid) | Beta |
+| [@otto-flags/svelte](./packages/svelte) | [![npm](https://img.shields.io/npm/v/@otto-flags/svelte)](https://www.npmjs.com/package/@otto-flags/svelte) | Beta |
+| [@otto-flags/nextjs](./packages/nextjs) | [![npm](https://img.shields.io/npm/v/@otto-flags/nextjs)](https://www.npmjs.com/package/@otto-flags/nextjs) | Beta |
+| [@otto-flags/remix](./packages/remix) | [![npm](https://img.shields.io/npm/v/@otto-flags/remix)](https://www.npmjs.com/package/@otto-flags/remix) | Beta |
+| [@otto-flags/sveltekit](./packages/sveltekit) | [![npm](https://img.shields.io/npm/v/@otto-flags/sveltekit)](https://www.npmjs.com/package/@otto-flags/sveltekit) | Beta |
+| [@otto-flags/astro](./packages/astro) | [![npm](https://img.shields.io/npm/v/@otto-flags/astro)](https://www.npmjs.com/package/@otto-flags/astro) | Beta |
 
 ### Server SDKs
 
 | Package | Language | Version | Status |
 |---------|----------|---------|--------|
-| [@savvagent/node-server](./packages/node-server) | Node.js | v0.1.0 | Beta |
-| [savvagent-java-server-sdk](./packages/java-server) | Java 11+ | v0.1.0 | Beta |
-| [savvagent-go-server-sdk](./packages/go-server) | Go 1.21+ | v0.1.0 | Beta |
-| [savvagent](./packages/rust-server) | Rust 1.70+ | v0.1.0 | Beta |
+| [@otto-flags/node-server](./packages/node-server) | Node.js | v0.1.0 | Beta |
+| [otto-flags-java-server-sdk](./packages/java-server) | Java 11+ | v0.1.0 | Beta |
+| [otto-flags-go-server-sdk](./packages/go-server) | Go 1.21+ | v0.1.0 | Beta |
+| [ottoFlags](./packages/rust-server) | Rust 1.70+ | v0.1.0 | Beta |
 
 ### MCP Servers
 
 | Package | Version | Status |
 |---------|---------|--------|
-| [@savvagent/mcp-sdk](./packages/mcp-sdk) | [![npm](https://img.shields.io/npm/v/@savvagent/mcp-sdk)](https://www.npmjs.com/package/@savvagent/mcp-sdk) | Beta |
-| [@savvagent/mcp-sentry](./packages/mcp-sentry) | [![npm](https://img.shields.io/npm/v/@savvagent/mcp-sentry)](https://www.npmjs.com/package/@savvagent/mcp-sentry) | Beta |
+| [@otto-flags/mcp-sdk](./packages/mcp-sdk) | [![npm](https://img.shields.io/npm/v/@otto-flags/mcp-sdk)](https://www.npmjs.com/package/@otto-flags/mcp-sdk) | Beta |
+| [@otto-flags/mcp-sentry](./packages/mcp-sentry) | [![npm](https://img.shields.io/npm/v/@otto-flags/mcp-sentry)](https://www.npmjs.com/package/@otto-flags/mcp-sentry) | Beta |

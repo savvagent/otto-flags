@@ -1,7 +1,7 @@
 /**
  * Example Sentry MCP Server
  *
- * This example shows how to set up a Sentry MCP server that Savvagent
+ * This example shows how to set up a Sentry MCP server that Otto Flags
  * can query for error data using StreamableHTTP transport with Bearer token auth.
  *
  * Usage:
@@ -23,7 +23,7 @@
  */
 
 import express from 'express';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import { SentryMCPServer } from './src/sentry-server';
 
 // Configuration from environment variables
@@ -34,7 +34,7 @@ const CONFIG = {
   serverName: 'sentry-mcp-server',
   serverVersion: '1.0.0',
 
-  // MCP authentication token (for Savvagent to authenticate with this server)
+  // MCP authentication token (for Otto Flags to authenticate with this server)
   mcpAuthToken: process.env.MCP_AUTH_TOKEN || '',
 
   // Sentry configuration

@@ -1,6 +1,6 @@
-# @savvagent/mcp-sentry
+# @otto-flags/mcp-sentry
 
-Sentry MCP integration for Savvagent. Exposes Sentry error data via MCP tools using StreamableHTTP transport with Bearer token authentication for AI-powered error analysis and correlation.
+Sentry MCP integration for Otto Flags. Exposes Sentry error data via MCP tools using StreamableHTTP transport with Bearer token authentication for AI-powered error analysis and correlation.
 
 ## Features
 
@@ -13,7 +13,7 @@ Sentry MCP integration for Savvagent. Exposes Sentry error data via MCP tools us
 ## Installation
 
 ```bash
-npm install @savvagent/mcp-sentry
+npm install @otto-flags/mcp-sentry
 ```
 
 ## Quick Start
@@ -21,8 +21,8 @@ npm install @savvagent/mcp-sentry
 ### 1. Create Sentry MCP Server
 
 ```typescript
-import { SentryMCPServer } from '@savvagent/mcp-sentry';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { SentryMCPServer } from '@otto-flags/mcp-sentry';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import express from 'express';
 
 const server = new SentryMCPServer(
@@ -202,7 +202,7 @@ PORT=3000
 
 ### SentryMCPServer
 
-Extends `MCPServer` from `@savvagent/mcp-sdk`.
+Extends `MCPServer` from `@otto-flags/mcp-sdk`.
 
 #### Constructor
 
@@ -218,9 +218,9 @@ new SentryMCPServer(config: MCPServerConfig, sentryConfig: SentryConfig)
 - `getTools()` - Get list of available tools
 - `handleRequest(request)` - Process JSON-RPC request
 
-## Savvagent Integration
+## Otto Flags Integration
 
-When configuring this server in Savvagent:
+When configuring this server in Otto Flags:
 
 1. Go to **Settings > MCP Integrations > Add Integration**
 2. Select **Sentry** as the server type
@@ -279,5 +279,5 @@ MIT
 
 ## Support
 
-- Documentation: [savvagent.com/docs/integrations/sentry](https://flags-docs.savvagent.com/integrations/sentry)
-- Issues: [GitHub Issues](https://github.com/savvagent/savvagent-sdks/issues)
+- Documentation: [otto-flags.dev/docs/integrations/sentry](https://flags-docs.otto-flags.dev/integrations/sentry)
+- Issues: [GitHub Issues](https://github.com/savvagent/otto-flags/issues)

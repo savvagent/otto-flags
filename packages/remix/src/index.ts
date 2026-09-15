@@ -1,9 +1,9 @@
 /**
- * @savvagent/remix - Remix SDK for Savvagent feature flags
+ * @otto-flags/remix - Remix SDK for Otto Flags feature flags
  *
  * This package provides Remix-specific integrations including:
  * - Loader and action helpers
- * - Client-side hooks from @savvagent/react
+ * - Client-side hooks from @otto-flags/react
  * - Server-side flag evaluation
  *
  * @packageDocumentation
@@ -25,24 +25,24 @@ export {
 
 // Client-side exports (re-export from React SDK)
 export {
-  SavvagentProvider,
-  useSavvagent,
+  OttoFlagsProvider,
+  useOttoFlags,
   useFlag,
   useFlags,
   useWithFlag,
   useUser,
   useTrackError,
   useEnvironment,
-} from '@savvagent/react';
+} from '@otto-flags/react';
 
 export type {
-  SavvagentProviderProps,
+  OttoFlagsProviderProps,
   DefaultFlagContext,
   UseFlagOptions,
   UseFlagResult,
   UseFlagsOptions,
   UseFlagsResult,
-} from '@savvagent/react';
+} from '@otto-flags/react';
 
 // Re-export types from core SDK
 export type {
@@ -57,7 +57,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

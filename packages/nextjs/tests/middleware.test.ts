@@ -11,7 +11,7 @@ import {
   redirectIfEnabled,
   rewriteIfEnabled,
 } from '../src/middleware';
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 import { NextRequest, NextResponse } from 'next/server';
 
 // Mock Next.js server module
@@ -79,7 +79,7 @@ describe('Middleware Module', () => {
           get: jest.fn((name: string) => {
             const cookies: Record<string, any> = {
               user_id: { value: 'user-123' },
-              savvagent_anonymous_id: { value: 'anon-456' },
+              otto_flags_anonymous_id: { value: 'anon-456' },
               session_id: { value: 'session-789' },
             };
             return cookies[name];

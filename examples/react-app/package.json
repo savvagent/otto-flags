@@ -2,7 +2,7 @@
   "name": "react-example",
   "version": "0.0.3",
   "private": true,
-  "description": "Example React app using Savvagent SDK",
+  "description": "Example React app using Otto Flags SDK",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,8 +11,8 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
-    "@savvagent/react": "workspace:*",
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/react": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },

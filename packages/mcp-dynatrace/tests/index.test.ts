@@ -4,7 +4,7 @@
 
 import { DynatraceMCPServer, DynatraceConfig } from '../src';
 
-describe('@savvagent/mcp-dynatrace exports', () => {
+describe('@otto-flags/mcp-dynatrace exports', () => {
   it('should export DynatraceMCPServer', () => {
     expect(DynatraceMCPServer).toBeDefined();
   });

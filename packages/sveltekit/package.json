@@ -1,8 +1,8 @@
 {
-  "name": "@savvagent/sveltekit",
+  "name": "@otto-flags/sveltekit",
   "version": "1.1.0",
-  "description": "SvelteKit SDK for Savvagent feature flags with server and client support",
-  "author": "Savvagent",
+  "description": "SvelteKit SDK for Otto Flags feature flags with server and client support",
+  "author": "Otto Flags",
   "license": "MIT",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -34,8 +34,8 @@
     "svelte": ">=4.0.0"
   },
   "dependencies": {
-    "@savvagent/sdk": "workspace:*",
-    "@savvagent/svelte": "workspace:*"
+    "@otto-flags/sdk": "workspace:*",
+    "@otto-flags/svelte": "workspace:*"
   },
   "devDependencies": {
     "@sveltejs/kit": "^2.49.0",
@@ -48,7 +48,7 @@
     "vitest": "4.0.14"
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "feature-flags",
     "sveltekit",
     "svelte",
@@ -57,13 +57,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/sveltekit"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/sveltekit#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/sveltekit#readme",
   "publishConfig": {
     "access": "public"
   }

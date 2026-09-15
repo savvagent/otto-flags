@@ -10,7 +10,7 @@
 
 import express from 'express';
 import { NewRelicMCPServer } from './src';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 
 const app = express();
 app.use(express.json());

@@ -10,7 +10,7 @@ All 58 tests passing with 100% code coverage across all metrics:
 
 ## Test Files
 
-### `/home/robhicks/dev/savvagent-sdks/packages/remix/tests/server.test.ts`
+### `/home/robhicks/dev/otto-flags/packages/remix/tests/server.test.ts`
 
 Comprehensive unit tests for all server-side utilities.
 
@@ -98,7 +98,7 @@ Comprehensive unit tests for all server-side utilities.
 ## Key Testing Features
 
 ### Mocking Strategy
-- Custom mock for `@savvagent/sdk` FlagClient
+- Custom mock for `@otto-flags/sdk` FlagClient
 - Singleton pattern testing with proper reset between tests
 - Full control over mock responses for comprehensive testing
 
@@ -111,9 +111,9 @@ Comprehensive unit tests for all server-side utilities.
 6. **Edge Cases**: Malformed input, special characters, concurrent operations
 
 ### Files Created
-- `/home/robhicks/dev/savvagent-sdks/packages/remix/jest.config.js` - Jest configuration
-- `/home/robhicks/dev/savvagent-sdks/packages/remix/tests/server.test.ts` - Comprehensive test suite
-- `/home/robhicks/dev/savvagent-sdks/packages/remix/__mocks__/@savvagent/sdk.ts` - FlagClient mock
+- `/home/robhicks/dev/otto-flags/packages/remix/jest.config.js` - Jest configuration
+- `/home/robhicks/dev/otto-flags/packages/remix/tests/server.test.ts` - Comprehensive test suite
+- `/home/robhicks/dev/otto-flags/packages/remix/__mocks__/@otto-flags/sdk.ts` - FlagClient mock
 
 ## Running Tests
 

@@ -7,7 +7,7 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   moduleNameMapper: {
-    '^@savvagent/sdk$': '<rootDir>/../typescript/src/index.ts',
+    '^@otto-flags/sdk$': '<rootDir>/../typescript/src/index.ts',
   },
   setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
   transform: {

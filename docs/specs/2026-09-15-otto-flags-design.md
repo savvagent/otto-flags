@@ -20,7 +20,7 @@ otto-flags does not stand alone. It is built on a shared **otto-platform** — t
 auth, tenant-isolation, billing, and console substrate extracted from otto-factory — so
 that signing up once gives an org access to every otto-* server. otto-flags itself, being
 open source, is a **monorepo**: the MCP server and the client/framework/mobile/server SDKs
-(currently `savvagent-sdks`) live together in one public repo (§7).
+(currently `otto-flags`) live together in one public repo (§7).
 
 ## 2. otto-platform: what gets extracted from otto-factory
 
@@ -142,7 +142,7 @@ without polling.
 
 ## 7. Open source & monorepo layout
 
-otto-flags is going open source, and `savvagent-sdks` moves into this repo rather than
+otto-flags is going open source, and `otto-flags` moves into this repo rather than
 staying a separate one — a single public monorepo covering the server and every SDK,
 mirroring how otto-factory keeps `client-skills/` alongside its server rather than in a
 separate repo.
@@ -156,12 +156,12 @@ otto-flags/
 │   ├── flags-mcp/       #   MCP tool surface (of-mcp equivalent, §6)
 │   └── flags-server/    #   binary: config, migrations, router assembly (of-server equivalent)
 ├── web/                 # flags-specific console panels (registers into the shared Otto Console)
-├── packages/            # moved from savvagent-sdks: client/framework/mobile/server SDKs,
+├── packages/            # moved from otto-flags: client/framework/mobile/server SDKs,
 │                         #   plus the mcp-sentry/mcp-datadog/etc. observability integrations
-├── examples/             # moved from savvagent-sdks
+├── examples/             # moved from otto-flags
 ├── docs/
 ├── Cargo.toml            # Rust workspace root
-├── pnpm-workspace.yaml   # JS/TS workspace root (unchanged from savvagent-sdks)
+├── pnpm-workspace.yaml   # JS/TS workspace root (unchanged from otto-flags)
 ├── LICENSE
 └── README.md
 ```
@@ -175,7 +175,7 @@ crate (§3): either it's also open-sourced (it's generic infrastructure with no 
 logic in it, so a reasonable candidate) or otto-flags reimplements the same pattern locally
 without a shared-crate dependency. Not deciding this here — see open questions.
 
-**CI/versioning stay per-language, not unified.** Keep `savvagent-sdks`' existing
+**CI/versioning stay per-language, not unified.** Keep `otto-flags`' existing
 Changesets-based release flow for the JS/TS packages; keep a release-please-style flow (as
 otto-factory already uses) for the Rust crates/binary; path-filter CI so a docs-only or
 single-SDK change doesn't trigger every language's test suite.
@@ -195,11 +195,11 @@ single-SDK change doesn't trigger every language's test suite.
   into the shared console shell.
 - Whether the shared usage bucket needs per-service sub-accounting for internal cost
   attribution even though the org only sees one number.
-- License choice for the monorepo (savvagent-sdks already ships a LICENSE — carry it
+- License choice for the monorepo (otto-flags already ships a LICENSE — carry it
   over as-is, or pick deliberately now that the server is joining it under the same terms).
 - Whether `otto-tenant` (the RLS crate) is itself open-sourced, or reimplemented locally
   in otto-flags without a dependency on otto-platform's source.
-- Whether moving `savvagent-sdks` into this repo preserves its git history (e.g. via
+- Whether moving `otto-flags` into this repo preserves its git history (e.g. via
   `git subtree`) or starts fresh with a clean copy.
 
 ## 10. Suggested next steps
@@ -212,5 +212,5 @@ single-SDK change doesn't trigger every language's test suite.
    RLS crate, starting with `flag_apps` + `feature_flags` + evaluation ingestion.
 4. Add the `plans.features` JSONB column and wire one capability (e.g. `auto_rollback`)
    through it end-to-end as the pattern for everything after.
-5. Merge `savvagent-sdks` into this repo under `packages/`/`examples/` (§7), choosing
+5. Merge `otto-flags` into this repo under `packages/`/`examples/` (§7), choosing
    history-preserving vs. fresh-copy per the open question above.

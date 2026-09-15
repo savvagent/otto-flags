@@ -2,7 +2,7 @@
   "name": "astro-example",
   "version": "0.0.3",
   "private": true,
-  "description": "Example Astro app using Savvagent SDK",
+  "description": "Example Astro app using Otto Flags SDK",
   "type": "module",
   "scripts": {
     "dev": "astro dev",
@@ -10,8 +10,8 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@savvagent/astro": "workspace:*",
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/astro": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "astro": "^4.14.0"
   },
   "devDependencies": {

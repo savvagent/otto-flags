@@ -1,10 +1,10 @@
 /**
- * Savvagent Splunk MCP Server
+ * Otto Flags Splunk MCP Server
  * Pull-based MCP server that exposes Splunk log analytics via JSON-RPC 2.0 tools
  */
 
 import axios, { AxiosInstance } from 'axios';
-import { MCPServer, MCPServerConfig } from '@savvagent/mcp-sdk';
+import { MCPServer, MCPServerConfig } from '@otto-flags/mcp-sdk';
 
 /**
  * Splunk configuration options

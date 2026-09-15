@@ -1,7 +1,7 @@
 {
-  "name": "@savvagent/mcp-dynatrace",
+  "name": "@otto-flags/mcp-dynatrace",
   "version": "1.0.1",
-  "description": "Savvagent Dynatrace MCP integration - Connect feature flags with Dynatrace APM and monitoring",
+  "description": "Otto Flags Dynatrace MCP integration - Connect feature flags with Dynatrace APM and monitoring",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -27,7 +27,7 @@
     "prepublishOnly": "npm run build"
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "dynatrace",
     "mcp",
     "apm",
@@ -39,13 +39,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/mcp-dynatrace"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/mcp-dynatrace#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/mcp-dynatrace#readme",
   "publishConfig": {
     "access": "public"
   },
@@ -65,7 +65,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@savvagent/mcp-sdk": "workspace:*",
+    "@otto-flags/mcp-sdk": "workspace:*",
     "axios": "^1.13.2"
   },
   "engines": {

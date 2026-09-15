@@ -1,6 +1,6 @@
 # MCP Server Development Guide
 
-This guide provides comprehensive documentation for building MCP (Model Context Protocol) servers compatible with Savvagent's AI-powered feature flag platform.
+This guide provides comprehensive documentation for building MCP (Model Context Protocol) servers compatible with Otto Flags's AI-powered feature flag platform.
 
 ## Table of Contents
 
@@ -21,15 +21,15 @@ This guide provides comprehensive documentation for building MCP (Model Context 
 
 ### What is MCP?
 
-MCP (Model Context Protocol) is a standardized protocol for AI systems to interact with external data sources and tools. Savvagent uses MCP to connect with your observability tools like Sentry, Datadog, and custom monitoring systems.
+MCP (Model Context Protocol) is a standardized protocol for AI systems to interact with external data sources and tools. Otto Flags uses MCP to connect with your observability tools like Sentry, Datadog, and custom monitoring systems.
 
 ### Architecture Overview
 
-**You run your own MCP server.** Savvagent connects to it as a client.
+**You run your own MCP server.** Otto Flags connects to it as a client.
 
 ```
 ┌────────────────────┐              ┌──────────────────────┐
-│  Savvagent Backend │   HTTPS +    │  Your MCP Server     │
+│  Otto Flags Backend │   HTTPS +    │  Your MCP Server     │
 │  (MCP Client)      │──Bearer───▶  │  (StreamableHTTP)    │
 │                    │   Token      │                      │
 │  - Scheduler       │              │  - get_errors        │
@@ -48,22 +48,22 @@ MCP (Model Context Protocol) is a standardized protocol for AI systems to intera
 
 - **StreamableHTTP Transport**: Single HTTP endpoint (`POST /mcp`) handles all JSON-RPC requests
 - **Bearer Token Auth**: Simple, secure authentication using `Authorization: Bearer <token>`
-- **Pull-Based**: Savvagent pulls data from your server on a schedule you configure
-- **Tools**: Your server exposes tools that Savvagent calls to fetch observability data
+- **Pull-Based**: Otto Flags pulls data from your server on a schedule you configure
+- **Tools**: Your server exposes tools that Otto Flags calls to fetch observability data
 
 ### Pull-Based vs Push-Based Architecture
 
 | Aspect | Pull-Based (MCP) | Push-Based (Webhooks) |
 |--------|-----------------|----------------------|
-| Control | Savvagent controls data collection timing | External system controls timing |
+| Control | Otto Flags controls data collection timing | External system controls timing |
 | AI Integration | AI can request specific data on-demand | Data arrives regardless of AI needs |
 | Flexibility | Query for exactly what's needed | Receive all events (over-fetching) |
-| Reliability | Retry logic in Savvagent | Must handle webhook failures |
-| Rate Limiting | Savvagent manages query frequency | Must handle rate limits externally |
+| Reliability | Retry logic in Otto Flags | Must handle webhook failures |
+| Rate Limiting | Otto Flags manages query frequency | Must handle rate limits externally |
 
 ### When to Build an MCP Server
 
-Build an MCP server when you want Savvagent to:
+Build an MCP server when you want Otto Flags to:
 - Correlate errors from your monitoring tools with feature flag changes
 - Automatically detect issues caused by flag rollouts
 - Get AI-powered analysis of your observability data
@@ -71,7 +71,7 @@ Build an MCP server when you want Savvagent to:
 You'll build a server that:
 - Connects to your observability tool (Sentry, Datadog, Splunk, etc.)
 - Exposes MCP tools like `get_errors`, `get_metrics`
-- Returns data in a format Savvagent's AI can analyze
+- Returns data in a format Otto Flags's AI can analyze
 
 ---
 
@@ -234,7 +234,7 @@ Called when the client first connects. Useful for version negotiation.
     "protocolVersion": "2024-11-05",
     "capabilities": {},
     "clientInfo": {
-      "name": "savvagent-mcp-client",
+      "name": "otto-flags-mcp-client",
       "version": "1.0.0"
     }
   },
@@ -484,9 +484,9 @@ curl -X POST http://localhost:3000/mcp \
   }'
 ```
 
-### Configure in Savvagent
+### Configure in Otto Flags
 
-Once your server is running, add it in Savvagent:
+Once your server is running, add it in Otto Flags:
 
 1. Go to **Settings > MCP Integrations > Add Integration**
 2. Select server type (e.g., "Sentry" or "Custom MCP Server")
@@ -666,13 +666,13 @@ get_ab_results       - A/B test statistics
 
 ## 5. Authentication
 
-Savvagent uses **Bearer token authentication** to connect to your MCP server.
+Otto Flags uses **Bearer token authentication** to connect to your MCP server.
 
 ### How It Works
 
 1. You generate a secret token for your MCP server
-2. Configure the token in Savvagent when adding the integration
-3. Savvagent sends `Authorization: Bearer <token>` with every request
+2. Configure the token in Otto Flags when adding the integration
+3. Otto Flags sends `Authorization: Bearer <token>` with every request
 4. Your server validates the token
 
 ### Server-Side Implementation
@@ -758,7 +758,7 @@ MCP supports full OAuth 2.1 authorization flows for enterprise scenarios. This i
 - Authorization Code flow with PKCE
 - Token refresh
 
-Savvagent currently supports Bearer tokens. OAuth 2.1 support is planned for a future release.
+Otto Flags currently supports Bearer tokens. OAuth 2.1 support is planned for a future release.
 
 ---
 
@@ -790,9 +790,9 @@ curl -X POST http://localhost:3000/mcp \
   }'
 ```
 
-### Using Savvagent's Test Connection
+### Using Otto Flags's Test Connection
 
-When you configure an MCP integration in Savvagent, the "Test Connection" feature:
+When you configure an MCP integration in Otto Flags, the "Test Connection" feature:
 
 1. Calls `GET /health` (optional)
 2. Calls `POST /mcp` with `tools/list` method
@@ -1657,7 +1657,7 @@ if __name__ == '__main__':
 
 #### "No tools found"
 
-**Symptoms:** Savvagent shows "No tools found" after connection test.
+**Symptoms:** Otto Flags shows "No tools found" after connection test.
 
 **Causes:**
 1. `tools/list` returns empty array
@@ -1703,7 +1703,7 @@ const { name, arguments: args } = params;  // Note: 'arguments', not 'args'
 **Solution:**
 - Ensure response time <30 seconds
 - Check firewall rules
-- Verify server is accessible from Savvagent's network
+- Verify server is accessible from Otto Flags's network
 
 #### "Authentication failed"
 
@@ -1711,7 +1711,7 @@ const { name, arguments: args } = params;  // Note: 'arguments', not 'args'
 
 **Causes:**
 1. Wrong header name (should be `Authorization` or `X-API-Key`)
-2. Credentials not configured in Savvagent
+2. Credentials not configured in Otto Flags
 3. Token expired
 
 **Solution:**
@@ -1725,7 +1725,7 @@ curl -X POST http://localhost:3000 \
 
 #### "Invalid JSON response"
 
-**Symptoms:** Parse errors in Savvagent logs.
+**Symptoms:** Parse errors in Otto Flags logs.
 
 **Causes:**
 1. Response isn't valid JSON
@@ -1773,7 +1773,7 @@ res.json({
 5. **Verify authentication:**
    - Correct header name
    - Correct credential value
-   - Credentials configured in Savvagent
+   - Credentials configured in Otto Flags
 
 ### Getting Help
 
@@ -1781,7 +1781,7 @@ res.json({
 - Enable verbose logging during development
 - Use the mock client to test locally
 - Review the JSON-RPC 2.0 specification
-- Contact Savvagent support with server logs
+- Contact Otto Flags support with server logs
 
 ---
 
@@ -1840,9 +1840,9 @@ res.json({
 | -32001 | Unauthorized | Auth failed |
 | -32002 | Rate limited | Too many requests |
 
-### Savvagent Integration Config
+### Otto Flags Integration Config
 
-When adding an MCP integration in Savvagent, you'll provide:
+When adding an MCP integration in Otto Flags, you'll provide:
 
 | Field | Description | Example |
 |-------|-------------|---------|
@@ -1855,38 +1855,38 @@ When adding an MCP integration in Savvagent, you'll provide:
 
 ## 10. Available Integrations
 
-Savvagent provides pre-built MCP server packages for popular observability and incident management tools:
+Otto Flags provides pre-built MCP server packages for popular observability and incident management tools:
 
 ### Observability & APM
 
 | Package | Description | Tools |
 |---------|-------------|-------|
-| [`@savvagent/mcp-sentry`](../packages/mcp-sentry) | Sentry error tracking integration | `get_errors`, `get_error_details`, `search_errors`, `get_service_health` |
-| [`@savvagent/mcp-datadog`](../packages/mcp-datadog) | Datadog APM and monitoring | `get_errors`, `get_metrics`, `get_traces`, `get_logs`, `get_monitors`, `get_service_health`, `get_events` |
-| [`@savvagent/mcp-splunk`](../packages/mcp-splunk) | Splunk log analysis | `search_logs`, `get_errors`, `get_log_patterns`, `get_anomalies`, `get_saved_searches`, `run_saved_search`, `get_alerts`, `get_service_health` |
-| [`@savvagent/mcp-dynatrace`](../packages/mcp-dynatrace) | Dynatrace full-stack monitoring | `get_problems`, `get_problem_details`, `get_services`, `get_service_metrics`, `get_hosts`, `get_logs`, `get_synthetic_monitors`, `get_service_health`, `get_events` |
-| [`@savvagent/mcp-newrelic`](../packages/mcp-newrelic) | New Relic APM and NRQL | `get_errors`, `run_nrql`, `get_apm_metrics`, `get_applications`, `get_alerts`, `get_transactions`, `get_infrastructure`, `get_synthetics`, `get_service_health` |
+| [`@otto-flags/mcp-sentry`](../packages/mcp-sentry) | Sentry error tracking integration | `get_errors`, `get_error_details`, `search_errors`, `get_service_health` |
+| [`@otto-flags/mcp-datadog`](../packages/mcp-datadog) | Datadog APM and monitoring | `get_errors`, `get_metrics`, `get_traces`, `get_logs`, `get_monitors`, `get_service_health`, `get_events` |
+| [`@otto-flags/mcp-splunk`](../packages/mcp-splunk) | Splunk log analysis | `search_logs`, `get_errors`, `get_log_patterns`, `get_anomalies`, `get_saved_searches`, `run_saved_search`, `get_alerts`, `get_service_health` |
+| [`@otto-flags/mcp-dynatrace`](../packages/mcp-dynatrace) | Dynatrace full-stack monitoring | `get_problems`, `get_problem_details`, `get_services`, `get_service_metrics`, `get_hosts`, `get_logs`, `get_synthetic_monitors`, `get_service_health`, `get_events` |
+| [`@otto-flags/mcp-newrelic`](../packages/mcp-newrelic) | New Relic APM and NRQL | `get_errors`, `run_nrql`, `get_apm_metrics`, `get_applications`, `get_alerts`, `get_transactions`, `get_infrastructure`, `get_synthetics`, `get_service_health` |
 
 ### Incident Management
 
 | Package | Description | Tools |
 |---------|-------------|-------|
-| [`@savvagent/mcp-pagerduty`](../packages/mcp-pagerduty) | PagerDuty incident management | `get_incidents`, `get_incident_details`, `get_services`, `get_on_call`, `get_schedules`, `get_escalation_policies`, `get_users`, `get_analytics`, `create_incident`, `update_incident`, `get_alerts` |
+| [`@otto-flags/mcp-pagerduty`](../packages/mcp-pagerduty) | PagerDuty incident management | `get_incidents`, `get_incident_details`, `get_services`, `get_on_call`, `get_schedules`, `get_escalation_policies`, `get_users`, `get_analytics`, `create_incident`, `update_incident`, `get_alerts` |
 
 ### Base SDK
 
 | Package | Description |
 |---------|-------------|
-| [`@savvagent/mcp-sdk`](../packages/mcp-sdk) | Core SDK for building custom MCP servers with StreamableHTTP transport and Bearer token authentication |
+| [`@otto-flags/mcp-sdk`](../packages/mcp-sdk) | Core SDK for building custom MCP servers with StreamableHTTP transport and Bearer token authentication |
 
 ### Using Pre-built Integrations
 
 ```bash
 # Install a specific integration
-npm install @savvagent/mcp-datadog
+npm install @otto-flags/mcp-datadog
 
 # Or with pnpm
-pnpm add @savvagent/mcp-datadog
+pnpm add @otto-flags/mcp-datadog
 ```
 
 Each package includes:

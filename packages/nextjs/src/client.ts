@@ -7,8 +7,8 @@
 
 // Re-export all client-side functionality from React SDK
 export {
-  SavvagentProvider,
-  useSavvagent,
+  OttoFlagsProvider,
+  useOttoFlags,
   useFlag,
   useFlags,
   useWithFlag,
@@ -17,10 +17,10 @@ export {
   useEnvironment,
   // Re-export FlagClient for advanced use cases
   FlagClient,
-} from '@savvagent/react';
+} from '@otto-flags/react';
 
 export type {
-  SavvagentProviderProps,
+  OttoFlagsProviderProps,
   DefaultFlagContext,
   UseFlagOptions,
   UseFlagResult,
@@ -37,4 +37,4 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/react';
+} from '@otto-flags/react';

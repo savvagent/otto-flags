@@ -1,5 +1,5 @@
 /**
- * @savvagent/svelte - Svelte SDK for Savvagent feature flags
+ * @otto-flags/svelte - Svelte SDK for Otto Flags feature flags
  *
  * Provides Svelte stores and utilities for feature flag evaluation.
  * Compatible with both Svelte 4 and Svelte 5 (with runes).
@@ -8,14 +8,14 @@
  */
 
 import { writable, derived, readable, type Readable, type Writable } from 'svelte/store';
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult, FlagDefinition } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult, FlagDefinition } from '@otto-flags/sdk';
 
 let clientInstance: FlagClient | null = null;
 let defaultContext: FlagContext = {};
 
 /**
  * Default context applied to all flag evaluations.
- * Similar to React's defaultContext in SavvagentProvider.
+ * Similar to React's defaultContext in OttoFlagsProvider.
  */
 export interface DefaultFlagContext {
   /** Environment (development, staging, production) */
@@ -35,9 +35,9 @@ export interface DefaultFlagContext {
 }
 
 /**
- * Configuration for Savvagent initialization.
+ * Configuration for Otto Flags initialization.
  */
-export interface SavvagentConfig {
+export interface OttoFlagsConfig {
   /** FlagClient configuration */
   config: FlagClientConfig;
   /** Default context applied to all flag evaluations */
@@ -45,20 +45,20 @@ export interface SavvagentConfig {
 }
 
 /**
- * Initialize the Savvagent client.
+ * Initialize the Otto Flags client.
  * Call this once at app startup (e.g., in +layout.ts or +layout.svelte).
  *
- * @param config - Client configuration or full SavvagentConfig
- * @param contextOverride - Optional default context (deprecated, use SavvagentConfig instead)
+ * @param config - Client configuration or full OttoFlagsConfig
+ * @param contextOverride - Optional default context (deprecated, use OttoFlagsConfig instead)
  * @returns The FlagClient instance
  *
  * @example
  * ```ts
  * // +layout.ts
- * import { initSavvagent } from '@savvagent/svelte';
+ * import { initOttoFlags } from '@otto-flags/svelte';
  *
  * export const load = () => {
- *   initSavvagent({
+ *   initOttoFlags({
  *     config: {
  *       apiKey: 'sdk_...',
  *       applicationId: 'your-app-id',
@@ -71,8 +71,8 @@ export interface SavvagentConfig {
  * };
  * ```
  */
-export function initSavvagent(
-  config: FlagClientConfig | SavvagentConfig,
+export function initOttoFlags(
+  config: FlagClientConfig | OttoFlagsConfig,
   contextOverride?: DefaultFlagContext
 ): FlagClient {
   if (!clientInstance) {
@@ -138,14 +138,14 @@ export function setDefaultContext(ctx: DefaultFlagContext): void {
  *
  * @example
  * ```ts
- * import { setEnvironment } from '@savvagent/svelte';
+ * import { setEnvironment } from '@otto-flags/svelte';
  *
  * // Switch to staging environment
  * setEnvironment('staging');
  * ```
  */
 export function setEnvironment(environment: string): void {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   client.setEnvironment(environment);
 }
 
@@ -156,26 +156,26 @@ export function setEnvironment(environment: string): void {
  *
  * @example
  * ```ts
- * import { getEnvironment } from '@savvagent/svelte';
+ * import { getEnvironment } from '@otto-flags/svelte';
  *
  * const env = getEnvironment();
  * console.log(`Current environment: ${env}`);
  * ```
  */
 export function getEnvironment(): string {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   return client.getEnvironment();
 }
 
 /**
- * Get the Savvagent client instance.
+ * Get the Otto Flags client instance.
  *
  * @returns The FlagClient instance
  * @throws Error if client is not initialized
  */
-export function getSavvagent(): FlagClient {
+export function getOttoFlags(): FlagClient {
   if (!clientInstance) {
-    throw new Error('Savvagent client not initialized. Call initSavvagent() first.');
+    throw new Error('Otto Flags client not initialized. Call initOttoFlags() first.');
   }
   return clientInstance;
 }
@@ -227,7 +227,7 @@ function mergeContext(context?: FlagContext): FlagContext {
  * @example
  * ```svelte
  * <script>
- * import { createFlagStore } from '@savvagent/svelte';
+ * import { createFlagStore } from '@otto-flags/svelte';
  *
  * const featureFlag = createFlagStore('new-feature', {
  *   context: { user_id: $user?.id },
@@ -249,7 +249,7 @@ export function createFlagStore(
   flagKey: string,
   options: FlagStoreOptions = {}
 ): Readable<FlagStoreValue> {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   const {
     context,
     defaultValue = false,
@@ -320,7 +320,7 @@ export function createFlagStore(
  * @example
  * ```svelte
  * <script>
- * import { createFlag } from '@savvagent/svelte';
+ * import { createFlag } from '@otto-flags/svelte';
  *
  * const isEnabled = createFlag('new-feature');
  * </script>
@@ -376,7 +376,7 @@ export interface FlagsStoreValue {
  * @example
  * ```svelte
  * <script>
- * import { createFlagsStore } from '@savvagent/svelte';
+ * import { createFlagsStore } from '@otto-flags/svelte';
  *
  * const flags = createFlagsStore(
  *   ['feature-a', 'feature-b', 'feature-c'],
@@ -403,7 +403,7 @@ export function createFlagsStore(
   flagKeys: string[],
   options: FlagsStoreOptions = {}
 ): Readable<FlagsStoreValue> & { refetch: () => Promise<void> } {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   const {
     context,
     defaultValues = {},
@@ -531,7 +531,7 @@ export interface OverridesStoreValue {
  * @example
  * ```svelte
  * <script>
- * import { createOverridesStore } from '@savvagent/svelte';
+ * import { createOverridesStore } from '@otto-flags/svelte';
  *
  * const overrides = createOverridesStore();
  *
@@ -555,8 +555,8 @@ export function createOverridesStore(): Readable<OverridesStoreValue> & {
   has: (flagKey: string) => boolean;
   get: (flagKey: string) => boolean | undefined;
 } {
-  const STORAGE_KEY = 'savvagent_local_overrides';
-  const client = getSavvagent();
+  const STORAGE_KEY = 'otto_flags_local_overrides';
+  const client = getOttoFlags();
 
   // Load initial overrides from localStorage
   let initialOverrides: Record<string, boolean> = {};
@@ -569,7 +569,7 @@ export function createOverridesStore(): Readable<OverridesStoreValue> & {
         client.setOverrides(initialOverrides);
       }
     } catch (e) {
-      console.warn('[Savvagent] Failed to load overrides from localStorage:', e);
+      console.warn('[Otto Flags] Failed to load overrides from localStorage:', e);
     }
   }
 
@@ -597,7 +597,7 @@ export function createOverridesStore(): Readable<OverridesStoreValue> & {
           localStorage.removeItem(STORAGE_KEY);
         }
       } catch (e) {
-        console.warn('[Savvagent] Failed to save overrides to localStorage:', e);
+        console.warn('[Otto Flags] Failed to save overrides to localStorage:', e);
       }
     }
   });
@@ -631,7 +631,7 @@ export function createOverridesStore(): Readable<OverridesStoreValue> & {
  * @example
  * ```svelte
  * <script>
- * import { createAllFlagsStore } from '@savvagent/svelte';
+ * import { createAllFlagsStore } from '@otto-flags/svelte';
  *
  * const allFlags = createAllFlagsStore('development');
  * </script>
@@ -646,7 +646,7 @@ export function createAllFlagsStore(
 ): Readable<{ flags: FlagDefinition[]; loading: boolean; error: Error | null }> & {
   refetch: () => Promise<void>;
 } {
-  const client = getSavvagent();
+  const client = getOttoFlags();
 
   let refetchFn: () => Promise<void>;
 
@@ -687,7 +687,7 @@ export function createAllFlagsStore(
  * @example
  * ```svelte
  * <script>
- * import { createUserIdStore } from '@savvagent/svelte';
+ * import { createUserIdStore } from '@otto-flags/svelte';
  *
  * const userId = createUserIdStore();
  *
@@ -700,7 +700,7 @@ export function createAllFlagsStore(
  * ```
  */
 export function createUserIdStore(): Writable<string | null> {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   const store = writable<string | null>(client.getUserId());
 
   return {
@@ -729,7 +729,7 @@ export function createUserIdStore(): Writable<string | null> {
  * @example
  * ```svelte
  * <script>
- * import { trackError } from '@savvagent/svelte';
+ * import { trackError } from '@otto-flags/svelte';
  *
  * async function handlePayment() {
  *   try {
@@ -746,7 +746,7 @@ export function trackError(
   error: Error,
   context?: FlagContext
 ): void {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   client.trackError(flagKey, error, context);
 }
 
@@ -762,7 +762,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

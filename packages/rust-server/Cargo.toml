@@ -1,14 +1,14 @@
 [package]
-name = "savvagent"
+name = "otto-flags"
 version = "0.1.0"
 edition = "2021"
-authors = ["Savvagent Team <support@savvagent.com>"]
-description = "Rust Server SDK for Savvagent feature flags with AI-powered error detection"
+authors = ["Otto Flags Team <support@otto-flags.dev>"]
+description = "Rust Server SDK for Otto Flags feature flags with AI-powered error detection"
 license = "MIT"
-repository = "https://github.com/savvagent/savvagent-sdks"
-homepage = "https://savvagent.com"
-documentation = "https://docs.rs/savvagent"
-keywords = ["feature-flags", "feature-toggles", "savvagent", "ai"]
+repository = "https://github.com/savvagent/otto-flags"
+homepage = "https://otto-flags.dev"
+documentation = "https://docs.rs/otto-flags"
+keywords = ["feature-flags", "feature-toggles", "otto-flags", "ai"]
 categories = ["web-programming", "api-bindings"]
 readme = "README.md"
 

@@ -1,1 +1,1 @@
-"""Savvagent SDK Tests"""
+"""Otto Flags SDK Tests"""

@@ -7,7 +7,7 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   moduleNameMapper: {
-    '^@savvagent/sdk$': '<rootDir>/../typescript/src',
-    '^@savvagent/react$': '<rootDir>/../react/src',
+    '^@otto-flags/sdk$': '<rootDir>/../typescript/src',
+    '^@otto-flags/react$': '<rootDir>/../react/src',
   },
 };

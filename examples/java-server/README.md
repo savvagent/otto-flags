@@ -1,13 +1,13 @@
-# Savvagent Java Server Example
+# Otto Flags Java Server Example
 
-Example Spring Boot application demonstrating how to use the Savvagent Java Server SDK.
+Example Spring Boot application demonstrating how to use the Otto Flags Java Server SDK.
 
 ## Features
 
 - Spring Boot 3.2
 - Java 17
 - Maven build
-- Savvagent Java Server SDK
+- Otto Flags Java Server SDK
 - RESTful API endpoints
 - Feature-gated functionality
 - In-memory caching
@@ -23,9 +23,9 @@ Example Spring Boot application demonstrating how to use the Savvagent Java Serv
 
    Create `application.properties` with your credentials:
    ```properties
-   savvagent.api-url=http://localhost:8080
-   savvagent.sdk-key=your-sdk-key-here
-   savvagent.environment=development
+   ottoFlags.api-url=http://localhost:8080
+   ottoFlags.sdk-key=your-sdk-key-here
+   ottoFlags.environment=development
    server.port=8081
    ```
 
@@ -91,18 +91,18 @@ Uses the `advanced-processing` flag to determine processing method.
 @RestController
 @RequestMapping("/api")
 public class FeatureController {
-    private final SavvagentClient savvagent;
+    private final OttoFlagsClient ottoFlags;
 
     @Autowired
-    public FeatureController(SavvagentClient savvagent) {
-        this.savvagent = savvagent;
+    public FeatureController(OttoFlagsClient ottoFlags) {
+        this.ottoFlags = ottoFlags;
     }
 
     @GetMapping("/features")
     public ResponseEntity<Map<String, Object>> getFeatures(
         @RequestParam String userId
     ) {
-        boolean isEnabled = savvagent.isEnabled("new-feature",
+        boolean isEnabled = ottoFlags.isEnabled("new-feature",
             EvaluationContext.builder()
                 .userId(userId)
                 .attribute("plan", "pro")
@@ -120,5 +120,5 @@ public class FeatureController {
 ## Learn More
 
 - [Spring Boot Documentation](https://spring.io/projects/spring-boot)
-- [Savvagent Java SDK Documentation](../../packages/java-server/README.md)
+- [Otto Flags Java SDK Documentation](../../packages/java-server/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

@@ -1,13 +1,13 @@
-# Savvagent Remix Example
+# Otto Flags Remix Example
 
-Example Remix application demonstrating how to use the Savvagent Remix SDK with loaders and actions.
+Example Remix application demonstrating how to use the Otto Flags Remix SDK with loaders and actions.
 
 ## Features
 
 - Remix with server-side rendering
 - TypeScript
 - Vite for fast development
-- Savvagent Remix loaders and utilities
+- Otto Flags Remix loaders and utilities
 - Server-side feature flag evaluation
 - Client-side hydration
 
@@ -25,8 +25,8 @@ Example Remix application demonstrating how to use the Savvagent Remix SDK with 
 
    Edit `.env`:
    ```bash
-   SAVVAGENT_API_URL=http://localhost:8080
-   SAVVAGENT_SDK_KEY=your-sdk-key-here
+   OTTO_FLAGS_API_URL=http://localhost:8080
+   OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -43,15 +43,15 @@ Example Remix application demonstrating how to use the Savvagent Remix SDK with 
 ```typescript
 import type { LoaderFunctionArgs } from '@remix-run/node';
 import { json } from '@remix-run/node';
-import { createSavvagentLoader } from '@savvagent/remix';
+import { createOttoFlagsLoader } from '@otto-flags/remix';
 
-const savvagent = createSavvagentLoader({
-  apiUrl: process.env.SAVVAGENT_API_URL!,
-  sdkKey: process.env.SAVVAGENT_SDK_KEY!,
+const ottoFlags = createOttoFlagsLoader({
+  apiUrl: process.env.OTTO_FLAGS_API_URL!,
+  sdkKey: process.env.OTTO_FLAGS_SDK_KEY!,
 });
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const isEnabled = await savvagent.isEnabled('new-feature', {
+  const isEnabled = await ottoFlags.isEnabled('new-feature', {
     userId: 'user-123',
     attributes: {
       email: 'user@example.com',
@@ -77,5 +77,5 @@ export default function Route() {
 ## Learn More
 
 - [Remix Documentation](https://remix.run/docs)
-- [Savvagent Remix SDK Documentation](../../packages/remix/README.md)
+- [Otto Flags Remix SDK Documentation](../../packages/remix/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

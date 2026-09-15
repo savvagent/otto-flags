@@ -41,10 +41,10 @@ importers:
       '@angular/router':
         specifier: ^18.0.0
         version: 18.2.14(@angular/common@18.2.14(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10))(rxjs@7.8.2))(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10))(@angular/platform-browser@18.2.14(@angular/animations@18.2.14(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10)))(@angular/common@18.2.14(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10))(rxjs@7.8.2))(@angular/core@18.2.14(rxjs@7.8.2)(zone.js@0.14.10)))(rxjs@7.8.2)
-      '@savvagent/angular':
+      '@otto-flags/angular':
         specifier: workspace:*
         version: link:../../packages/angular
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       rxjs:
@@ -75,10 +75,10 @@ importers:
 
   examples/astro-app:
     dependencies:
-      '@savvagent/astro':
+      '@otto-flags/astro':
         specifier: workspace:*
         version: link:../../packages/astro
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       astro:
@@ -91,10 +91,10 @@ importers:
 
   examples/nextjs-app:
     dependencies:
-      '@savvagent/nextjs':
+      '@otto-flags/nextjs':
         specifier: workspace:*
         version: link:../../packages/nextjs
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       next:
@@ -122,7 +122,7 @@ importers:
 
   examples/node-backend:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       express:
@@ -135,10 +135,10 @@ importers:
 
   examples/react-app:
     dependencies:
-      '@savvagent/react':
+      '@otto-flags/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       react:
@@ -175,10 +175,10 @@ importers:
       '@remix-run/serve':
         specifier: ^2.11.0
         version: 2.17.2(typescript@5.9.3)
-      '@savvagent/remix':
+      '@otto-flags/remix':
         specifier: workspace:*
         version: link:../../packages/remix
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
       isbot:
@@ -209,10 +209,10 @@ importers:
 
   examples/solid-app:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
-      '@savvagent/solid':
+      '@otto-flags/solid':
         specifier: workspace:*
         version: link:../../packages/solid
       solid-js:
@@ -231,10 +231,10 @@ importers:
 
   examples/svelte-app:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
-      '@savvagent/svelte':
+      '@otto-flags/svelte':
         specifier: workspace:*
         version: link:../../packages/svelte
       svelte:
@@ -262,7 +262,7 @@ importers:
 
   examples/sveltekit-app:
     dependencies:
-      '@savvagent/svelte':
+      '@otto-flags/svelte':
         specifier: workspace:*
         version: link:../../packages/svelte
     devDependencies:
@@ -284,10 +284,10 @@ importers:
 
   examples/vue-app:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../../packages/typescript
-      '@savvagent/vue':
+      '@otto-flags/vue':
         specifier: workspace:*
         version: link:../../packages/vue
       vue:
@@ -309,7 +309,7 @@ importers:
 
   packages/angular:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
       tslib:
@@ -370,7 +370,7 @@ importers:
 
   packages/astro:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -398,7 +398,7 @@ importers:
 
   packages/mcp-datadog:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -447,7 +447,7 @@ importers:
 
   packages/mcp-dynatrace:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -496,7 +496,7 @@ importers:
 
   packages/mcp-newrelic:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -545,7 +545,7 @@ importers:
 
   packages/mcp-pagerduty:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -627,7 +627,7 @@ importers:
 
   packages/mcp-sentry:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -676,7 +676,7 @@ importers:
 
   packages/mcp-splunk:
     dependencies:
-      '@savvagent/mcp-sdk':
+      '@otto-flags/mcp-sdk':
         specifier: workspace:*
         version: link:../mcp-sdk
       axios:
@@ -725,10 +725,10 @@ importers:
 
   packages/nextjs:
     dependencies:
-      '@savvagent/react':
+      '@otto-flags/react':
         specifier: workspace:*
         version: link:../react
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -771,7 +771,7 @@ importers:
 
   packages/node-server:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
       eventsource:
@@ -808,7 +808,7 @@ importers:
 
   packages/react:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -857,10 +857,10 @@ importers:
 
   packages/remix:
     dependencies:
-      '@savvagent/react':
+      '@otto-flags/react':
         specifier: workspace:*
         version: link:../react
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -903,7 +903,7 @@ importers:
 
   packages/solid:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -946,7 +946,7 @@ importers:
 
   packages/svelte:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:
@@ -974,10 +974,10 @@ importers:
 
   packages/sveltekit:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
-      '@savvagent/svelte':
+      '@otto-flags/svelte':
         specifier: workspace:*
         version: link:../svelte
     devDependencies:
@@ -1045,7 +1045,7 @@ importers:
 
   packages/vue:
     dependencies:
-      '@savvagent/sdk':
+      '@otto-flags/sdk':
         specifier: workspace:*
         version: link:../typescript
     devDependencies:

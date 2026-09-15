@@ -1,8 +1,8 @@
 {
-  "name": "@savvagent/solid",
+  "name": "@otto-flags/solid",
   "version": "1.1.0",
-  "description": "SolidJS SDK for Savvagent feature flags with reactive primitives",
-  "author": "Savvagent",
+  "description": "SolidJS SDK for Otto Flags feature flags with reactive primitives",
+  "author": "Otto Flags",
   "license": "MIT",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -28,7 +28,7 @@
     "solid-js": ">=1.0.0"
   },
   "dependencies": {
-    "@savvagent/sdk": "workspace:*"
+    "@otto-flags/sdk": "workspace:*"
   },
   "devDependencies": {
     "@solidjs/testing-library": "0.8.10",
@@ -45,7 +45,7 @@
     "vitest": "4.0.14"
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "feature-flags",
     "solidjs",
     "solid",
@@ -55,13 +55,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/solid"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/solid#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/solid#readme",
   "publishConfig": {
     "access": "public"
   }

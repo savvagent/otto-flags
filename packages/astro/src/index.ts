@@ -1,5 +1,5 @@
 /**
- * @savvagent/astro - Astro integration for Savvagent feature flags
+ * @otto-flags/astro - Astro integration for Otto Flags feature flags
  *
  * Provides Astro integration, middleware, and server-side helpers.
  *
@@ -7,17 +7,17 @@
  */
 
 import type { AstroIntegration } from 'astro';
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@otto-flags/sdk';
 
 let clientInstance: FlagClient | null = null;
 
-export interface SavvagentIntegrationOptions {
-  /** Savvagent configuration */
+export interface OttoFlagsIntegrationOptions {
+  /** Otto Flags configuration */
   config: FlagClientConfig;
 }
 
 /**
- * Astro integration for Savvagent.
+ * Astro integration for Otto Flags.
  * Automatically initializes the client and makes it available in all components.
  *
  * @param options - Integration options
@@ -27,25 +27,25 @@ export interface SavvagentIntegrationOptions {
  * ```ts
  * // astro.config.mjs
  * import { defineConfig } from 'astro/config';
- * import savvagent from '@savvagent/astro';
+ * import ottoFlags from '@otto-flags/astro';
  *
  * export default defineConfig({
  *   integrations: [
- *     savvagent({
+ *     ottoFlags({
  *       config: {
- *         apiKey: process.env.SAVVAGENT_API_KEY,
- *         applicationId: process.env.SAVVAGENT_APP_ID,
+ *         apiKey: process.env.OTTO_FLAGS_API_KEY,
+ *         applicationId: process.env.OTTO_FLAGS_APP_ID,
  *       },
  *     }),
  *   ],
  * });
  * ```
  */
-export default function savvagent(
-  options: SavvagentIntegrationOptions
+export default function ottoFlags(
+  options: OttoFlagsIntegrationOptions
 ): AstroIntegration {
   return {
-    name: '@savvagent/astro',
+    name: '@otto-flags/astro',
     hooks: {
       'astro:config:setup': () => {
         // Initialize client
@@ -65,13 +65,13 @@ export default function savvagent(
 }
 
 /**
- * Initialize the Savvagent client manually.
+ * Initialize the Otto Flags client manually.
  * Use this if not using the Astro integration.
  *
  * @param config - Client configuration
  * @returns The FlagClient instance
  */
-export function initSavvagent(config: FlagClientConfig): FlagClient {
+export function initOttoFlags(config: FlagClientConfig): FlagClient {
   if (!clientInstance) {
     clientInstance = new FlagClient(config);
   }
@@ -79,15 +79,15 @@ export function initSavvagent(config: FlagClientConfig): FlagClient {
 }
 
 /**
- * Get the Savvagent client instance.
+ * Get the Otto Flags client instance.
  *
  * @returns The FlagClient instance
  * @throws Error if client is not initialized
  */
-export function getSavvagent(): FlagClient {
+export function getOttoFlags(): FlagClient {
   if (!clientInstance) {
     throw new Error(
-      'Savvagent client not initialized. Use the integration or call initSavvagent() first.'
+      'Otto Flags client not initialized. Use the integration or call initOttoFlags() first.'
     );
   }
   return clientInstance;
@@ -114,7 +114,7 @@ export function getRequestContext(
 
   const context: FlagContext = {
     user_id: cookies.user_id,
-    anonymous_id: cookies.savvagent_anonymous_id,
+    anonymous_id: cookies.otto_flags_anonymous_id,
     session_id: cookies.session_id,
     language: request.headers.get('accept-language')?.split(',')[0] || undefined,
     ...overrides,
@@ -133,7 +133,7 @@ export function getRequestContext(
  * @example
  * ```astro
  * ---
- * import { isEnabled } from '@savvagent/astro';
+ * import { isEnabled } from '@otto-flags/astro';
  *
  * const showNewLayout = await isEnabled('new-layout');
  * ---
@@ -149,7 +149,7 @@ export async function isEnabled(
   flagKey: string,
   context?: FlagContext
 ): Promise<boolean> {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   return client.isEnabled(flagKey, context);
 }
 
@@ -163,7 +163,7 @@ export async function isEnabled(
  * @example
  * ```astro
  * ---
- * import { evaluate } from '@savvagent/astro';
+ * import { evaluate } from '@otto-flags/astro';
  *
  * const result = await evaluate('premium-features');
  * const { value, reason, metadata } = result;
@@ -179,7 +179,7 @@ export async function evaluate(
   flagKey: string,
   context?: FlagContext
 ): Promise<FlagEvaluationResult> {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   return client.evaluate(flagKey, context);
 }
 
@@ -194,7 +194,7 @@ export async function evaluate(
  * @example
  * ```astro
  * ---
- * import { withFlag } from '@savvagent/astro';
+ * import { withFlag } from '@otto-flags/astro';
  *
  * const data = await withFlag('use-new-api', async () => {
  *   return await fetchFromNewAPI();
@@ -209,7 +209,7 @@ export async function withFlag<T>(
   callback: () => T | Promise<T>,
   context?: FlagContext
 ): Promise<T | null> {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   return client.withFlag(flagKey, callback, context);
 }
 
@@ -223,7 +223,7 @@ export async function withFlag<T>(
  * @example
  * ```astro
  * ---
- * import { trackError } from '@savvagent/astro';
+ * import { trackError } from '@otto-flags/astro';
  *
  * try {
  *   await processData();
@@ -238,7 +238,7 @@ export function trackError(
   error: Error,
   context?: FlagContext
 ): void {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   client.trackError(flagKey, error, context);
 }
 
@@ -251,14 +251,14 @@ export function trackError(
  * @example
  * ```astro
  * ---
- * import { setEnvironment } from '@savvagent/astro';
+ * import { setEnvironment } from '@otto-flags/astro';
  *
  * setEnvironment('staging');
  * ---
  * ```
  */
 export function setEnvironment(environment: string): void {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   client.setEnvironment(environment);
 }
 
@@ -270,7 +270,7 @@ export function setEnvironment(environment: string): void {
  * @example
  * ```astro
  * ---
- * import { getEnvironment } from '@savvagent/astro';
+ * import { getEnvironment } from '@otto-flags/astro';
  *
  * const env = getEnvironment();
  * ---
@@ -278,7 +278,7 @@ export function setEnvironment(environment: string): void {
  * ```
  */
 export function getEnvironment(): string {
-  const client = getSavvagent();
+  const client = getOttoFlags();
   return client.getEnvironment();
 }
 
@@ -293,7 +293,7 @@ export function getEnvironment(): string {
  * @example
  * ```astro
  * ---
- * import { evaluateForRequest } from '@savvagent/astro';
+ * import { evaluateForRequest } from '@otto-flags/astro';
  *
  * const showBeta = await evaluateForRequest(Astro.request, 'beta-ui');
  * ---
@@ -317,7 +317,7 @@ export async function evaluateForRequest(
  * ```ts
  * // src/middleware.ts
  * import { sequence } from 'astro/middleware';
- * import { createFlagMiddleware } from '@savvagent/astro';
+ * import { createFlagMiddleware } from '@otto-flags/astro';
  *
  * const flagMiddleware = createFlagMiddleware({
  *   'maintenance-mode': {
@@ -344,7 +344,7 @@ export interface FlagMiddlewareConfig {
 
 export function createFlagMiddleware(config: FlagMiddlewareConfig) {
   return async (context: any, next: () => Promise<Response>) => {
-    const client = getSavvagent();
+    const client = getOttoFlags();
     const requestContext = getRequestContext(context.request);
 
     for (const [flagKey, options] of Object.entries(config)) {
@@ -385,7 +385,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

@@ -1,8 +1,8 @@
-# Savvagent SDKs
+# Otto Flags SDKs
 
-> Savvagent is an AI-powered feature flag platform that prevents production incidents. This repository contains official SDKs for TypeScript/JavaScript, React, Vue, Svelte, Next.js, Node.js, Go, Java, Rust, iOS, and Android.
+> Otto Flags is an AI-powered feature flag platform that prevents production incidents. This repository contains official SDKs for TypeScript/JavaScript, React, Vue, Svelte, Next.js, Node.js, Go, Java, Rust, iOS, and Android.
 
-Savvagent feature flags enable safe rollouts with automatic error detection and correlation. The platform tracks flag evaluations and correlates production errors with recent flag changes using AI.
+Otto Flags feature flags enable safe rollouts with automatic error detection and correlation. The platform tracks flag evaluations and correlates production errors with recent flag changes using AI.
 
 ## Core Concepts
 
@@ -15,11 +15,11 @@ Savvagent feature flags enable safe rollouts with automatic error detection and 
 ## Quick Start (TypeScript)
 
 ```typescript
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 
 const client = new FlagClient({
   apiKey: 'sdk_your_key_here',
-  baseUrl: 'https://flags-api.savvagent.com',
+  baseUrl: 'https://flags-api.otto-flags.dev',
 });
 
 // Check if flag is enabled
@@ -36,23 +36,23 @@ await client.withFlag('experimental', async () => {
 
 ## SDK Documentation
 
-- [TypeScript/JavaScript SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/typescript/README.md): Core SDK with caching, real-time updates, telemetry
-- [React SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/react/README.md): React hooks for feature flags
-- [Vue SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/vue/README.md): Vue 3 composables
-- [Svelte SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/svelte/README.md): Svelte stores
-- [Next.js SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/nextjs/README.md): App Router and Pages Router support
-- [Node.js Server SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/node-server/README.md): Server-side SDK for Express, Fastify, etc.
-- [Go Server SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/go-server/README.md): Idiomatic Go with goroutine-safe access
-- [Java Server SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/java-server/README.md): Thread-safe for Spring Boot, etc.
-- [Rust Server SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/rust-server/README.md): Async/await with Tokio
-- [iOS SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/ios-sdk/README.md): Swift with async/await, SwiftUI support
-- [Android SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/android-sdk/README.md): Kotlin with Jetpack Compose
+- [TypeScript/JavaScript SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/typescript/README.md): Core SDK with caching, real-time updates, telemetry
+- [React SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/react/README.md): React hooks for feature flags
+- [Vue SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/vue/README.md): Vue 3 composables
+- [Svelte SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/svelte/README.md): Svelte stores
+- [Next.js SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/nextjs/README.md): App Router and Pages Router support
+- [Node.js Server SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/node-server/README.md): Server-side SDK for Express, Fastify, etc.
+- [Go Server SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/go-server/README.md): Idiomatic Go with goroutine-safe access
+- [Java Server SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/java-server/README.md): Thread-safe for Spring Boot, etc.
+- [Rust Server SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/rust-server/README.md): Async/await with Tokio
+- [iOS SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/ios-sdk/README.md): Swift with async/await, SwiftUI support
+- [Android SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/android-sdk/README.md): Kotlin with Jetpack Compose
 
 ## Guides
 
-- [SDK Integration Guide](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/docs/SDK-INTEGRATION.md): Complete setup and usage instructions
-- [Dynamic Configuration](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/docs/DYNAMIC-CONFIGURATION.md): Advanced flag variations and targeting
-- [Client-Side Overrides](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/docs/CLIENT-SIDE-OVERRIDES.md): Testing flags in development
+- [SDK Integration Guide](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/docs/SDK-INTEGRATION.md): Complete setup and usage instructions
+- [Dynamic Configuration](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/docs/DYNAMIC-CONFIGURATION.md): Advanced flag variations and targeting
+- [Client-Side Overrides](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/docs/CLIENT-SIDE-OVERRIDES.md): Testing flags in development
 
 ## API Reference
 
@@ -94,6 +94,6 @@ interface EvaluationContext {
 
 ## Optional
 
-- [Examples Repository](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/examples): Working example apps for all frameworks
-- [Migration Guide](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/docs/MIGRATION.md): Migrating from other feature flag providers
-- [MCP SDK](https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/packages/mcp-sdk/README.md): Building observability integrations
+- [Examples Repository](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/examples): Working example apps for all frameworks
+- [Migration Guide](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/docs/MIGRATION.md): Migrating from other feature flag providers
+- [MCP SDK](https://raw.githubusercontent.com/ottoFlags/otto-flags/main/packages/mcp-sdk/README.md): Building observability integrations

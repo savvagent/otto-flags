@@ -1,13 +1,13 @@
-# Savvagent SolidJS Example
+# Otto Flags SolidJS Example
 
-Example SolidJS application demonstrating how to use the Savvagent Solid SDK with reactive primitives.
+Example SolidJS application demonstrating how to use the Otto Flags Solid SDK with reactive primitives.
 
 ## Features
 
 - SolidJS with fine-grained reactivity
 - TypeScript
 - Vite for fast development
-- Savvagent Solid primitives (`createFeatureFlag`, `SavvagentProvider`)
+- Otto Flags Solid primitives (`createFeatureFlag`, `OttoFlagsProvider`)
 - Real-time feature flag updates
 - Hot module replacement
 
@@ -25,8 +25,8 @@ Example SolidJS application demonstrating how to use the Savvagent Solid SDK wit
 
    Edit `.env.local`:
    ```bash
-   VITE_SAVVAGENT_API_URL=http://localhost:8080
-   VITE_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   VITE_OTTO_FLAGS_API_URL=http://localhost:8080
+   VITE_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -41,7 +41,7 @@ Example SolidJS application demonstrating how to use the Savvagent Solid SDK wit
 ### Using the Solid Primitive
 
 ```typescript
-import { createFeatureFlag } from '@savvagent/solid';
+import { createFeatureFlag } from '@otto-flags/solid';
 
 function MyComponent() {
   const [isEnabled, { loading }] = createFeatureFlag('new-feature', {
@@ -66,17 +66,17 @@ function MyComponent() {
 
 ```typescript
 import { render } from 'solid-js/web';
-import { SavvagentProvider } from '@savvagent/solid';
+import { OttoFlagsProvider } from '@otto-flags/solid';
 import App from './App';
 
 render(
   () => (
-    <SavvagentProvider
-      apiUrl={import.meta.env.VITE_SAVVAGENT_API_URL}
-      sdkKey={import.meta.env.VITE_SAVVAGENT_SDK_KEY}
+    <OttoFlagsProvider
+      apiUrl={import.meta.env.VITE_OTTO_FLAGS_API_URL}
+      sdkKey={import.meta.env.VITE_OTTO_FLAGS_SDK_KEY}
     >
       <App />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   ),
   document.getElementById('root')!
 );
@@ -85,5 +85,5 @@ render(
 ## Learn More
 
 - [SolidJS Documentation](https://www.solidjs.com/)
-- [Savvagent Solid SDK Documentation](../../packages/solid/README.md)
+- [Otto Flags Solid SDK Documentation](../../packages/solid/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

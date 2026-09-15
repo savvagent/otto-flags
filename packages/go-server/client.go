@@ -1,4 +1,4 @@
-package savvagent
+package ottoflags
 
 import (
 	"bytes"
@@ -30,7 +30,7 @@ func NewClient(config Config) (*FlagClient, error) {
 
 	// Apply defaults
 	if config.BaseURL == "" {
-		config.BaseURL = "https://flags-api.savvagent.com"
+		config.BaseURL = "https://flags-api.otto-flags.dev"
 	}
 	if config.CacheTTL == 0 {
 		config.CacheTTL = 60 * time.Second
@@ -43,7 +43,7 @@ func NewClient(config Config) (*FlagClient, error) {
 	}
 	if config.OnError == nil {
 		config.OnError = func(err error) {
-			fmt.Printf("[Savvagent] Error: %v\n", err)
+			fmt.Printf("[Otto Flags] Error: %v\n", err)
 		}
 	}
 

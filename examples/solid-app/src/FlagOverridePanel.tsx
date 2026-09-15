@@ -1,8 +1,8 @@
 import { createSignal, createEffect, onCleanup, Show, For } from 'solid-js';
-import { useSavvagent } from '@savvagent/solid';
-import type { FlagDefinition } from '@savvagent/solid';
+import { useOttoFlags } from '@otto-flags/solid';
+import type { FlagDefinition } from '@otto-flags/solid';
 
-const STORAGE_KEY = 'savvagent_local_overrides';
+const STORAGE_KEY = 'otto_flags_local_overrides';
 
 /**
  * Flag Override Panel
@@ -13,7 +13,7 @@ const STORAGE_KEY = 'savvagent_local_overrides';
  * which are applied at the evaluation level (before cache/API).
  */
 export function FlagOverridePanel() {
-  const { client, isReady } = useSavvagent();
+  const { client, isReady } = useOttoFlags();
   const [isOpen, setIsOpen] = createSignal(false);
   const [flags, setFlags] = createSignal<FlagDefinition[]>([]);
   const [overrides, setOverrides] = createSignal<Record<string, boolean>>({});
@@ -274,7 +274,7 @@ export function FlagOverridePanel() {
  * This subscribes to the client's override changes.
  */
 export function createLocalOverrides() {
-  const { client, isReady } = useSavvagent();
+  const { client, isReady } = useOttoFlags();
   const [overrides, setOverrides] = createSignal<Record<string, boolean>>({});
 
   createEffect(() => {

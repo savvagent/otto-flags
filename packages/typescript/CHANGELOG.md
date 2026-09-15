@@ -1,4 +1,4 @@
-# @savvagent/sdk
+# @otto-flags/sdk
 
 ## 1.1.0
 
@@ -16,4 +16,4 @@
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs

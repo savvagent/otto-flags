@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use savvagent::{EvaluationContext, SavvagentClient, SavvagentConfig};
+use otto_flags::{EvaluationContext, OttoFlagsClient, OttoFlagsConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -15,7 +15,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Clone)]
 struct AppState {
-    savvagent: Arc<SavvagentClient>,
+    otto_flags: Arc<OttoFlagsClient>,
 }
 
 #[derive(Deserialize)]
@@ -67,12 +67,12 @@ async fn main() {
         .init();
 
     // Get configuration from environment
-    let api_url = env::var("SAVVAGENT_API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let sdk_key = env::var("SAVVAGENT_SDK_KEY").unwrap_or_else(|_| "your-sdk-key".to_string());
+    let api_url = env::var("OTTO_FLAGS_API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let sdk_key = env::var("OTTO_FLAGS_SDK_KEY").unwrap_or_else(|_| "your-sdk-key".to_string());
     let port = env::var("PORT").unwrap_or_else(|_| "8083".to_string());
 
-    // Initialize Savvagent client
-    let config = SavvagentConfig::builder()
+    // Initialize Otto Flags client
+    let config = OttoFlagsConfig::builder()
         .api_url(&api_url)
         .sdk_key(&sdk_key)
         .environment("development")
@@ -80,12 +80,12 @@ async fn main() {
         .cache_ttl(60) // 1 minute
         .build();
 
-    let savvagent = SavvagentClient::new(config)
+    let otto_flags = OttoFlagsClient::new(config)
         .await
-        .expect("Failed to initialize Savvagent client");
+        .expect("Failed to initialize Otto Flags client");
 
     let state = AppState {
-        savvagent: Arc::new(savvagent),
+        otto_flags: Arc::new(otto_flags),
     };
 
     // Build application routes
@@ -102,7 +102,7 @@ async fn main() {
         .expect("Invalid address");
 
     tracing::info!("Server starting on {}", addr);
-    tracing::info!("Savvagent API URL: {}", api_url);
+    tracing::info!("Otto Flags API URL: {}", api_url);
 
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
@@ -128,7 +128,7 @@ async fn get_features(
 
     // Check multiple feature flags
     let new_ui = state
-        .savvagent
+        .otto_flags
         .is_enabled("new-ui", &ctx)
         .await
         .map_err(|e| {
@@ -141,7 +141,7 @@ async fn get_features(
         })?;
 
     let beta_features = state
-        .savvagent
+        .otto_flags
         .is_enabled("beta-features", &ctx)
         .await
         .map_err(|e| {
@@ -154,7 +154,7 @@ async fn get_features(
         })?;
 
     let advanced_analytics = state
-        .savvagent
+        .otto_flags
         .is_enabled("advanced-analytics", &ctx)
         .await
         .map_err(|e| {
@@ -189,7 +189,7 @@ async fn process_data(
         .build();
 
     let advanced_processing = state
-        .savvagent
+        .otto_flags
         .is_enabled("advanced-processing", &ctx)
         .await
         .map_err(|e| {

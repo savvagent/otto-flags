@@ -1,6 +1,6 @@
-# Savvagent Node.js Backend Example
+# Otto Flags Node.js Backend Example
 
-Example Node.js/Express backend demonstrating how to use the Savvagent SDK in a server environment.
+Example Node.js/Express backend demonstrating how to use the Otto Flags SDK in a server environment.
 
 ## Features
 
@@ -25,8 +25,8 @@ Example Node.js/Express backend demonstrating how to use the Savvagent SDK in a 
    Edit `.env`:
    ```bash
    PORT=3000
-   SAVVAGENT_API_URL=http://localhost:8080
-   SAVVAGENT_SDK_KEY=your-sdk-key-here
+   OTTO_FLAGS_API_URL=http://localhost:8080
+   OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the server:**
@@ -87,7 +87,7 @@ Uses the `advanced-processing` flag to determine processing method.
 ### Check Feature Flag
 
 ```typescript
-const isEnabled = await savvagent.isEnabled('new-feature', {
+const isEnabled = await ottoFlags.isEnabled('new-feature', {
   userId: 'user-123',
   attributes: {
     userAgent: req.headers['user-agent'],
@@ -99,7 +99,7 @@ const isEnabled = await savvagent.isEnabled('new-feature', {
 
 ```typescript
 app.get('/api/endpoint', async (req, res) => {
-  const useNewVersion = await savvagent.isEnabled('new-endpoint', {
+  const useNewVersion = await ottoFlags.isEnabled('new-endpoint', {
     userId: req.userId,
   });
 
@@ -115,14 +115,14 @@ app.get('/api/endpoint', async (req, res) => {
 
 ```typescript
 const [flag1, flag2, flag3] = await Promise.all([
-  savvagent.isEnabled('flag-1', { userId }),
-  savvagent.isEnabled('flag-2', { userId }),
-  savvagent.isEnabled('flag-3', { userId }),
+  ottoFlags.isEnabled('flag-1', { userId }),
+  ottoFlags.isEnabled('flag-2', { userId }),
+  ottoFlags.isEnabled('flag-3', { userId }),
 ]);
 ```
 
 ## Learn More
 
 - [Express Documentation](https://expressjs.com/)
-- [Savvagent SDK Documentation](../../packages/typescript/README.md)
+- [Otto Flags SDK Documentation](../../packages/typescript/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

@@ -5,7 +5,7 @@
 
 ## Summary
 
-Successfully integrated the auto-generated API types from OpenAPI spec into the `@savvagent/sdk` TypeScript package. The SDK now has full type safety for all API interactions while maintaining backward compatibility.
+Successfully integrated the auto-generated API types from OpenAPI spec into the `@otto-flags/sdk` TypeScript package. The SDK now has full type safety for all API interactions while maintaining backward compatibility.
 
 ## What Was Changed
 
@@ -87,7 +87,7 @@ export type {
 
 **Usage:**
 ```typescript
-import { FlagClient, ApiTypes } from '@savvagent/sdk';
+import { FlagClient, ApiTypes } from '@otto-flags/sdk';
 
 // Access any API type
 type FlagResponse = ApiTypes['schemas']['FlagEvaluationResponse'];
@@ -163,7 +163,7 @@ console.log(result.timestamp);  // 1699564800
 Advanced users can import API types directly:
 
 ```typescript
-import { FlagClient, ApiTypes } from '@savvagent/sdk';
+import { FlagClient, ApiTypes } from '@otto-flags/sdk';
 
 // Access any schema from the API
 type FlagModel = ApiTypes['schemas']['FeatureFlag'];
@@ -178,7 +178,7 @@ function isFlagResponse(data: unknown): data is ApiTypes['schemas']['FlagEvaluat
 
 ## Files Modified
 
-### SDK Repository (`savvagent-sdks`)
+### SDK Repository (`otto-flags`)
 
 **Modified:**
 - `packages/typescript/src/client.ts` - Added type-safe API calls

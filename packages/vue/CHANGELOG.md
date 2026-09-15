@@ -1,4 +1,4 @@
-# @savvagent/vue
+# @otto-flags/vue
 
 ## 1.1.0
 
@@ -9,7 +9,7 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
+  - @otto-flags/sdk@1.1.0
 
 ## 1.0.1
 
@@ -17,15 +17,15 @@
 
 - Updates for new API parameters
 - Updated dependencies
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 1.0.0
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.0.0
+  - @otto-flags/sdk@1.0.0

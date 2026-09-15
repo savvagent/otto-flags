@@ -1,6 +1,6 @@
-# Savvagent Android SDK
+# Otto Flags Android SDK
 
-The official Android SDK for [Savvagent](https://flags.savvagent.com) - the AI-powered feature flag platform that prevents production incidents.
+The official Android SDK for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
 
 ## Features
 
@@ -26,7 +26,7 @@ Add to your `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.savvagent:android-sdk:0.1.0")
+    implementation("com.savvagent.ottoflags:android-sdk:0.1.0")
 }
 ```
 
@@ -36,7 +36,7 @@ Add to your `build.gradle`:
 
 ```groovy
 dependencies {
-    implementation 'com.savvagent:android-sdk:0.1.0'
+    implementation 'com.savvagent.ottoflags:android-sdk:0.1.0'
 }
 ```
 
@@ -44,7 +44,7 @@ dependencies {
 
 ```xml
 <dependency>
-    <groupId>com.savvagent</groupId>
+    <groupId>com.savvagent.ottoflags</groupId>
     <artifactId>android-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
@@ -55,18 +55,18 @@ dependencies {
 ### Basic Usage
 
 ```kotlin
-import com.savvagent.sdk.*
+import com.savvagent.ottoflags.sdk.*
 import kotlinx.coroutines.launch
 
 // Configure the SDK
-val config = SavvagentConfig(
-    apiUrl = "https://flags-beta.savvagent.com",
+val config = OttoFlagsConfig(
+    apiUrl = "https://flags-beta.otto-flags.dev",
     sdkKey = "your-sdk-key",
     environment = "production"
 )
 
 // Initialize the client
-val client = SavvagentClient(config, context)
+val client = OttoFlagsClient(config, context)
 
 // Create user context
 val userContext = UserContext(
@@ -97,7 +97,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-fun FeatureScreen(client: SavvagentClient) {
+fun FeatureScreen(client: OttoFlagsClient) {
     val flags by client.flagUpdates.collectAsStateWithLifecycle()
     val isNewUIEnabled = flags["new-ui"] ?: false
 
@@ -109,7 +109,7 @@ fun FeatureScreen(client: SavvagentClient) {
 }
 
 // ViewModel integration
-class FeatureViewModel(private val client: SavvagentClient) : ViewModel() {
+class FeatureViewModel(private val client: OttoFlagsClient) : ViewModel() {
     private val userContext = UserContext(userId = "current-user")
 
     val isFeatureEnabled = MutableLiveData<Boolean>()
@@ -129,16 +129,16 @@ class FeatureViewModel(private val client: SavvagentClient) : ViewModel() {
 
 ```kotlin
 class MainActivity : AppCompatActivity() {
-    private lateinit var client: SavvagentClient
+    private lateinit var client: OttoFlagsClient
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val config = SavvagentConfig(
+        val config = OttoFlagsConfig(
             sdkKey = "your-sdk-key",
             environment = "production"
         )
-        client = SavvagentClient(config, this)
+        client = OttoFlagsClient(config, this)
 
         loadFeatureFlags()
     }
@@ -170,8 +170,8 @@ class MainActivity : AppCompatActivity() {
 ### Configuration Options
 
 ```kotlin
-val config = SavvagentConfig(
-    apiUrl = "https://flags-beta.savvagent.com",
+val config = OttoFlagsConfig(
+    apiUrl = "https://flags-beta.otto-flags.dev",
     sdkKey = "your-sdk-key",
     environment = "production",
     pollingInterval = 60_000L,     // Poll every 60 seconds
@@ -268,7 +268,7 @@ val context = UserContext(
 Enable WebSocket for real-time flag updates:
 
 ```kotlin
-val config = SavvagentConfig(
+val config = OttoFlagsConfig(
     sdkKey = "your-sdk-key",
     enableWebSocket = true  // Flags update in real-time
 )
@@ -279,7 +279,7 @@ val config = SavvagentConfig(
 The SDK automatically caches flag evaluations to improve performance. Configure polling interval:
 
 ```kotlin
-val config = SavvagentConfig(
+val config = OttoFlagsConfig(
     sdkKey = "your-sdk-key",
     pollingInterval = 30_000L  // Poll every 30 seconds
 )
@@ -312,8 +312,8 @@ result
     }
     .onFailure { error ->
         when (error) {
-            is SavvagentException -> {
-                // Handle Savvagent-specific error
+            is OttoFlagsException -> {
+                // Handle Otto Flags-specific error
             }
             else -> {
                 // Handle other errors
@@ -327,9 +327,9 @@ result
 If you're using ProGuard or R8, add these rules to your `proguard-rules.pro`:
 
 ```proguard
-# Savvagent SDK
--keep class com.savvagent.sdk.** { *; }
--keepclassmembers class com.savvagent.sdk.** { *; }
+# Otto Flags SDK
+-keep class com.savvagent.ottoflags.sdk.** { *; }
+-keepclassmembers class com.savvagent.ottoflags.sdk.** { *; }
 
 # OkHttp
 -dontwarn okhttp3.**
@@ -355,15 +355,15 @@ See the [Android example app](../../examples/android-app) for a complete impleme
 
 ## Documentation
 
-- [API Reference](https://flags-docs.savvagent.com/android-sdk)
-- [Integration Guide](https://flags-docs.savvagent.com/guides/android)
-- [Migration Guide](https://flags-docs.savvagent.com/migration/android)
+- [API Reference](https://flags-docs.otto-flags.dev/android-sdk)
+- [Integration Guide](https://flags-docs.otto-flags.dev/guides/android)
+- [Migration Guide](https://flags-docs.otto-flags.dev/migration/android)
 
 ## Support
 
-- [GitHub Issues](https://github.com/savvagent/savvagent-sdks/issues)
-- [Documentation](https://flags-docs.savvagent.com)
-- [Email](mailto:support@savvagent.com)
+- [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
+- [Documentation](https://flags-docs.otto-flags.dev)
+- [Email](mailto:support@otto-flags.dev)
 
 ## License
 

@@ -6,16 +6,16 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/savvagent/savvagent-go-server-sdk/pkg/savvagent"
+	"github.com/savvagent/otto-flags-go-server-sdk/pkg/ottoflags"
 )
 
 func main() {
-	// Initialize Savvagent client
-	client := savvagent.NewClient(savvagent.Config{
-		APIURL:      getEnv("SAVVAGENT_API_URL", "http://localhost:8080"),
-		SDKKey:      getEnv("SAVVAGENT_SDK_KEY", "your-sdk-key"),
+	// Initialize Otto Flags client
+	client := ottoflags.NewClient(ottoflags.Config{
+		APIURL:      getEnv("OTTO_FLAGS_API_URL", "http://localhost:8080"),
+		SDKKey:      getEnv("OTTO_FLAGS_SDK_KEY", "your-sdk-key"),
 		Environment: "development",
-		Cache: savvagent.CacheConfig{
+		Cache: ottoflags.CacheConfig{
 			Enabled: true,
 			TTL:     60, // 1 minute
 		},
@@ -42,7 +42,7 @@ func main() {
 			return
 		}
 
-		ctx := savvagent.EvaluationContext{
+		ctx := ottoflags.EvaluationContext{
 			UserID:     userId,
 			Attributes: make(map[string]interface{}),
 		}
@@ -88,7 +88,7 @@ func main() {
 			userId = "anonymous"
 		}
 
-		ctx := savvagent.EvaluationContext{
+		ctx := ottoflags.EvaluationContext{
 			UserID: userId,
 			Attributes: map[string]interface{}{
 				"endpoint": "/api/data",
@@ -118,7 +118,7 @@ func main() {
 	// Start server
 	port := getEnv("PORT", "8082")
 	log.Printf("Server starting on port %s", port)
-	log.Printf("Savvagent API URL: %s", client.GetConfig().APIURL)
+	log.Printf("Otto Flags API URL: %s", client.GetConfig().APIURL)
 
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

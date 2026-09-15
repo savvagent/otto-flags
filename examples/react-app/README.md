@@ -1,12 +1,12 @@
-# Savvagent React Example
+# Otto Flags React Example
 
-Example React application demonstrating how to use the Savvagent React SDK with hooks.
+Example React application demonstrating how to use the Otto Flags React SDK with hooks.
 
 ## Features
 
 - React 18 with Vite
 - TypeScript
-- Savvagent React hooks (`useFeatureFlag`, `useSavvagent`)
+- Otto Flags React hooks (`useFeatureFlag`, `useOttoFlags`)
 - Real-time feature flag updates
 - Hot module replacement
 
@@ -24,8 +24,8 @@ Example React application demonstrating how to use the Savvagent React SDK with 
 
    Edit `.env.local`:
    ```bash
-   VITE_SAVVAGENT_API_URL=http://localhost:8080
-   VITE_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   VITE_OTTO_FLAGS_API_URL=http://localhost:8080
+   VITE_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -40,7 +40,7 @@ Example React application demonstrating how to use the Savvagent React SDK with 
 ### Using the React Hook
 
 ```typescript
-import { useFeatureFlag } from '@savvagent/react';
+import { useFeatureFlag } from '@otto-flags/react';
 
 function MyComponent() {
   const { isEnabled, loading } = useFeatureFlag('new-feature', {
@@ -60,16 +60,16 @@ function MyComponent() {
 ### Using the Provider
 
 ```typescript
-import { SavvagentProvider } from '@savvagent/react';
+import { OttoFlagsProvider } from '@otto-flags/react';
 
 function App() {
   return (
-    <SavvagentProvider
-      apiUrl={import.meta.env.VITE_SAVVAGENT_API_URL}
-      sdkKey={import.meta.env.VITE_SAVVAGENT_SDK_KEY}
+    <OttoFlagsProvider
+      apiUrl={import.meta.env.VITE_OTTO_FLAGS_API_URL}
+      sdkKey={import.meta.env.VITE_OTTO_FLAGS_SDK_KEY}
     >
       <MyApp />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 ```
@@ -77,5 +77,5 @@ function App() {
 ## Learn More
 
 - [React Documentation](https://react.dev)
-- [Savvagent React SDK Documentation](../../packages/react/README.md)
+- [Otto Flags React SDK Documentation](../../packages/react/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

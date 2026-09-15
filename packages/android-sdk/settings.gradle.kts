@@ -14,4 +14,4 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "savvagent-android-sdk"
+rootProject.name = "otto-flags-android-sdk"

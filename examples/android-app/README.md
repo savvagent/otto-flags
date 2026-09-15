@@ -1,6 +1,6 @@
-# Savvagent Android Example App
+# Otto Flags Android Example App
 
-This is an example Android application demonstrating how to integrate and use the Savvagent Android SDK.
+This is an example Android application demonstrating how to integrate and use the Otto Flags Android SDK.
 
 ## Features
 
@@ -28,8 +28,8 @@ This is an example Android application demonstrating how to integrate and use th
 
 2. Update the SDK key in `FeatureFlagsViewModel.kt`:
    ```kotlin
-   val config = SavvagentConfig(
-       apiUrl = "https://flags-beta.savvagent.com",
+   val config = OttoFlagsConfig(
+       apiUrl = "https://flags-beta.otto-flags.dev",
        sdkKey = "your-sdk-key",  // Replace with your SDK key
        environment = "production"
    )
@@ -43,7 +43,7 @@ This is an example Android application demonstrating how to integrate and use th
 ## Project Structure
 
 ```
-app/src/main/java/com/savvagent/example/
+app/src/main/java/com/ottoFlags/ottoflags/example/
 ├── MainActivity.kt                 # Main activity with Compose UI
 ├── FeatureFlagsViewModel.kt        # ViewModel managing SDK
 └── ui/theme/
@@ -54,7 +54,7 @@ app/src/main/java/com/savvagent/example/
 
 ### FeatureFlagsViewModel
 
-The `FeatureFlagsViewModel` manages the Savvagent SDK client and provides feature flag state:
+The `FeatureFlagsViewModel` manages the Otto Flags SDK client and provides feature flag state:
 
 ```kotlin
 class FeatureFlagsViewModel : AndroidViewModel {
@@ -135,7 +135,7 @@ The app follows modern Android development best practices:
 ## Learn More
 
 - [Android SDK Documentation](../../packages/android-sdk/README.md)
-- [Savvagent Documentation](https://flags-docs.savvagent.com)
+- [Otto Flags Documentation](https://flags-docs.otto-flags.dev)
 - [Jetpack Compose Guide](https://developer.android.com/jetpack/compose)
 
 ## License

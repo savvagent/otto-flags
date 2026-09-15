@@ -1,6 +1,6 @@
-//! # Savvagent Rust Server SDK
+//! # Otto Flags Rust Server SDK
 //!
-//! Official Rust Server SDK for Savvagent - AI-powered feature flags with automatic error detection.
+//! Official Rust Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 //!
 //! ## Features
 //!
@@ -14,7 +14,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use savvagent::{Config, Context, FlagClient};
+//! use otto_flags::{Config, Context, FlagClient};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,5 +45,5 @@ mod cache;
 mod client;
 mod types;
 
-pub use client::{FlagClient, SavvagentError};
+pub use client::{FlagClient, OttoFlagsError};
 pub use types::{Config, Context, EvaluationResult, Metadata};

@@ -1,6 +1,6 @@
 # Migration Guide
 
-This guide helps you migrate from using the SDKs in the main `savvagent-flags` repository to the new `savvagent-sdks` repository.
+This guide helps you migrate from using the SDKs in the main `savvagent-flags` repository to the new `otto-flags` repository.
 
 ## Overview
 
@@ -16,9 +16,9 @@ The SDKs, MCP servers, and example applications have been moved to a dedicated r
 
 | Old Package Name | New Package Name |
 |-----------------|------------------|
-| `@savvagent/typescript` | `@savvagent/sdk` |
-| `@savvagent/mcp-sdk` | `@savvagent/mcp-sdk` (unchanged) |
-| `@savvagent/mcp-sentry` | `@savvagent/mcp-sentry` (unchanged) |
+| `@otto-flags/typescript` | `@otto-flags/sdk` |
+| `@otto-flags/mcp-sdk` | `@otto-flags/mcp-sdk` (unchanged) |
+| `@otto-flags/mcp-sentry` | `@otto-flags/mcp-sentry` (unchanged) |
 
 ## For Application Developers
 
@@ -28,7 +28,7 @@ The SDKs, MCP servers, and example applications have been moved to a dedicated r
 ```json
 {
   "dependencies": {
-    "@savvagent/typescript": "file:../savvagent-flags/sdks/typescript"
+    "@otto-flags/typescript": "file:../savvagent-flags/sdks/typescript"
   }
 }
 ```
@@ -37,33 +37,33 @@ The SDKs, MCP servers, and example applications have been moved to a dedicated r
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "^0.1.0"
+    "@otto-flags/sdk": "^0.1.0"
   }
 }
 ```
 
 ### Step 2: Update imports
 
-The package name has changed from `@savvagent/typescript` to `@savvagent/sdk`:
+The package name has changed from `@otto-flags/typescript` to `@otto-flags/sdk`:
 
 **Before:**
 ```typescript
-import { SavvagentClient } from '@savvagent/typescript';
+import { OttoFlagsClient } from '@otto-flags/typescript';
 ```
 
 **After:**
 ```typescript
-import { SavvagentClient } from '@savvagent/sdk';
+import { OttoFlagsClient } from '@otto-flags/sdk';
 ```
 
 ### Step 3: Install dependencies
 
 ```bash
 # Remove old package
-pnpm remove @savvagent/typescript
+pnpm remove @otto-flags/typescript
 
 # Install new package
-pnpm add @savvagent/sdk
+pnpm add @otto-flags/sdk
 ```
 
 ## For SDK Contributors
@@ -74,12 +74,12 @@ pnpm add @savvagent/sdk
 ```bash
 cd ~/dev
 git clone https://github.com/yourusername/savvagent-flags.git
-git clone https://github.com/yourusername/savvagent-sdks.git
+git clone https://github.com/yourusername/otto-flags.git
 ```
 
 2. **Install dependencies:**
 ```bash
-cd savvagent-sdks
+cd otto-flags
 pnpm install
 ```
 
@@ -96,7 +96,7 @@ To test SDK changes with the platform, use pnpm's `file:` protocol:
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "file:../../savvagent-sdks/packages/typescript"
+    "@otto-flags/sdk": "file:../../otto-flags/packages/typescript"
   }
 }
 ```
@@ -146,18 +146,18 @@ When the PR is merged, a GitHub Action will:
 MCP server packages remain unchanged:
 
 ```bash
-pnpm add @savvagent/mcp-sdk
-pnpm add @savvagent/mcp-sentry
+pnpm add @otto-flags/mcp-sdk
+pnpm add @otto-flags/mcp-sentry
 ```
 
 ## Repository Structure
 
 ```
-savvagent-sdks/
+otto-flags/
 ├── packages/
-│   ├── typescript/       # @savvagent/sdk
-│   ├── mcp-sdk/          # @savvagent/mcp-sdk
-│   └── mcp-sentry/       # @savvagent/mcp-sentry
+│   ├── typescript/       # @otto-flags/sdk
+│   ├── mcp-sdk/          # @otto-flags/mcp-sdk
+│   └── mcp-sentry/       # @otto-flags/mcp-sentry
 ├── examples/
 │   ├── nextjs-app/       # Next.js example
 │   ├── sveltekit-app/    # SvelteKit example
@@ -171,21 +171,21 @@ savvagent-sdks/
 
 ### Version 0.1.0 → 0.2.0
 
-- Package renamed from `@savvagent/typescript` to `@savvagent/sdk`
+- Package renamed from `@otto-flags/typescript` to `@otto-flags/sdk`
 - No API changes; only import path changed
 
 ## Troubleshooting
 
-### "Cannot find module '@savvagent/typescript'"
+### "Cannot find module '@otto-flags/typescript'"
 
-You're still importing the old package name. Update to `@savvagent/sdk`:
+You're still importing the old package name. Update to `@otto-flags/sdk`:
 
 ```typescript
 // Old
-import { SavvagentClient } from '@savvagent/typescript';
+import { OttoFlagsClient } from '@otto-flags/typescript';
 
 // New
-import { SavvagentClient } from '@savvagent/sdk';
+import { OttoFlagsClient } from '@otto-flags/sdk';
 ```
 
 ### "Module not found" after migration
@@ -204,7 +204,7 @@ Ensure you're using the `file:` protocol with the correct relative path:
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "file:../../savvagent-sdks/packages/typescript"
+    "@otto-flags/sdk": "file:../../otto-flags/packages/typescript"
   }
 }
 ```
@@ -218,6 +218,6 @@ Then run `pnpm install` to create the symlink.
 
 ## Support
 
-- GitHub Issues: https://github.com/savvagent/savvagent-sdks/issues
-- Documentation: https://github.com/savvagent/savvagent-sdks/tree/main/docs
-- Examples: https://github.com/savvagent/savvagent-sdks/tree/main/examples
+- GitHub Issues: https://github.com/savvagent/otto-flags/issues
+- Documentation: https://github.com/savvagent/otto-flags/tree/main/docs
+- Examples: https://github.com/savvagent/otto-flags/tree/main/examples

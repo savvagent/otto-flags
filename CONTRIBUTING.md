@@ -1,6 +1,6 @@
-# Contributing to Savvagent SDKs
+# Contributing to Otto Flags SDKs
 
-Thank you for your interest in contributing to Savvagent SDKs! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to Otto Flags SDKs! This document provides guidelines and instructions for contributing.
 
 ## Code of Conduct
 
@@ -20,13 +20,13 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 2. **Clone your fork:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/savvagent-sdks.git
-   cd savvagent-sdks
+   git clone https://github.com/YOUR_USERNAME/otto-flags.git
+   cd otto-flags
    ```
 
 3. **Add upstream remote:**
    ```bash
-   git remote add upstream https://github.com/yourusername/savvagent-sdks.git
+   git remote add upstream https://github.com/yourusername/otto-flags.git
    ```
 
 4. **Install dependencies:**
@@ -72,7 +72,7 @@ Branch naming conventions:
 pnpm test
 
 # Run tests for specific package
-pnpm --filter @savvagent/sdk test
+pnpm --filter @otto-flags/sdk test
 
 # Run linter
 pnpm lint
@@ -221,10 +221,10 @@ Run `pnpm format` to auto-format.
 - Follow Arrange-Act-Assert pattern
 
 ```typescript
-describe('SavvagentClient', () => {
+describe('OttoFlagsClient', () => {
   it('should evaluate flag correctly', async () => {
     // Arrange
-    const client = new SavvagentClient({ ... });
+    const client = new OttoFlagsClient({ ... });
 
     // Act
     const result = await client.isEnabled('test-flag', { userId: '123' });
@@ -281,20 +281,20 @@ Update documentation in `docs/` for:
 
 ## Package-Specific Guidelines
 
-### @savvagent/sdk
+### @otto-flags/sdk
 
 - Keep bundle size small
 - Ensure browser compatibility
 - Cache aggressively for performance
 - Handle network errors gracefully
 
-### @savvagent/mcp-sdk
+### @otto-flags/mcp-sdk
 
 - Follow MCP protocol standards
 - Support extensibility
 - Document integration patterns
 
-### @savvagent/mcp-sentry
+### @otto-flags/mcp-sentry
 
 - Handle Sentry API changes
 - Provide clear error messages

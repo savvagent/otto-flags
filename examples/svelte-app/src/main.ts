@@ -1,10 +1,10 @@
 import './app.css';
-import { initSavvagent } from '@savvagent/svelte';
-import type { FlagClientConfig, DefaultFlagContext } from '@savvagent/svelte';
+import { initOttoFlags } from '@otto-flags/svelte';
+import type { FlagClientConfig, DefaultFlagContext } from '@otto-flags/svelte';
 import App from './App.svelte';
 
 // Storage key for local overrides (must match FlagOverridePanel)
-const OVERRIDE_STORAGE_KEY = 'savvagent_local_overrides';
+const OVERRIDE_STORAGE_KEY = 'otto_flags_local_overrides';
 
 /**
  * Load overrides from localStorage for initial SDK configuration.
@@ -24,9 +24,9 @@ function loadInitialOverrides(): Record<string, boolean> {
 // Per SDK Developer Guide: FlagClientConfig with proper authentication
 const config: FlagClientConfig = {
   // SDK API key (starts with sdk_) - safe to embed in client-side code
-  apiKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY || 'sdk_your_key_here',
-  // Base URL for the Savvagent API
-  baseUrl: import.meta.env.VITE_SAVVAGENT_API_URL || 'http://localhost:8080',
+  apiKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY || 'sdk_your_key_here',
+  // Base URL for the Otto Flags API
+  baseUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL || 'http://localhost:8080',
   // Application ID for application-scoped flags
   applicationId: 'f8209ef5-a661-4f46-8b84-4c855a97d5ef',
   // Enable real-time updates via SSE (default: true)
@@ -47,7 +47,7 @@ const config: FlagClientConfig = {
     if (error instanceof Error && error.name === 'AbortError') {
       return;
     }
-    console.error('[App] Savvagent error:', error);
+    console.error('[App] Otto Flags error:', error);
   },
 };
 
@@ -70,8 +70,8 @@ const defaultContext: DefaultFlagContext = {
   },
 };
 
-// Initialize the Savvagent client before mounting the app
-const client = initSavvagent({ config, defaultContext });
+// Initialize the Otto Flags client before mounting the app
+const client = initOttoFlags({ config, defaultContext });
 
 // Initialize userId from defaultContext
 if (defaultContext.userId) {

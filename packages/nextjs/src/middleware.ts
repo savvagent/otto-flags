@@ -3,12 +3,12 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { FlagClient, FlagClientConfig, FlagContext } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 
 let middlewareClient: FlagClient | null = null;
 
 /**
- * Initialize the Savvagent client for middleware.
+ * Initialize the Otto Flags client for middleware.
  * Call this at the top of your middleware.ts file.
  *
  * @param config - Client configuration
@@ -16,10 +16,10 @@ let middlewareClient: FlagClient | null = null;
  * @example
  * ```ts
  * // middleware.ts
- * import { initMiddlewareClient, createMiddleware } from '@savvagent/nextjs/middleware';
+ * import { initMiddlewareClient, createMiddleware } from '@otto-flags/nextjs/middleware';
  *
  * initMiddlewareClient({
- *   apiKey: process.env.SAVVAGENT_API_KEY!,
+ *   apiKey: process.env.OTTO_FLAGS_API_KEY!,
  * });
  *
  * export default createMiddleware({
@@ -61,7 +61,7 @@ export function getRequestContext(
 ): FlagContext {
   const context: FlagContext = {
     user_id: request.cookies.get('user_id')?.value,
-    anonymous_id: request.cookies.get('savvagent_anonymous_id')?.value,
+    anonymous_id: request.cookies.get('otto_flags_anonymous_id')?.value,
     session_id: request.cookies.get('session_id')?.value,
     language: request.headers.get('accept-language')?.split(',')[0],
     ...overrides,
@@ -80,7 +80,7 @@ export function getRequestContext(
  *
  * @example
  * ```ts
- * import { isEnabledInMiddleware } from '@savvagent/nextjs/middleware';
+ * import { isEnabledInMiddleware } from '@otto-flags/nextjs/middleware';
  *
  * export async function middleware(request: NextRequest) {
  *   const useBeta = await isEnabledInMiddleware(request, 'beta-access');
@@ -102,7 +102,7 @@ export async function isEnabledInMiddleware(
 }
 
 /**
- * Configuration for the Savvagent middleware.
+ * Configuration for the Otto Flags middleware.
  */
 export interface MiddlewareConfig {
   /**
@@ -121,7 +121,7 @@ export interface MiddlewareConfig {
 }
 
 /**
- * Create a Next.js middleware with Savvagent integration.
+ * Create a Next.js middleware with Otto Flags integration.
  *
  * @param config - Middleware configuration
  * @returns Next.js middleware function
@@ -129,10 +129,10 @@ export interface MiddlewareConfig {
  * @example
  * ```ts
  * // middleware.ts
- * import { initMiddlewareClient, createMiddleware } from '@savvagent/nextjs/middleware';
+ * import { initMiddlewareClient, createMiddleware } from '@otto-flags/nextjs/middleware';
  *
  * initMiddlewareClient({
- *   apiKey: process.env.SAVVAGENT_API_KEY!,
+ *   apiKey: process.env.OTTO_FLAGS_API_KEY!,
  * });
  *
  * export default createMiddleware({
@@ -177,7 +177,7 @@ export function createMiddleware(config?: MiddlewareConfig) {
  *
  * @example
  * ```ts
- * import { redirectIfEnabled } from '@savvagent/nextjs/middleware';
+ * import { redirectIfEnabled } from '@otto-flags/nextjs/middleware';
  *
  * export async function middleware(request: NextRequest) {
  *   // Redirect to new onboarding if flag is enabled
@@ -216,7 +216,7 @@ export async function redirectIfEnabled(
  *
  * @example
  * ```ts
- * import { rewriteIfEnabled } from '@savvagent/nextjs/middleware';
+ * import { rewriteIfEnabled } from '@otto-flags/nextjs/middleware';
  *
  * export async function middleware(request: NextRequest) {
  *   // Serve beta version if flag is enabled

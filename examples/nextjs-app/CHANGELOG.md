@@ -5,20 +5,20 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
-  - @savvagent/nextjs@1.1.0
+  - @otto-flags/sdk@1.1.0
+  - @otto-flags/nextjs@1.1.0
 
 ## 0.0.2
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/nextjs@1.0.1
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/nextjs@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 0.0.1
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.0.0
+  - @otto-flags/sdk@1.0.0

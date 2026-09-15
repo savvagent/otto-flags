@@ -1,5 +1,5 @@
 import { PagerDutyMCPServer, PagerDutyConfig } from '../src/pagerduty-server';
-import { JsonRpcRequest } from '@savvagent/mcp-sdk';
+import { JsonRpcRequest } from '@otto-flags/mcp-sdk';
 
 // Mock axios
 jest.mock('axios', () => ({

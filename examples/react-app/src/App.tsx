@@ -1,16 +1,16 @@
-import { SavvagentProvider, useFlags, useUser, useTrackError, useSavvagent } from '@savvagent/react';
-import type { FlagClientConfig, DefaultFlagContext } from '@savvagent/react';
+import { OttoFlagsProvider, useFlags, useUser, useTrackError, useOttoFlags } from '@otto-flags/react';
+import type { FlagClientConfig, DefaultFlagContext } from '@otto-flags/react';
 import { FlagOverridePanel } from './FlagOverridePanel';
 
 /**
  * Feature Demo Component
- * Demonstrates best practices for using Savvagent React SDK
+ * Demonstrates best practices for using Otto Flags React SDK
  *
  * Uses the useFlags hook for optimal performance - evaluates multiple flags
  * with a single state update, preventing unnecessary re-renders.
  */
 function FeatureDemo() {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
 
   // Per SDK Developer Guide: Use useFlags for multiple flags in the same component
   // This is more performant than multiple useFlag calls as it:
@@ -65,7 +65,7 @@ function FeatureDemo() {
 
   return (
     <div className="container">
-      <h1>Savvagent React Example</h1>
+      <h1>Otto Flags React Example</h1>
       <p className="subtitle">SDK Developer Guide Best Practices Demo</p>
 
       {loading ? (
@@ -166,7 +166,7 @@ function FeatureDemo() {
 }
 
 // Storage key for local overrides (must match FlagOverridePanel)
-const OVERRIDE_STORAGE_KEY = 'savvagent_local_overrides';
+const OVERRIDE_STORAGE_KEY = 'otto_flags_local_overrides';
 
 /**
  * Load overrides from localStorage for initial SDK configuration.
@@ -194,9 +194,9 @@ function App() {
   // Per SDK Developer Guide: FlagClientConfig with proper authentication
   const config: FlagClientConfig = {
     // SDK API key (starts with sdk_) - safe to embed in client-side code
-    apiKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY || 'sdk_your_key_here',
-    // Base URL for the Savvagent API
-    baseUrl: import.meta.env.VITE_SAVVAGENT_API_URL || 'http://localhost:8080',
+    apiKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY || 'sdk_your_key_here',
+    // Base URL for the Otto Flags API
+    baseUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL || 'http://localhost:8080',
     // Application ID for application-scoped flags
     applicationId: 'f8209ef5-a661-4f46-8b84-4c855a97d5ef',
     // Enable real-time updates via SSE (default: true)
@@ -213,7 +213,7 @@ function App() {
     },
     // Custom error handler
     onError: (error) => {
-      console.error('[App] Savvagent error:', error);
+      console.error('[App] Otto Flags error:', error);
     },
   };
 
@@ -239,10 +239,10 @@ function App() {
   };
 
   return (
-    <SavvagentProvider config={config} defaultContext={defaultContext} initialOverrides={initialOverrides}>
+    <OttoFlagsProvider config={config} defaultContext={defaultContext} initialOverrides={initialOverrides}>
       <FeatureDemo />
       <FlagOverridePanel />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 

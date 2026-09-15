@@ -1,13 +1,13 @@
-# Savvagent Rust Server Example
+# Otto Flags Rust Server Example
 
-Example Rust application demonstrating how to use the Savvagent Rust Server SDK with Axum framework.
+Example Rust application demonstrating how to use the Otto Flags Rust Server SDK with Axum framework.
 
 ## Features
 
 - Rust 1.70+
 - Axum web framework
 - Tokio async runtime
-- Savvagent Rust Server SDK
+- Otto Flags Rust Server SDK
 - RESTful API endpoints
 - Feature-gated functionality
 - Thread-safe concurrent access
@@ -22,8 +22,8 @@ Example Rust application demonstrating how to use the Savvagent Rust Server SDK 
 
 1. **Configure environment variables:**
    ```bash
-   export SAVVAGENT_API_URL=http://localhost:8080
-   export SAVVAGENT_SDK_KEY=your-sdk-key-here
+   export OTTO_FLAGS_API_URL=http://localhost:8080
+   export OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    export PORT=8083
    ```
 
@@ -92,13 +92,13 @@ Uses the `advanced-processing` flag to determine processing method.
 
 ```rust
 use axum::{Router, Json, extract::Query};
-use savvagent::{SavvagentClient, EvaluationContext};
+use otto_flags::{OttoFlagsClient, EvaluationContext};
 
 #[tokio::main]
 async fn main() {
-    let client = SavvagentClient::new(
-        std::env::var("SAVVAGENT_API_URL").unwrap(),
-        std::env::var("SAVVAGENT_SDK_KEY").unwrap(),
+    let client = OttoFlagsClient::new(
+        std::env::var("OTTO_FLAGS_API_URL").unwrap(),
+        std::env::var("OTTO_FLAGS_SDK_KEY").unwrap(),
     ).await.unwrap();
 
     let app = Router::new()
@@ -112,7 +112,7 @@ async fn main() {
 }
 
 async fn get_features(
-    State(client): State<SavvagentClient>,
+    State(client): State<OttoFlagsClient>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let user_id = params.get("userId").ok_or(StatusCode::BAD_REQUEST)?;
@@ -140,5 +140,5 @@ async fn get_features(
 - [Rust Documentation](https://www.rust-lang.org/)
 - [Axum Framework](https://github.com/tokio-rs/axum)
 - [Tokio Runtime](https://tokio.rs/)
-- [Savvagent Rust SDK Documentation](../../packages/rust-server/README.md)
+- [Otto Flags Rust SDK Documentation](../../packages/rust-server/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

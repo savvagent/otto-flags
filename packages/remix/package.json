@@ -1,8 +1,8 @@
 {
-  "name": "@savvagent/remix",
+  "name": "@otto-flags/remix",
   "version": "1.1.0",
-  "description": "Remix SDK for Savvagent feature flags",
-  "author": "Savvagent",
+  "description": "Remix SDK for Otto Flags feature flags",
+  "author": "Otto Flags",
   "license": "MIT",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -30,8 +30,8 @@
     "react": ">=18.0.0"
   },
   "dependencies": {
-    "@savvagent/react": "workspace:*",
-    "@savvagent/sdk": "workspace:*"
+    "@otto-flags/react": "workspace:*",
+    "@otto-flags/sdk": "workspace:*"
   },
   "devDependencies": {
     "@remix-run/node": "^2.17.2",
@@ -48,7 +48,7 @@
     "typescript": "^5.9.3"
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "feature-flags",
     "remix",
     "loaders",
@@ -57,13 +57,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/remix"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/remix#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/remix#readme",
   "publishConfig": {
     "access": "public"
   }

@@ -1,5 +1,5 @@
 /**
- * Comprehensive unit tests for @savvagent/solid
+ * Comprehensive unit tests for @otto-flags/solid
  * Tests all exported primitives, SolidJS reactive patterns, provider/context patterns,
  * and edge cases/error handling
  */
@@ -8,8 +8,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@solidjs/testing-library';
 import { createSignal as _createSignal } from 'solid-js';
 import {
-  SavvagentProvider,
-  useSavvagent,
+  OttoFlagsProvider,
+  useOttoFlags,
   createFlag,
   createFlagValue,
   createFlags,
@@ -19,7 +19,7 @@ import {
   createTrackError,
   trackError,
 } from './index';
-import type { FlagClientConfig, FlagEvaluationResult, FlagContext } from '@savvagent/sdk';
+import type { FlagClientConfig, FlagEvaluationResult, FlagContext } from '@otto-flags/sdk';
 
 // Create a mock client instance that we can spy on
 const createMockClient = () => {
@@ -58,7 +58,7 @@ const createMockClient = () => {
 // Mock module
 const mockClientInstance = createMockClient();
 
-vi.mock('@savvagent/sdk', () => {
+vi.mock('@otto-flags/sdk', () => {
   return {
     FlagClient: class FlagClient {
       constructor(config: FlagClientConfig) {
@@ -71,7 +71,7 @@ vi.mock('@savvagent/sdk', () => {
   };
 });
 
-describe('Savvagent Solid SDK', () => {
+describe('Otto Flags Solid SDK', () => {
   beforeEach(() => {
     // Reset mock for each test - need to create new instance AND reset the module
     const newMock = createMockClient();
@@ -83,12 +83,12 @@ describe('Savvagent Solid SDK', () => {
     vi.clearAllMocks();
   });
 
-  describe('SavvagentProvider', () => {
+  describe('OttoFlagsProvider', () => {
     it('should render children', () => {
       const TestComponent = () => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <div>Test Content</div>
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       );
 
       render(() => <TestComponent />);
@@ -102,16 +102,16 @@ describe('Savvagent Solid SDK', () => {
       // Wrap in try-catch since provider constructor throws during render
       try {
         render(() => (
-          <SavvagentProvider config={{ apiKey: 'test-key', onError, _shouldThrow: true } as any}>
+          <OttoFlagsProvider config={{ apiKey: 'test-key', onError, _shouldThrow: true } as any}>
             <div>Test</div>
-          </SavvagentProvider>
+          </OttoFlagsProvider>
         ));
       } catch (e) {
         // Expected to throw during render
       }
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        '[Savvagent] Failed to initialize client:',
+        '[Otto Flags] Failed to initialize client:',
         expect.any(Error)
       );
       expect(onError).toHaveBeenCalledWith(expect.any(Error));
@@ -121,12 +121,12 @@ describe('Savvagent Solid SDK', () => {
 
     it('should provide default context in camelCase to snake_case conversion', () => {
       const TestComponent = () => {
-        const { defaultContext } = useSavvagent();
+        const { defaultContext } = useOttoFlags();
         return <div data-testid="context">{JSON.stringify(defaultContext())}</div>;
       };
 
       render(() => (
-        <SavvagentProvider
+        <OttoFlagsProvider
           config={{ apiKey: 'test-key' }}
           defaultContext={{
             applicationId: 'app-123',
@@ -140,7 +140,7 @@ describe('Savvagent Solid SDK', () => {
           }}
         >
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       const context = JSON.parse(screen.getByTestId('context').textContent || '{}');
@@ -158,9 +158,9 @@ describe('Savvagent Solid SDK', () => {
 
     it('should call client.close on cleanup', () => {
       const { unmount } = render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <div>Test</div>
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       unmount();
@@ -169,10 +169,10 @@ describe('Savvagent Solid SDK', () => {
     });
   });
 
-  describe('useSavvagent', () => {
+  describe('useOttoFlags', () => {
     it('should return context value when used within provider', () => {
       const TestComponent = () => {
-        const { client, isReady, defaultContext: _defaultContext } = useSavvagent();
+        const { client, isReady, defaultContext: _defaultContext } = useOttoFlags();
         return (
           <div>
             <div data-testid="has-client">{client ? 'yes' : 'no'}</div>
@@ -182,9 +182,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(screen.getByTestId('has-client').textContent).toBe('yes');
@@ -194,7 +194,7 @@ describe('Savvagent Solid SDK', () => {
     it('should throw error when used outside provider', () => {
       const TestComponent = () => {
         try {
-          useSavvagent();
+          useOttoFlags();
           return <div>Should not render</div>;
         } catch (error) {
           return <div data-testid="error">{(error as Error).message}</div>;
@@ -203,7 +203,7 @@ describe('Savvagent Solid SDK', () => {
 
       render(() => <TestComponent />);
       expect(screen.getByTestId('error').textContent).toBe(
-        'useSavvagent must be used within a SavvagentProvider'
+        'useOttoFlags must be used within a OttoFlagsProvider'
       );
     });
   });
@@ -221,9 +221,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -240,9 +240,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       // Initial value should be default
@@ -258,7 +258,7 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider
+        <OttoFlagsProvider
           config={{ apiKey: 'test-key' }}
           defaultContext={{
             applicationId: 'app-123',
@@ -266,7 +266,7 @@ describe('Savvagent Solid SDK', () => {
           }}
         >
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -298,9 +298,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       // Wait for error callback to be called
@@ -336,9 +336,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -359,9 +359,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -376,9 +376,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -395,9 +395,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -412,9 +412,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       // Initial value should be default
@@ -455,9 +455,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -483,9 +483,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       // Initial values should be defaults
@@ -522,9 +522,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -543,9 +543,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -567,9 +567,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -591,9 +591,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -618,14 +618,14 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
         expect(consoleErrorSpy).toHaveBeenCalledWith(
-          '[Savvagent] Error in withFlag callback for test-flag:',
+          '[Otto Flags] Error in withFlag callback for test-flag:',
           callbackError
         );
         expect(onError).toHaveBeenCalledWith(callbackError);
@@ -648,9 +648,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       const { container } = render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(screen.getByTestId('user-id').textContent).toBe('none');
@@ -674,9 +674,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       const { container } = render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(screen.getByTestId('anon-id').textContent).toBe('none');
@@ -702,9 +702,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       const { container } = render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(screen.getByTestId('user-id').textContent).toBe('none');
@@ -728,9 +728,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(mockClientInstance.trackError).toHaveBeenCalledWith('test-flag', error, undefined);
@@ -747,9 +747,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(mockClientInstance.trackError).toHaveBeenCalledWith('test-flag', error, context);
@@ -766,9 +766,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(mockClientInstance.trackError).toHaveBeenCalledWith('test-flag', error, undefined);
@@ -784,9 +784,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       expect(mockClientInstance.trackError).toHaveBeenCalledWith('test-flag', error, context);
@@ -806,9 +806,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       await waitFor(() => {
@@ -829,9 +829,9 @@ describe('Savvagent Solid SDK', () => {
       };
 
       const { unmount } = render(() => (
-        <SavvagentProvider config={{ apiKey: 'test-key' }}>
+        <OttoFlagsProvider config={{ apiKey: 'test-key' }}>
           <TestComponent />
-        </SavvagentProvider>
+        </OttoFlagsProvider>
       ));
 
       unmount();

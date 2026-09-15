@@ -1,12 +1,12 @@
-# Savvagent Go Server Example
+# Otto Flags Go Server Example
 
-Example Go application demonstrating how to use the Savvagent Go Server SDK with Gin framework.
+Example Go application demonstrating how to use the Otto Flags Go Server SDK with Gin framework.
 
 ## Features
 
 - Go 1.21+
 - Gin web framework
-- Savvagent Go Server SDK
+- Otto Flags Go Server SDK
 - RESTful API endpoints
 - Feature-gated functionality
 - Goroutine-safe concurrent access
@@ -25,8 +25,8 @@ Example Go application demonstrating how to use the Savvagent Go Server SDK with
 
 2. **Configure environment variables:**
    ```bash
-   export SAVVAGENT_API_URL=http://localhost:8080
-   export SAVVAGENT_SDK_KEY=your-sdk-key-here
+   export OTTO_FLAGS_API_URL=http://localhost:8080
+   export OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    export PORT=8082
    ```
 
@@ -88,13 +88,13 @@ package main
 
 import (
     "github.com/gin-gonic/gin"
-    "github.com/savvagent/savvagent-go-server-sdk/pkg/savvagent"
+    "github.com/savvagent/otto-flags-go-server-sdk/pkg/ottoflags"
 )
 
 func main() {
-    client := savvagent.NewClient(savvagent.Config{
-        APIURL:      os.Getenv("SAVVAGENT_API_URL"),
-        SDKKey:      os.Getenv("SAVVAGENT_SDK_KEY"),
+    client := ottoflags.NewClient(ottoflags.Config{
+        APIURL:      os.Getenv("OTTO_FLAGS_API_URL"),
+        SDKKey:      os.Getenv("OTTO_FLAGS_SDK_KEY"),
         Environment: "development",
     })
     defer client.Close()
@@ -104,7 +104,7 @@ func main() {
     r.GET("/api/features", func(c *gin.Context) {
         userId := c.Query("userId")
 
-        isEnabled, err := client.IsEnabled("new-feature", savvagent.EvaluationContext{
+        isEnabled, err := client.IsEnabled("new-feature", ottoflags.EvaluationContext{
             UserID: userId,
             Attributes: map[string]interface{}{
                 "plan": "pro",
@@ -130,5 +130,5 @@ func main() {
 
 - [Go Documentation](https://go.dev/doc/)
 - [Gin Framework](https://gin-gonic.com/)
-- [Savvagent Go SDK Documentation](../../packages/go-server/README.md)
+- [Otto Flags Go SDK Documentation](../../packages/go-server/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

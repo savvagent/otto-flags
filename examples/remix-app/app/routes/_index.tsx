@@ -1,15 +1,15 @@
-import { useFlags, useUser, useTrackError, useSavvagent } from '@savvagent/remix';
+import { useFlags, useUser, useTrackError, useOttoFlags } from '@otto-flags/remix';
 import { FlagOverridePanel } from '../components/FlagOverridePanel';
 
 /**
  * Feature Demo Component
- * Demonstrates best practices for using Savvagent React SDK in Remix
+ * Demonstrates best practices for using Otto Flags React SDK in Remix
  *
  * Uses the useFlags hook for optimal performance - evaluates multiple flags
  * with a single state update, preventing unnecessary re-renders.
  */
 function FeatureDemo() {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
 
   // Per SDK Developer Guide: Use useFlags for multiple flags in the same component
   // This is more performant than multiple useFlag calls as it:
@@ -64,7 +64,7 @@ function FeatureDemo() {
 
   return (
     <div className="container">
-      <h1>Savvagent Remix Example</h1>
+      <h1>Otto Flags Remix Example</h1>
       <p className="subtitle">SDK Developer Guide Best Practices Demo</p>
 
       {loading ? (

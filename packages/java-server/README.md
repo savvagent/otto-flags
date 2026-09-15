@@ -1,6 +1,6 @@
-# Savvagent Java Server SDK
+# Otto Flags Java Server SDK
 
-Official Java Server SDK for Savvagent - AI-powered feature flags with automatic error detection.
+Official Java Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
 ## Features
 
@@ -22,8 +22,8 @@ Official Java Server SDK for Savvagent - AI-powered feature flags with automatic
 
 ```xml
 <dependency>
-    <groupId>com.savvagent</groupId>
-    <artifactId>savvagent-java-server-sdk</artifactId>
+    <groupId>com.savvagent.ottoflags</groupId>
+    <artifactId>otto-flags-java-server-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
 ```
@@ -31,13 +31,13 @@ Official Java Server SDK for Savvagent - AI-powered feature flags with automatic
 ### Gradle
 
 ```gradle
-implementation 'com.savvagent:savvagent-java-server-sdk:0.1.0'
+implementation 'com.savvagent.ottoflags:otto-flags-java-server-sdk:0.1.0'
 ```
 
 ## Quick Start
 
 ```java
-import com.savvagent.sdk.*;
+import com.savvagent.ottoflags.sdk.*;
 
 // Initialize the client
 FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
@@ -67,7 +67,7 @@ client.close();
 ```java
 FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
     .applicationId("your-app-id")
-    .baseUrl("https://flags-api.savvagent.com") // optional
+    .baseUrl("https://flags-api.otto-flags.dev") // optional
     .enableRealtime(true) // default: true
     .cacheTtl(60000L) // default: 60 seconds
     .enableTelemetry(true) // default: true
@@ -77,7 +77,7 @@ FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
         "feature-b", true
     ))
     .onError(error -> {
-        logger.error("Savvagent error", error);
+        logger.error("Otto Flags error", error);
     })
     .build();
 
@@ -95,14 +95,14 @@ import org.springframework.beans.factory.annotation.Value;
 import javax.annotation.PreDestroy;
 
 @Configuration
-public class SavvagentConfig {
+public class OttoFlagsConfig {
 
     private FlagClient flagClient;
 
     @Bean
     public FlagClient flagClient(
-        @Value("${savvagent.api-key}") String apiKey,
-        @Value("${savvagent.app-id}") String appId
+        @Value("${ottoFlags.api-key}") String apiKey,
+        @Value("${ottoFlags.app-id}") String appId
     ) {
         FlagClientConfig config = FlagClientConfig.builder(apiKey)
             .applicationId(appId)
@@ -302,7 +302,7 @@ The SDK uses SLF4J for logging. Configure your logging framework accordingly:
 
 ```xml
 <!-- Logback example -->
-<logger name="com.savvagent.sdk" level="INFO"/>
+<logger name="com.savvagent.ottoflags.sdk" level="INFO"/>
 ```
 
 ## Build from Source
@@ -317,6 +317,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- Issues: https://github.com/savvagent/savvagent-sdks/issues
-- Email: support@savvagent.com
+- Documentation: https://flags-docs.otto-flags.dev
+- Issues: https://github.com/savvagent/otto-flags/issues
+- Email: support@otto-flags.dev

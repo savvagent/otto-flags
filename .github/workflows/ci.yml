@@ -83,12 +83,12 @@ jobs:
       - name: Run E2E tests for ${{ matrix.app }}
         run: cd examples && pnpm test:e2e:${{ matrix.app }}
         env:
-          SAVVAGENT_API_URL: https://flags-api-beta.savvagent.com
-          SAVVAGENT_SDK_KEY: ${{ secrets.SAVVAGENT_SDK_KEY }}
-          VITE_SAVVAGENT_API_URL: https://flags-api-beta.savvagent.com
-          VITE_SAVVAGENT_SDK_KEY: ${{ secrets.SAVVAGENT_SDK_KEY }}
-          NEXT_PUBLIC_SAVVAGENT_API_URL: https://flags-api-beta.savvagent.com
-          NEXT_PUBLIC_SAVVAGENT_SDK_KEY: ${{ secrets.SAVVAGENT_SDK_KEY }}
+          OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
+          OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
+          VITE_OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
+          VITE_OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
+          NEXT_PUBLIC_OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
+          NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
 
       - name: Upload test results
         if: always()

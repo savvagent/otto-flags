@@ -5,7 +5,7 @@
 
 import { SentryMCPServer, SentryConfig } from '../src/sentry-server';
 import axios from 'axios';
-import { MCPServerConfig, JsonRpcRequest } from '@savvagent/mcp-sdk';
+import { MCPServerConfig, JsonRpcRequest } from '@otto-flags/mcp-sdk';
 
 // Mock axios
 jest.mock('axios');

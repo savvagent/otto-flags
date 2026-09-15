@@ -60,7 +60,7 @@ describe('FlagClient', () => {
     it('should accept custom configuration', () => {
       const client = new FlagClient({
         apiKey: 'sdk_test_key',
-        baseUrl: 'https://flags-beta.savvagent.com',
+        baseUrl: 'https://flags-beta.otto-flags.dev',
         enableRealtime: false,
         enableTelemetry: false,
         cacheTtl: 30000,

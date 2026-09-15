@@ -1,10 +1,10 @@
-# AI-Assisted Development with Savvagent
+# AI-Assisted Development with Otto Flags
 
-This guide explains how to use AI coding assistants (Claude Code, Cursor, GitHub Copilot, etc.) to integrate Savvagent feature flags into your projects.
+This guide explains how to use AI coding assistants (Claude Code, Cursor, GitHub Copilot, etc.) to integrate Otto Flags feature flags into your projects.
 
 ## Overview
 
-Savvagent provides AI-friendly documentation files that help coding assistants understand our SDKs and generate accurate integration code:
+Otto Flags provides AI-friendly documentation files that help coding assistants understand our SDKs and generate accurate integration code:
 
 | File | Purpose | Size |
 |------|---------|------|
@@ -15,27 +15,27 @@ Savvagent provides AI-friendly documentation files that help coding assistants u
 
 ### Claude Code
 
-Claude Code can fetch and use these files directly. Simply ask it to integrate Savvagent:
+Claude Code can fetch and use these files directly. Simply ask it to integrate Otto Flags:
 
 ```
-Add Savvagent feature flags to my React app.
-Reference: https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt
+Add Otto Flags feature flags to my React app.
+Reference: https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt
 ```
 
 Or for quick lookups:
 
 ```
-How do I use Savvagent's useFlag hook?
-Check https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms.txt
+How do I use Otto Flags's useFlag hook?
+Check https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms.txt
 ```
 
-**Pro tip**: Add Savvagent docs to your project's context by creating a `.claude/settings.json`:
+**Pro tip**: Add Otto Flags docs to your project's context by creating a `.claude/settings.json`:
 
 ```json
 {
   "context": {
     "urls": [
-      "https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt"
+      "https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt"
     ]
   }
 }
@@ -47,9 +47,9 @@ In Cursor, you can add the documentation to your project's AI context:
 
 1. Open Settings (Cmd/Ctrl + ,)
 2. Go to "Features" > "Docs"
-3. Add: `https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt`
+3. Add: `https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt`
 
-Now when you ask Cursor to add feature flags, it will use accurate Savvagent patterns.
+Now when you ask Cursor to add feature flags, it will use accurate Otto Flags patterns.
 
 **Chat example:**
 ```
@@ -61,7 +61,7 @@ Now when you ask Cursor to add feature flags, it will use accurate Savvagent pat
 Reference the documentation in your prompt:
 
 ```
-# Context: Using Savvagent SDK from https://github.com/savvagent/savvagent-sdks
+# Context: Using Otto Flags SDK from https://github.com/savvagent/otto-flags
 # Add feature flag check for 'new-dashboard' feature
 ```
 
@@ -74,7 +74,7 @@ Add to your workspace configuration:
 ```json
 {
   "ai.contextFiles": [
-    "https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt"
+    "https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt"
   ]
 }
 ```
@@ -84,21 +84,21 @@ Add to your workspace configuration:
 If you've cloned this repository, you can reference the local files:
 
 ```
-Add Savvagent feature flags using the docs in ./llms-full.txt
+Add Otto Flags feature flags using the docs in ./llms-full.txt
 ```
 
 ## Example Prompts
 
-Here are effective prompts for common Savvagent integration tasks:
+Here are effective prompts for common Otto Flags integration tasks:
 
 ### Initial Setup
 
 ```
-Set up Savvagent feature flags in my Next.js 14 app.
+Set up Otto Flags feature flags in my Next.js 14 app.
 - Use App Router
 - Add provider to root layout
 - Create a useFeatureFlag hook
-Reference: https://raw.githubusercontent.com/savvagent/savvagent-sdks/main/llms-full.txt
+Reference: https://raw.githubusercontent.com/ottoFlags/otto-flags/main/llms-full.txt
 ```
 
 ### Adding a Feature Flag
@@ -108,7 +108,7 @@ Add a feature flag called 'new-pricing-page' that:
 - Shows new pricing for 20% of users
 - Uses sticky assignment based on userId
 - Falls back to old pricing if flag evaluation fails
-Use Savvagent SDK patterns from llms-full.txt
+Use Otto Flags SDK patterns from llms-full.txt
 ```
 
 ### Server-Side Flags
@@ -118,13 +118,13 @@ Add server-side feature flag evaluation to my Express API:
 - Check 'api-v2' flag before processing requests
 - Cache flag values for 60 seconds
 - Track errors with flag context
-Reference Savvagent Node.js SDK from llms-full.txt
+Reference Otto Flags Node.js SDK from llms-full.txt
 ```
 
 ### Error Tracking Integration
 
 ```
-Integrate Savvagent error tracking with my existing feature:
+Integrate Otto Flags error tracking with my existing feature:
 - Wrap risky code in withFlag
 - Track errors with flag context for AI correlation
 - Handle fallback gracefully
@@ -143,7 +143,7 @@ Add real-time feature flag updates to my React app:
 
 When you reference our documentation, AI assistants will generate code that:
 
-1. **Uses correct imports**: `import { FlagClient } from '@savvagent/sdk'`
+1. **Uses correct imports**: `import { FlagClient } from '@otto-flags/sdk'`
 2. **Follows our patterns**: Proper initialization, context passing, error handling
 3. **Includes best practices**: Caching, telemetry, default values
 4. **Handles edge cases**: Loading states, error fallbacks, cleanup
@@ -151,19 +151,19 @@ When you reference our documentation, AI assistants will generate code that:
 ### Example Generated Code (React)
 
 ```tsx
-// Generated by AI using Savvagent llms-full.txt
-import { SavvagentProvider, useFlag } from '@savvagent/react';
+// Generated by AI using Otto Flags llms-full.txt
+import { OttoFlagsProvider, useFlag } from '@otto-flags/react';
 
 function App() {
   return (
-    <SavvagentProvider
+    <OttoFlagsProvider
       config={{
-        apiKey: process.env.NEXT_PUBLIC_SAVVAGENT_KEY!,  // SDK keys use 'sdk_' prefix
+        apiKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_KEY!,  // SDK keys use 'sdk_' prefix
         enableRealtime: true,  // SSE for real-time flag updates
       }}
     >
       <FeatureComponent />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 
@@ -188,7 +188,7 @@ function FeatureComponent() {
 ### Common Issues
 
 **Wrong SDK import path**
-- AI might guess `@savvagent/client` instead of `@savvagent/sdk`
+- AI might guess `@otto-flags/client` instead of `@otto-flags/sdk`
 - Solution: Reference llms-full.txt which has correct imports
 
 **Missing context in flag evaluation**
@@ -201,9 +201,9 @@ function FeatureComponent() {
 
 ### Verification Checklist
 
-After AI generates Savvagent integration code, verify:
+After AI generates Otto Flags integration code, verify:
 
-- [ ] Correct package imported (`@savvagent/sdk`, `@savvagent/react`, etc.)
+- [ ] Correct package imported (`@otto-flags/sdk`, `@otto-flags/react`, etc.)
 - [ ] API key loaded from environment variable (not hardcoded)
 - [ ] API key uses correct prefix (`sdk_` for client-side, `srv_` for server-side)
 - [ ] Provider wraps app at root level (React/Vue/Svelte)
@@ -215,7 +215,7 @@ After AI generates Savvagent integration code, verify:
 
 ## Keeping AI Context Updated
 
-When Savvagent releases new SDK versions:
+When Otto Flags releases new SDK versions:
 
 1. We update `llms.txt` and `llms-full.txt` in this repository
 2. AI assistants fetching from GitHub URLs get latest docs automatically
@@ -234,8 +234,8 @@ We'll update our AI-friendly documentation to address common issues.
 
 ## Resources
 
-- **llms.txt**: [View on GitHub](https://github.com/savvagent/savvagent-sdks/blob/main/llms.txt)
-- **llms-full.txt**: [View on GitHub](https://github.com/savvagent/savvagent-sdks/blob/main/llms-full.txt)
+- **llms.txt**: [View on GitHub](https://github.com/savvagent/otto-flags/blob/main/llms.txt)
+- **llms-full.txt**: [View on GitHub](https://github.com/savvagent/otto-flags/blob/main/llms-full.txt)
 - **llms.txt Standard**: [llmstxt.org](https://llmstxt.org)
 - **SDK Developer Guide**: [docs/SDK-DEVELOPER-GUIDE.md](./SDK-DEVELOPER-GUIDE.md) - Complete API specification
 - **SDK Integration Guide**: [docs/SDK-INTEGRATION.md](./SDK-INTEGRATION.md)

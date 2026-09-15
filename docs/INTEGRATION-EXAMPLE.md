@@ -327,7 +327,7 @@ Quick steps to integrate generated types:
 
 ```bash
 # 1. Ensure types are generated
-cd ~/dev/savvagent-sdks
+cd ~/dev/otto-flags
 pnpm run sync:types
 
 # 2. Add type imports
@@ -341,7 +341,7 @@ pnpm run sync:types
 # const data: ApiResponse = await response.json();
 
 # 5. Test that everything compiles
-pnpm --filter @savvagent/sdk build
+pnpm --filter @otto-flags/sdk build
 
 # 6. Update tests to use typed mocks
 

@@ -1,18 +1,18 @@
 {
-  "name": "@savvagent/angular",
+  "name": "@otto-flags/angular",
   "version": "1.1.0",
-  "description": "Angular SDK for Savvagent feature flags",
-  "author": "Savvagent",
+  "description": "Angular SDK for Otto Flags feature flags",
+  "author": "Otto Flags",
   "license": "MIT",
-  "main": "./dist/fesm2022/savvagent-angular.mjs",
-  "module": "./dist/fesm2022/savvagent-angular.mjs",
+  "main": "./dist/fesm2022/otto-flags-angular.mjs",
+  "module": "./dist/fesm2022/otto-flags-angular.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "esm2022": "./dist/esm2022/savvagent-angular.mjs",
-      "esm": "./dist/esm2022/savvagent-angular.mjs",
-      "default": "./dist/fesm2022/savvagent-angular.mjs"
+      "esm2022": "./dist/esm2022/otto-flags-angular.mjs",
+      "esm": "./dist/esm2022/otto-flags-angular.mjs",
+      "default": "./dist/fesm2022/otto-flags-angular.mjs"
     },
     "./package.json": {
       "default": "./package.json"
@@ -24,7 +24,7 @@
     "rxjs": ">=7.0.0"
   },
   "dependencies": {
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "tslib": "^2.8.1"
   },
   "devDependencies": {
@@ -54,7 +54,7 @@
     "format": "prettier --write \"src/**/*.ts\""
   },
   "keywords": [
-    "savvagent",
+    "otto-flags",
     "feature-flags",
     "angular",
     "service",
@@ -62,13 +62,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/savvagent/savvagent-sdks",
+    "url": "https://github.com/savvagent/otto-flags",
     "directory": "packages/angular"
   },
   "bugs": {
-    "url": "https://github.com/savvagent/savvagent-sdks/issues"
+    "url": "https://github.com/savvagent/otto-flags/issues"
   },
-  "homepage": "https://github.com/savvagent/savvagent-sdks/tree/main/packages/angular#readme",
+  "homepage": "https://github.com/savvagent/otto-flags/tree/main/packages/angular#readme",
   "publishConfig": {
     "access": "public"
   },

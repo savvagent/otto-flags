@@ -1,6 +1,6 @@
-# @savvagent/typescript
+# @otto-flags/typescript
 
-Official TypeScript/JavaScript SDK for Savvagent - AI-powered feature flags with automatic error detection.
+Official TypeScript/JavaScript SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
 ## Features
 
@@ -14,22 +14,22 @@ Official TypeScript/JavaScript SDK for Savvagent - AI-powered feature flags with
 ## Installation
 
 ```bash
-npm install @savvagent/typescript
+npm install @otto-flags/typescript
 # or
-yarn add @savvagent/typescript
+yarn add @otto-flags/typescript
 # or
-pnpm add @savvagent/typescript
+pnpm add @otto-flags/typescript
 ```
 
 ## Quick Start
 
 ```typescript
-import { FlagClient } from '@savvagent/typescript';
+import { FlagClient } from '@otto-flags/typescript';
 
 // Initialize the client
 const client = new FlagClient({
   apiKey: 'sdk_dev_your_api_key_here',
-  baseUrl: 'https://flags-api.savvagent.com', // Optional: defaults to production
+  baseUrl: 'https://flags-api.otto-flags.dev', // Optional: defaults to production
   enableRealtime: true,
   enableTelemetry: true,
 });
@@ -156,7 +156,7 @@ interface FlagClientConfig {
   /** SDK API key (required, starts with sdk_) */
   apiKey: string;
 
-  /** Base URL for the Savvagent API (default: production) */
+  /** Base URL for the Otto Flags API (default: production) */
   baseUrl?: string;
 
   /** Environment for flag evaluation (default: 'production') */
@@ -184,7 +184,7 @@ interface FlagClientConfig {
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_dev_abc123',
-  baseUrl: 'https://flags-api.savvagent.com',
+  baseUrl: 'https://flags-api.otto-flags.dev',
   environment: 'staging', // Use staging environment flags
   enableRealtime: true,
   cacheTtl: 30000, // 30 seconds
@@ -194,7 +194,7 @@ const client = new FlagClient({
     'experimental-feature': false,
   },
   onError: (error) => {
-    console.error('Savvagent error:', error);
+    console.error('Otto Flags error:', error);
     // Send to your error tracking service
   },
 });
@@ -246,7 +246,7 @@ Note: Changing the environment clears the cache since flag values may differ bet
 ### React
 
 ```typescript
-import { FlagClient } from '@savvagent/client-web';
+import { FlagClient } from '@otto-flags/client-web';
 import { createContext, useContext, useEffect, useState } from 'react';
 
 // Create context
@@ -257,7 +257,7 @@ export function FlagProvider({ children }: { children: React.ReactNode }) {
   const [client] = useState(
     () =>
       new FlagClient({
-        apiKey: process.env.NEXT_PUBLIC_SAVVAGENT_KEY!,
+        apiKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_KEY!,
       })
   );
 
@@ -298,11 +298,11 @@ function MyComponent() {
 ### Vue 3
 
 ```typescript
-import { FlagClient } from '@savvagent/client-web';
+import { FlagClient } from '@otto-flags/client-web';
 import { ref, onMounted, onUnmounted } from 'vue';
 
 const client = new FlagClient({
-  apiKey: import.meta.env.VITE_SAVVAGENT_KEY,
+  apiKey: import.meta.env.VITE_OTTO_FLAGS_KEY,
 });
 
 export function useFlag(flagKey: string, context?: any) {
@@ -328,11 +328,11 @@ export function useFlag(flagKey: string, context?: any) {
 ### Svelte
 
 ```typescript
-import { FlagClient } from '@savvagent/client-web';
+import { FlagClient } from '@otto-flags/client-web';
 import { writable } from 'svelte/store';
 
 const client = new FlagClient({
-  apiKey: import.meta.env.VITE_SAVVAGENT_KEY,
+  apiKey: import.meta.env.VITE_OTTO_FLAGS_KEY,
 });
 
 export function flagStore(flagKey: string, context?: any) {
@@ -363,7 +363,7 @@ Create a single client instance and reuse it throughout your application:
 ```typescript
 // flags.ts
 export const flagClient = new FlagClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
 });
 
 // other-file.ts
@@ -467,7 +467,7 @@ const client = new FlagClient({
 ### Flags always return false
 
 - Check your API key is correct and starts with `sdk_`
-- Verify the baseUrl points to your Savvagent instance
+- Verify the baseUrl points to your Otto Flags instance
 - Check network requests in browser DevTools
 
 ### Real-time updates not working
@@ -479,7 +479,7 @@ const client = new FlagClient({
 ### TypeScript errors
 
 - Ensure TypeScript version >= 5.0
-- Check that `@savvagent/client-web` types are installed
+- Check that `@otto-flags/client-web` types are installed
 
 ## License
 
@@ -487,6 +487,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- Issues: https://github.com/yourusername/savvagent/issues
-- Email: support@savvagent.com
+- Documentation: https://flags-docs.otto-flags.dev
+- Issues: https://github.com/yourusername/ottoFlags/issues
+- Email: support@otto-flags.dev

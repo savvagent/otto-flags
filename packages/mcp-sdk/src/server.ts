@@ -1,5 +1,5 @@
 /**
- * Savvagent MCP SDK - Server Class
+ * Otto Flags MCP SDK - Server Class
  * Base class for implementing MCP servers with StreamableHTTP transport and JSON-RPC 2.0 protocol
  *
  * MCP servers use a single HTTP endpoint (typically POST /mcp) that handles all JSON-RPC requests.

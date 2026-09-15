@@ -1,5 +1,5 @@
 /**
- * @savvagent/nextjs - Next.js SDK for Savvagent feature flags
+ * @otto-flags/nextjs - Next.js SDK for Otto Flags feature flags
  *
  * This package provides Next.js-specific integrations including:
  * - Client Components (hooks and provider)
@@ -11,23 +11,23 @@
  */
 
 /**
- * For Client Components, import from '@savvagent/nextjs/client':
+ * For Client Components, import from '@otto-flags/nextjs/client':
  *
  * ```tsx
  * 'use client';
- * import { useFlag, SavvagentProvider } from '@savvagent/nextjs/client';
+ * import { useFlag, OttoFlagsProvider } from '@otto-flags/nextjs/client';
  * ```
  *
- * For Server Components, import from '@savvagent/nextjs/server':
+ * For Server Components, import from '@otto-flags/nextjs/server':
  *
  * ```tsx
- * import { isEnabled, evaluate } from '@savvagent/nextjs/server';
+ * import { isEnabled, evaluate } from '@otto-flags/nextjs/server';
  * ```
  *
- * For Middleware, import from '@savvagent/nextjs/middleware':
+ * For Middleware, import from '@otto-flags/nextjs/middleware':
  *
  * ```tsx
- * import { createMiddleware } from '@savvagent/nextjs/middleware';
+ * import { createMiddleware } from '@otto-flags/nextjs/middleware';
  * ```
  */
 
@@ -64,7 +64,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

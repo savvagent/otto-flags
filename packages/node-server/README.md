@@ -1,6 +1,6 @@
-# @savvagent/node-server
+# @otto-flags/node-server
 
-Official Node.js Server SDK for Savvagent - AI-powered feature flags with automatic error detection.
+Official Node.js Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
 ## Features
 
@@ -14,17 +14,17 @@ Official Node.js Server SDK for Savvagent - AI-powered feature flags with automa
 ## Installation
 
 ```bash
-npm install @savvagent/node-server
+npm install @otto-flags/node-server
 # or
-yarn add @savvagent/node-server
+yarn add @otto-flags/node-server
 # or
-pnpm add @savvagent/node-server
+pnpm add @otto-flags/node-server
 ```
 
 ## Quick Start
 
 ```typescript
-import { FlagClient } from '@savvagent/node-server';
+import { FlagClient } from '@otto-flags/node-server';
 
 // Initialize the client
 const client = new FlagClient({
@@ -52,7 +52,7 @@ const isEnabled = await client.isEnabled('new-feature', {
 const client = new FlagClient({
   apiKey: 'sdk_your_api_key_here',
   applicationId: 'your-app-id',
-  baseUrl: 'https://flags-api.savvagent.com', // optional
+  baseUrl: 'https://flags-api.otto-flags.dev', // optional
   enableRealtime: true, // default: true
   cacheTtl: 60000, // default: 60 seconds
   enableTelemetry: true, // default: true
@@ -62,7 +62,7 @@ const client = new FlagClient({
     'feature-b': true,
   },
   onError: (error) => {
-    console.error('Savvagent error:', error);
+    console.error('Otto Flags error:', error);
   },
 });
 ```
@@ -252,7 +252,7 @@ client.close();
 
 ```typescript
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { FlagClient } from '@savvagent/node-server';
+import { FlagClient } from '@otto-flags/node-server';
 
 @Injectable()
 export class FlagsService implements OnModuleDestroy {
@@ -260,7 +260,7 @@ export class FlagsService implements OnModuleDestroy {
 
   constructor() {
     this.client = new FlagClient({
-      apiKey: process.env.SAVVAGENT_API_KEY,
+      apiKey: process.env.OTTO_FLAGS_API_KEY,
       applicationId: process.env.APP_ID,
     });
   }
@@ -281,6 +281,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- Issues: https://github.com/savvagent/savvagent-sdks/issues
-- Email: support@savvagent.com
+- Documentation: https://flags-docs.otto-flags.dev
+- Issues: https://github.com/savvagent/otto-flags/issues
+- Email: support@otto-flags.dev

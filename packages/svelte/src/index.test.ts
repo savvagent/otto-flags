@@ -1,11 +1,11 @@
 /**
- * @file Comprehensive unit tests for @savvagent/svelte
+ * @file Comprehensive unit tests for @otto-flags/svelte
  * Tests all exported functions and stores with edge cases and error handling
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import type { FlagContext } from '@savvagent/sdk';
+import type { FlagContext } from '@otto-flags/sdk';
 
 // Create mock client instance
 const mockClientInstance = {
@@ -26,7 +26,7 @@ const mockClientInstance = {
 };
 
 // Mock FlagClient
-vi.mock('@savvagent/sdk', () => {
+vi.mock('@otto-flags/sdk', () => {
   return {
     FlagClient: vi.fn(function(this: any) {
       return mockClientInstance;
@@ -36,8 +36,8 @@ vi.mock('@savvagent/sdk', () => {
 
 // Import after mocking
 import {
-  initSavvagent,
-  getSavvagent,
+  initOttoFlags,
+  getOttoFlags,
   getDefaultContext,
   setDefaultContext,
   createFlagStore,
@@ -73,7 +73,7 @@ describe('Svelte SDK - Initialization', () => {
   });
 
   it('should initialize and return client instance', () => {
-    const client = initSavvagent({
+    const client = initOttoFlags({
       apiKey: 'test-key',
       applicationId: 'test-app',
     });
@@ -83,15 +83,15 @@ describe('Svelte SDK - Initialization', () => {
   });
 
   it('should return same client instance on subsequent calls (singleton)', () => {
-    const client1 = initSavvagent({ apiKey: 'test1', applicationId: 'app1' });
-    const client2 = initSavvagent({ apiKey: 'test2', applicationId: 'app2' });
+    const client1 = initOttoFlags({ apiKey: 'test1', applicationId: 'app1' });
+    const client2 = initOttoFlags({ apiKey: 'test2', applicationId: 'app2' });
 
     expect(client1).toBe(client2);
   });
 
-  it('should get client instance via getSavvagent', () => {
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
-    const client = getSavvagent();
+  it('should get client instance via getOttoFlags', () => {
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
+    const client = getOttoFlags();
 
     expect(client).toBeDefined();
     expect(client).toBe(mockClientInstance);
@@ -101,7 +101,7 @@ describe('Svelte SDK - Initialization', () => {
 describe('Svelte SDK - Context Management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should get default context', () => {
@@ -170,7 +170,7 @@ describe('Svelte SDK - Flag Stores', () => {
     mockClientInstance.evaluate.mockResolvedValue({ value: false, reason: 'DEFAULT' });
     mockClientInstance.subscribe.mockReturnValue(() => {});
     mockClientInstance.onOverrideChange.mockReturnValue(() => {});
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   describe('createFlagStore', () => {
@@ -321,7 +321,7 @@ describe('Svelte SDK - Override Management', () => {
     mockClientInstance.hasOverride.mockReturnValue(false);
     mockClientInstance.getOverride.mockReturnValue(undefined);
 
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   describe('createOverridesStore', () => {
@@ -381,7 +381,7 @@ describe('Svelte SDK - All Flags Store', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockClientInstance.getAllFlags.mockResolvedValue([]);
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should create a store for all flags', async () => {
@@ -429,7 +429,7 @@ describe('Svelte SDK - User ID Management', () => {
     vi.clearAllMocks();
     mockClientInstance.getUserId.mockReturnValue(null);
     mockClientInstance.setUserId.mockImplementation(() => {});
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should create a user ID store', () => {
@@ -476,7 +476,7 @@ describe('Svelte SDK - Error Tracking', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockClientInstance.trackError.mockImplementation(() => {});
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should track error with flag context', () => {
@@ -505,7 +505,7 @@ describe('Svelte SDK - Edge Cases', () => {
     mockClientInstance.evaluate.mockResolvedValue({ value: false, reason: 'DEFAULT' });
     mockClientInstance.subscribe.mockReturnValue(() => {});
     mockClientInstance.onOverrideChange.mockReturnValue(() => {});
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should handle very long flag keys', () => {
@@ -574,7 +574,7 @@ describe('Svelte SDK - Store Reactivity', () => {
     mockClientInstance.evaluate.mockResolvedValue({ value: true, reason: 'DEFAULT' });
     mockClientInstance.subscribe.mockReturnValue(() => {});
     mockClientInstance.onOverrideChange.mockReturnValue(() => {});
-    initSavvagent({ apiKey: 'test', applicationId: 'test' });
+    initOttoFlags({ apiKey: 'test', applicationId: 'test' });
   });
 
   it('should notify subscribers on subscription', async () => {

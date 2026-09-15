@@ -5,22 +5,22 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
-  - @savvagent/angular@1.1.0
+  - @otto-flags/sdk@1.1.0
+  - @otto-flags/angular@1.1.0
 
 ## 0.0.2
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/angular@1.0.1
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/angular@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 0.0.1
 
 ### Features
 
-- Initial Angular example application demonstrating `@savvagent/angular` SDK
+- Initial Angular example application demonstrating `@otto-flags/angular` SDK
 - Feature flag evaluation with reactive updates using `flag$()` observable
 - Real-time flag updates via SSE subscription
 - User management (set/clear user ID)

@@ -1,28 +1,28 @@
-# @savvagent/angular
+# @otto-flags/angular
 
-Angular SDK for Savvagent - AI-powered feature flags that prevent production incidents.
+Angular SDK for Otto Flags - AI-powered feature flags that prevent production incidents.
 
 ## Installation
 
 ```bash
-npm install @savvagent/angular
+npm install @otto-flags/angular
 # or
-pnpm add @savvagent/angular
+pnpm add @otto-flags/angular
 # or
-yarn add @savvagent/angular
+yarn add @otto-flags/angular
 ```
 
 ## Quick Start
 
-### 1. Import SavvagentModule in your app
+### 1. Import OttoFlagsModule in your app
 
 ```typescript
 // app.module.ts
-import { SavvagentModule } from '@savvagent/angular';
+import { OttoFlagsModule } from '@otto-flags/angular';
 
 @NgModule({
   imports: [
-    SavvagentModule.forRoot({
+    OttoFlagsModule.forRoot({
       config: {
         apiKey: 'sdk_your_api_key_here',
         applicationId: 'your-app-id', // Optional: for application-scoped flags
@@ -38,11 +38,11 @@ import { SavvagentModule } from '@savvagent/angular';
 export class AppModule {}
 ```
 
-### 2. Use SavvagentService in your components
+### 2. Use OttoFlagsService in your components
 
 ```typescript
 import { Component } from '@angular/core';
-import { SavvagentService } from '@savvagent/angular';
+import { OttoFlagsService } from '@otto-flags/angular';
 
 @Component({
   selector: 'app-my-feature',
@@ -55,12 +55,12 @@ import { SavvagentService } from '@savvagent/angular';
   `
 })
 export class MyFeatureComponent {
-  newFeature$ = this.savvagent.flag$('new-checkout-flow', {
+  newFeature$ = this.ottoFlags.flag$('new-checkout-flow', {
     defaultValue: false,
     realtime: true,
   });
 
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 }
 ```
 
@@ -72,13 +72,13 @@ For standalone components, you can use `importProvidersFrom`:
 // main.ts
 import { bootstrapApplication } from '@angular/platform-browser';
 import { importProvidersFrom } from '@angular/core';
-import { SavvagentModule } from '@savvagent/angular';
+import { OttoFlagsModule } from '@otto-flags/angular';
 import { AppComponent } from './app/app.component';
 
 bootstrapApplication(AppComponent, {
   providers: [
     importProvidersFrom(
-      SavvagentModule.forRoot({
+      OttoFlagsModule.forRoot({
         config: { apiKey: 'sdk_your_api_key' }
       })
     )
@@ -88,16 +88,16 @@ bootstrapApplication(AppComponent, {
 
 ## API Reference
 
-### `SavvagentModule`
+### `OttoFlagsModule`
 
-Angular module that configures the Savvagent SDK.
+Angular module that configures the Otto Flags SDK.
 
-#### `SavvagentModule.forRoot(config)`
+#### `OttoFlagsModule.forRoot(config)`
 
 Configure the module with your API key and default context.
 
 ```typescript
-interface SavvagentConfig {
+interface OttoFlagsConfig {
   config: FlagClientConfig;
   defaultContext?: DefaultFlagContext;
 }
@@ -107,7 +107,7 @@ interface FlagClientConfig {
   apiKey: string;
   /** Application ID for application-scoped flags */
   applicationId?: string;
-  /** Base URL for the Savvagent API */
+  /** Base URL for the Otto Flags API */
   baseUrl?: string;
   /** Enable real-time flag updates via SSE (default: true) */
   enableRealtime?: boolean;
@@ -133,7 +133,7 @@ interface DefaultFlagContext {
 }
 ```
 
-### `SavvagentService`
+### `OttoFlagsService`
 
 Injectable service that provides all feature flag functionality.
 
@@ -183,7 +183,7 @@ interface FlagObservableResult {
   `
 })
 export class MyComponent {
-  betaFeature$ = this.savvagent.flag$('beta-feature', {
+  betaFeature$ = this.ottoFlags.flag$('beta-feature', {
     context: {
       user_id: this.userId,
       attributes: { plan: 'pro' }
@@ -192,7 +192,7 @@ export class MyComponent {
     realtime: true
   });
 
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 }
 ```
 
@@ -207,9 +207,9 @@ Get just the boolean value as an Observable. Useful when you don't need loading/
   `
 })
 export class SimpleComponent {
-  isFeatureEnabled$ = this.savvagent.flagValue$('my-feature');
+  isFeatureEnabled$ = this.ottoFlags.flagValue$('my-feature');
 
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 }
 ```
 
@@ -219,7 +219,7 @@ Evaluate a feature flag once (non-reactive).
 
 ```typescript
 async checkFeature() {
-  const result = await this.savvagent.evaluate('new-feature');
+  const result = await this.ottoFlags.evaluate('new-feature');
   console.log(result.value, result.reason);
 }
 ```
@@ -230,7 +230,7 @@ Simple boolean check if a flag is enabled.
 
 ```typescript
 async doSomething() {
-  if (await this.savvagent.isEnabled('feature-flag')) {
+  if (await this.ottoFlags.isEnabled('feature-flag')) {
     // Feature is enabled
   }
 }
@@ -242,7 +242,7 @@ Execute code conditionally based on flag value.
 
 ```typescript
 async trackPageView() {
-  await this.savvagent.withFlag('analytics-enabled', async () => {
+  await this.ottoFlags.withFlag('analytics-enabled', async () => {
     await this.analytics.track('page_view');
   });
 }
@@ -254,7 +254,7 @@ Track errors with flag context for AI-powered analysis.
 
 ```typescript
 handleError(error: Error) {
-  this.savvagent.trackError('new-payment-flow', error);
+  this.ottoFlags.trackError('new-payment-flow', error);
 }
 ```
 
@@ -322,12 +322,12 @@ export class UserFeatureComponent implements OnInit {
   premiumFeature$!: Observable<FlagObservableResult>;
 
   constructor(
-    private savvagent: SavvagentService,
+    private ottoFlags: OttoFlagsService,
     private auth: AuthService
   ) {}
 
   ngOnInit() {
-    this.premiumFeature$ = this.savvagent.flag$('premium-features', {
+    this.premiumFeature$ = this.ottoFlags.flag$('premium-features', {
       context: {
         user_id: this.auth.userId,
         attributes: {
@@ -348,16 +348,16 @@ If you need to initialize the service after getting user data:
 @Component({...})
 export class AppComponent implements OnInit {
   constructor(
-    private savvagent: SavvagentService,
+    private ottoFlags: OttoFlagsService,
     private auth: AuthService
   ) {}
 
   ngOnInit() {
     // Wait for auth, then initialize
     this.auth.user$.pipe(take(1)).subscribe(user => {
-      this.savvagent.initialize({
+      this.ottoFlags.initialize({
         config: {
-          apiKey: environment.savvagentApiKey
+          apiKey: environment.ottoFlagsApiKey
         },
         defaultContext: {
           userId: user?.id,
@@ -374,7 +374,7 @@ export class AppComponent implements OnInit {
 ```typescript
 @Component({...})
 export class PaymentComponent {
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 
   async processPayment() {
     try {
@@ -382,7 +382,7 @@ export class PaymentComponent {
       return result;
     } catch (error) {
       // Error is correlated with flag changes
-      this.savvagent.trackError('new-payment-flow', error as Error);
+      this.ottoFlags.trackError('new-payment-flow', error as Error);
       throw error;
     }
   }
@@ -399,13 +399,13 @@ export class PaymentComponent {
   `
 })
 export class ABTestComponent {
-  variantB$ = this.savvagent.flagValue$('checkout-variant-b', {
+  variantB$ = this.ottoFlags.flagValue$('checkout-variant-b', {
     context: {
       user_id: this.userId // Consistent assignment per user
     }
   });
 
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 }
 ```
 
@@ -419,7 +419,7 @@ export class ABTestComponent {
       <label>
         <input
           type="checkbox"
-          [checked]="savvagent.getOverride(flag.key) ?? flag.enabled"
+          [checked]="ottoFlags.getOverride(flag.key) ?? flag.enabled"
           (change)="toggleOverride(flag.key, $event)"
         />
         {{ flag.key }}
@@ -429,17 +429,17 @@ export class ABTestComponent {
   `
 })
 export class FlagOverridesComponent implements OnInit {
-  flags$ = this.savvagent.getAllFlags$('development');
+  flags$ = this.ottoFlags.getAllFlags$('development');
 
-  constructor(public savvagent: SavvagentService) {}
+  constructor(public ottoFlags: OttoFlagsService) {}
 
   toggleOverride(flagKey: string, event: Event) {
     const checked = (event.target as HTMLInputElement).checked;
-    this.savvagent.setOverride(flagKey, checked);
+    this.ottoFlags.setOverride(flagKey, checked);
   }
 
   clearOverride(flagKey: string) {
-    this.savvagent.clearOverride(flagKey);
+    this.ottoFlags.clearOverride(flagKey);
   }
 }
 ```
@@ -454,22 +454,22 @@ import type {
   FlagContext,
   FlagEvaluationResult,
   FlagDefinition,
-  SavvagentConfig,
+  OttoFlagsConfig,
   DefaultFlagContext,
   FlagObservableResult,
   FlagOptions,
-} from '@savvagent/angular';
+} from '@otto-flags/angular';
 ```
 
 ## Best Practices
 
-1. **Import SavvagentModule.forRoot() in your root module** to ensure a single instance of the service.
+1. **Import OttoFlagsModule.forRoot() in your root module** to ensure a single instance of the service.
 
 2. **Use the `defaultValue` option** to provide a safe fallback while flags are loading.
 
 3. **Enable real-time updates** for flags that change frequently or require immediate propagation.
 
-4. **Track errors** in new features to leverage Savvagent's AI-powered error correlation.
+4. **Track errors** in new features to leverage Otto Flags's AI-powered error correlation.
 
 5. **Use user context** for targeted rollouts based on user attributes, location, or behavior.
 

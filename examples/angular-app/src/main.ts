@@ -1,18 +1,18 @@
 import { bootstrapApplication } from '@angular/platform-browser';
 import { importProvidersFrom } from '@angular/core';
-import { SavvagentModule } from '@savvagent/angular';
+import { OttoFlagsModule } from '@otto-flags/angular';
 import { AppComponent } from './app/app.component';
 import { environment } from './environments/environment';
 
 bootstrapApplication(AppComponent, {
   providers: [
     importProvidersFrom(
-      SavvagentModule.forRoot({
+      OttoFlagsModule.forRoot({
         config: {
           // SDK API key (starts with sdk_) - safe to embed in client-side code
-          apiKey: environment.savvagentSdkKey,
-          // Base URL for the Savvagent API
-          baseUrl: environment.savvagentApiUrl,
+          apiKey: environment.ottoFlagsSdkKey,
+          // Base URL for the Otto Flags API
+          baseUrl: environment.ottoFlagsApiUrl,
           // Application ID for application-scoped flags
           applicationId: 'f8209ef5-a661-4f46-8b84-4c855a97d5ef',
           // Enable real-time updates via SSE (default: true)
@@ -29,7 +29,7 @@ bootstrapApplication(AppComponent, {
           },
           // Custom error handler
           onError: (error) => {
-            console.error('[App] Savvagent error:', error);
+            console.error('[App] Otto Flags error:', error);
           },
         },
         // Per SDK Developer Guide: Default context values applied to all flag evaluations

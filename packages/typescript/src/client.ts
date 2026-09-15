@@ -15,7 +15,7 @@ type ApiEvaluateRequest = components['schemas']['EvaluateFlag'];
 type ApiEvaluateResponse = components['schemas']['FlagEvaluationResponse'];
 
 /**
- * Savvagent Client for feature flag evaluation with AI-powered error detection
+ * Otto Flags Client for feature flag evaluation with AI-powered error detection
  */
 export class FlagClient {
   private config: Required<FlagClientConfig>;
@@ -40,7 +40,7 @@ export class FlagClient {
       cacheTtl: config.cacheTtl || 60000,
       enableTelemetry: config.enableTelemetry ?? true,
       defaults: config.defaults || {},
-      onError: config.onError || ((error) => console.error('[Savvagent]', error)),
+      onError: config.onError || ((error) => console.error('[Otto Flags]', error)),
       defaultLanguage: config.defaultLanguage || '',
       disableLanguageDetection: config.disableLanguageDetection ?? false,
       retryAttempts: config.retryAttempts ?? 3,
@@ -76,13 +76,13 @@ export class FlagClient {
         this.config.baseUrl,
         this.config.apiKey,
         (connected) => {
-          console.log(`[Savvagent] Real-time connection: ${connected ? 'connected' : 'disconnected'}`);
+          console.log(`[Otto Flags] Real-time connection: ${connected ? 'connected' : 'disconnected'}`);
         }
       );
 
       // Subscribe to all flag updates to invalidate cache
       this.realtime.subscribe('*', (event) => {
-        console.log(`[Savvagent] Flag ${event.type}: ${event.flagKey}`);
+        console.log(`[Otto Flags] Flag ${event.type}: ${event.flagKey}`);
         this.cache.invalidate(event.flagKey);
       });
 
@@ -104,7 +104,7 @@ export class FlagClient {
       return `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
     }
 
-    const storageKey = 'savvagent_anonymous_id';
+    const storageKey = 'otto_flags_anonymous_id';
     let anonId = localStorage.getItem(storageKey);
 
     if (!anonId) {
@@ -114,7 +114,7 @@ export class FlagClient {
         localStorage.setItem(storageKey, anonId);
       } catch (e) {
         // localStorage might be disabled - continue with in-memory ID
-        console.warn('[Savvagent] Could not save anonymous ID to localStorage:', e);
+        console.warn('[Otto Flags] Could not save anonymous ID to localStorage:', e);
       }
     }
 
@@ -130,9 +130,9 @@ export class FlagClient {
     this.anonymousId = id;
     if (typeof localStorage !== 'undefined') {
       try {
-        localStorage.setItem('savvagent_anonymous_id', id);
+        localStorage.setItem('otto_flags_anonymous_id', id);
       } catch (e) {
-        console.warn('[Savvagent] Could not save anonymous ID to localStorage:', e);
+        console.warn('[Otto Flags] Could not save anonymous ID to localStorage:', e);
       }
     }
   }
@@ -263,7 +263,7 @@ export class FlagClient {
         if (response.status === 401 || response.status === 403) {
           this.authFailed = true;
           this.realtime?.disconnect();
-          console.error(`[Savvagent] Authentication failed (${response.status}). Check your API key. Further requests disabled.`);
+          console.error(`[Otto Flags] Authentication failed (${response.status}). Check your API key. Further requests disabled.`);
           throw new Error(`Authentication failed: ${response.status}`);
         }
 
@@ -283,7 +283,7 @@ export class FlagClient {
         // Log retry attempt
         if (attempt < this.config.retryAttempts) {
           const delay = this.getRetryDelay(attempt);
-          console.warn(`[Savvagent] ${operationName} failed (${response.status}), retrying in ${Math.round(delay)}ms (attempt ${attempt}/${this.config.retryAttempts})`);
+          console.warn(`[Otto Flags] ${operationName} failed (${response.status}), retrying in ${Math.round(delay)}ms (attempt ${attempt}/${this.config.retryAttempts})`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       } catch (error) {
@@ -302,7 +302,7 @@ export class FlagClient {
         // Log retry attempt
         if (attempt < this.config.retryAttempts) {
           const delay = this.getRetryDelay(attempt);
-          console.warn(`[Savvagent] ${operationName} error: ${lastError.message}, retrying in ${Math.round(delay)}ms (attempt ${attempt}/${this.config.retryAttempts})`);
+          console.warn(`[Otto Flags] ${operationName} error: ${lastError.message}, retrying in ${Math.round(delay)}ms (attempt ${attempt}/${this.config.retryAttempts})`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
       }
@@ -512,7 +512,7 @@ export class FlagClient {
    */
   subscribe(flagKey: string, callback: () => void): () => void {
     if (!this.realtime) {
-      console.warn('[Savvagent] Real-time updates are disabled');
+      console.warn('[Otto Flags] Real-time updates are disabled');
       return () => {};
     }
 
@@ -659,7 +659,7 @@ export class FlagClient {
       try {
         callback();
       } catch (e) {
-        console.error('[Savvagent] Override listener error:', e);
+        console.error('[Otto Flags] Override listener error:', e);
       }
     });
   }

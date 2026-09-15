@@ -4,8 +4,8 @@ import pytest
 import httpx
 import respx
 
-from savvagent import FlagClient, FlagClientConfig, FlagContext
-from savvagent.exceptions import InvalidAPIKeyError
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
+from otto_flags.exceptions import InvalidAPIKeyError
 from tests.conftest import mock_flag_response, mock_flags_list_response
 
 
@@ -117,7 +117,7 @@ class TestFlagEvaluation:
     ) -> None:
         """Test that API errors return default value."""
         mock_api.post(
-            "https://flags-api.savvagent.com/api/flags/test-flag/evaluate"
+            "https://flags-api.otto-flags.dev/api/flags/test-flag/evaluate"
         ).mock(return_value=httpx.Response(500, json={"error": "Internal error"}))
 
         result = client.evaluate("test-flag")
@@ -136,7 +136,7 @@ class TestFlagEvaluation:
 
         with respx.mock:
             respx.post(
-                "https://flags-api.savvagent.com/api/flags/my-flag/evaluate"
+                "https://flags-api.otto-flags.dev/api/flags/my-flag/evaluate"
             ).mock(return_value=httpx.Response(500))
 
             with FlagClient(config) as client:
@@ -238,7 +238,7 @@ class TestOverrides:
     @respx.mock
     def test_config_override_merge(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
         """Test merging configuration override."""
-        from savvagent import ConfigOverrideOptions
+        from otto_flags import ConfigOverrideOptions
 
         mock_flag_response(
             mock_api,

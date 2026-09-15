@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a Remix example application demonstrating the integration of the Savvagent SDK for feature flag management. It's part of a larger monorepo (`savvagent-sdks`) managed with pnpm workspaces.
+This is a Remix example application demonstrating the integration of the Otto Flags SDK for feature flag management. It's part of a larger monorepo (`otto-flags`) managed with pnpm workspaces.
 
 ## Development Commands
 
@@ -28,8 +28,8 @@ pnpm typecheck
 ## Environment Configuration
 
 Required environment variables in `.env`:
-- `SAVVAGENT_API_URL`: API endpoint (default: http://localhost:8080)
-- `SAVVAGENT_SDK_KEY`: SDK authentication key
+- `OTTO_FLAGS_API_URL`: API endpoint (default: http://localhost:8080)
+- `OTTO_FLAGS_SDK_KEY`: SDK authentication key
 
 Copy `.env.example` to `.env` and configure before running.
 
@@ -37,23 +37,23 @@ Copy `.env.example` to `.env` and configure before running.
 
 ### Workspace Dependencies
 This example depends on workspace packages:
-- `@savvagent/remix`: Remix-specific SDK utilities (workspace:*)
-- `@savvagent/sdk`: Core Savvagent SDK (workspace:*)
+- `@otto-flags/remix`: Remix-specific SDK utilities (workspace:*)
+- `@otto-flags/sdk`: Core Otto Flags SDK (workspace:*)
 
 Changes to these packages require rebuilding or restarting the dev server.
 
-### Savvagent Integration Pattern
+### Otto Flags Integration Pattern
 The application uses a server-side feature flag evaluation pattern:
 
-1. **Loader Setup**: Create a `savvagentLoader` instance in route loaders using `createSavvagentLoader()` with API configuration
-2. **Server Evaluation**: Feature flags are evaluated server-side in Remix loaders using `savvagent.isEnabled()`
+1. **Loader Setup**: Create a `ottoFlagsLoader` instance in route loaders using `createOttoFlagsLoader()` with API configuration
+2. **Server Evaluation**: Feature flags are evaluated server-side in Remix loaders using `ottoFlags.isEnabled()`
 3. **Client Hydration**: Feature flag states are returned via `json()` and consumed in components via `useLoaderData()`
 
 See `app/routes/_index.tsx:6-30` for the canonical implementation pattern.
 
 ### File Structure
 - `app/root.tsx`: Root layout with stylesheet import
-- `app/routes/_index.tsx`: Main route demonstrating Savvagent loader usage
+- `app/routes/_index.tsx`: Main route demonstrating Otto Flags loader usage
 - `app/styles.css`: Global styles
 - `vite.config.ts`: Vite configuration with dev server on port 5177
 

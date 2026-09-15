@@ -1,11 +1,11 @@
 import { Injectable, OnDestroy, Inject, InjectionToken, Optional } from '@angular/core';
 import { BehaviorSubject, Observable, from, of, Subject } from 'rxjs';
 import { map, takeUntil, catchError, distinctUntilChanged } from 'rxjs/operators';
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult, FlagDefinition } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult, FlagDefinition } from '@otto-flags/sdk';
 
 /**
  * Default context values that apply to all flag evaluations
- * Per SDK Developer Guide: https://flags-docs.savvagent.com/sdk-developer-guide
+ * Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
  */
 export interface DefaultFlagContext {
   /** Application ID for application-scoped flags */
@@ -27,9 +27,9 @@ export interface DefaultFlagContext {
 }
 
 /**
- * Configuration for the Savvagent Angular service
+ * Configuration for the Otto Flags Angular service
  */
-export interface SavvagentConfig {
+export interface OttoFlagsConfig {
   /** SDK API key configuration */
   config: FlagClientConfig;
   /** Default context values applied to all flag evaluations */
@@ -37,9 +37,9 @@ export interface SavvagentConfig {
 }
 
 /**
- * Injection token for Savvagent configuration
+ * Injection token for Otto Flags configuration
  */
-export const SAVVAGENT_CONFIG = new InjectionToken<SavvagentConfig>('SAVVAGENT_CONFIG');
+export const OTTO_FLAGS_CONFIG = new InjectionToken<OttoFlagsConfig>('OTTO_FLAGS_CONFIG');
 
 /**
  * Result from flag evaluation as an Observable
@@ -68,7 +68,7 @@ export interface FlagOptions {
 }
 
 /**
- * Angular service for Savvagent feature flags.
+ * Angular service for Otto Flags feature flags.
  * Provides reactive flag evaluation using RxJS Observables.
  *
  * @example
@@ -76,9 +76,9 @@ export interface FlagOptions {
  * // In your component
  * @Component({...})
  * export class MyComponent {
- *   newFeature$ = this.savvagent.flag$('new-feature');
+ *   newFeature$ = this.ottoFlags.flag$('new-feature');
  *
- *   constructor(private savvagent: SavvagentService) {}
+ *   constructor(private ottoFlags: OttoFlagsService) {}
  * }
  *
  * // In your template
@@ -90,7 +90,7 @@ export interface FlagOptions {
 @Injectable({
   providedIn: 'root'
 })
-export class SavvagentService implements OnDestroy {
+export class OttoFlagsService implements OnDestroy {
   private client: FlagClient | null = null;
   private destroy$ = new Subject<void>();
   private isReady$ = new BehaviorSubject<boolean>(false);
@@ -98,7 +98,7 @@ export class SavvagentService implements OnDestroy {
   private flagSubjects = new Map<string, BehaviorSubject<FlagObservableResult>>();
 
   constructor(
-    @Optional() @Inject(SAVVAGENT_CONFIG) config?: SavvagentConfig
+    @Optional() @Inject(OTTO_FLAGS_CONFIG) config?: OttoFlagsConfig
   ) {
     if (config) {
       this.initialize(config);
@@ -106,19 +106,19 @@ export class SavvagentService implements OnDestroy {
   }
 
   /**
-   * Initialize the Savvagent client with configuration.
-   * Call this if not using the SAVVAGENT_CONFIG injection token.
+   * Initialize the Otto Flags client with configuration.
+   * Call this if not using the OTTO_FLAGS_CONFIG injection token.
    *
-   * @param savvagentConfig - Configuration including API key and default context
+   * @param ottoFlagsConfig - Configuration including API key and default context
    *
    * @example
    * ```typescript
    * @Component({...})
    * export class AppComponent implements OnInit {
-   *   constructor(private savvagent: SavvagentService) {}
+   *   constructor(private ottoFlags: OttoFlagsService) {}
    *
    *   ngOnInit() {
-   *     this.savvagent.initialize({
+   *     this.ottoFlags.initialize({
    *       config: { apiKey: 'sdk_...' },
    *       defaultContext: {
    *         applicationId: 'my-app',
@@ -130,26 +130,26 @@ export class SavvagentService implements OnDestroy {
    * }
    * ```
    */
-  initialize(savvagentConfig: SavvagentConfig): void {
+  initialize(ottoFlagsConfig: OttoFlagsConfig): void {
     if (this.client) {
-      console.warn('[Savvagent] Client already initialized. Call close() first to reinitialize.');
+      console.warn('[Otto Flags] Client already initialized. Call close() first to reinitialize.');
       return;
     }
 
     try {
-      this.client = new FlagClient(savvagentConfig.config);
+      this.client = new FlagClient(ottoFlagsConfig.config);
 
       // Convert DefaultFlagContext to FlagContext format (camelCase to snake_case)
-      if (savvagentConfig.defaultContext) {
+      if (ottoFlagsConfig.defaultContext) {
         this.defaultContext = {
-          application_id: savvagentConfig.defaultContext.applicationId,
-          environment: savvagentConfig.defaultContext.environment,
-          organization_id: savvagentConfig.defaultContext.organizationId,
-          user_id: savvagentConfig.defaultContext.userId,
-          anonymous_id: savvagentConfig.defaultContext.anonymousId,
-          session_id: savvagentConfig.defaultContext.sessionId,
-          language: savvagentConfig.defaultContext.language,
-          attributes: savvagentConfig.defaultContext.attributes,
+          application_id: ottoFlagsConfig.defaultContext.applicationId,
+          environment: ottoFlagsConfig.defaultContext.environment,
+          organization_id: ottoFlagsConfig.defaultContext.organizationId,
+          user_id: ottoFlagsConfig.defaultContext.userId,
+          anonymous_id: ottoFlagsConfig.defaultContext.anonymousId,
+          session_id: ottoFlagsConfig.defaultContext.sessionId,
+          language: ottoFlagsConfig.defaultContext.language,
+          attributes: ottoFlagsConfig.defaultContext.attributes,
         };
       }
 
@@ -160,8 +160,8 @@ export class SavvagentService implements OnDestroy {
         this.reEvaluateAllFlags();
       });
     } catch (error) {
-      console.error('[Savvagent] Failed to initialize client:', error);
-      savvagentConfig.config.onError?.(error as Error);
+      console.error('[Otto Flags] Failed to initialize client:', error);
+      ottoFlagsConfig.config.onError?.(error as Error);
     }
   }
 
@@ -211,7 +211,7 @@ export class SavvagentService implements OnDestroy {
    * @example
    * ```typescript
    * // In your component
-   * newFeature$ = this.savvagent.flag$('new-feature', {
+   * newFeature$ = this.ottoFlags.flag$('new-feature', {
    *   defaultValue: false,
    *   realtime: true,
    *   context: { attributes: { plan: 'pro' } }
@@ -286,7 +286,7 @@ export class SavvagentService implements OnDestroy {
       subject.next({
         value: defaultValue,
         loading: false,
-        error: new Error('Savvagent client not initialized'),
+        error: new Error('Otto Flags client not initialized'),
         result: null,
       });
       return;
@@ -333,7 +333,7 @@ export class SavvagentService implements OnDestroy {
    *
    * @example
    * ```typescript
-   * isFeatureEnabled$ = this.savvagent.flagValue$('my-feature');
+   * isFeatureEnabled$ = this.ottoFlags.flagValue$('my-feature');
    *
    * // In template
    * <button *ngIf="isFeatureEnabled$ | async">New Button</button>
@@ -357,7 +357,7 @@ export class SavvagentService implements OnDestroy {
    * @example
    * ```typescript
    * async checkFeature() {
-   *   const result = await this.savvagent.evaluate('new-feature');
+   *   const result = await this.ottoFlags.evaluate('new-feature');
    *   if (result.value) {
    *     // Feature is enabled
    *   }
@@ -366,7 +366,7 @@ export class SavvagentService implements OnDestroy {
    */
   async evaluate(flagKey: string, context?: FlagContext): Promise<FlagEvaluationResult> {
     if (!this.client) {
-      throw new Error('Savvagent client not initialized');
+      throw new Error('Otto Flags client not initialized');
     }
     return this.client.evaluate(flagKey, this.mergeContext(context));
   }
@@ -394,7 +394,7 @@ export class SavvagentService implements OnDestroy {
    *
    * @example
    * ```typescript
-   * await this.savvagent.withFlag('analytics-enabled', async () => {
+   * await this.ottoFlags.withFlag('analytics-enabled', async () => {
    *   await this.analytics.track('page_view');
    * });
    * ```
@@ -541,7 +541,7 @@ export class SavvagentService implements OnDestroy {
     }
     return from(this.client.getAllFlags(environment)).pipe(
       catchError((error) => {
-        console.error('[Savvagent] Failed to fetch all flags:', error);
+        console.error('[Otto Flags] Failed to fetch all flags:', error);
         return of([]);
       })
     );

@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { useFlags, useUser, useTrackError, useSavvagent } from '@savvagent/vue';
+import { useFlags, useUser, useTrackError, useOttoFlags } from '@otto-flags/vue';
 import FlagOverridePanel from './FlagOverridePanel.vue';
 
 /**
  * Feature Demo Component
- * Demonstrates best practices for using Savvagent Vue SDK
+ * Demonstrates best practices for using Otto Flags Vue SDK
  *
  * Uses the useFlags composable for optimal performance - evaluates multiple flags
  * with a single state update, preventing unnecessary re-renders.
  */
 
-const { client } = useSavvagent();
+const { client } = useOttoFlags();
 
 // Per SDK Developer Guide: Use useFlags for multiple flags in the same component
 // This is more performant than multiple useFlag calls as it:
@@ -65,7 +65,7 @@ const isOverridden = (flagKey: string): boolean => {
 
 <template>
   <div class="container">
-    <h1>Savvagent Vue Example</h1>
+    <h1>Otto Flags Vue Example</h1>
     <p class="subtitle">SDK Developer Guide Best Practices Demo</p>
 
     <p v-if="loading" class="loading">Loading feature flags...</p>

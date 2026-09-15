@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.savvagent.sdk"
+    namespace = "com.savvagent.ottoflags.sdk"
     compileSdk = 34
 
     defaultConfig {
@@ -72,7 +72,7 @@ dependencies {
 publishing {
     publications {
         register<MavenPublication>("release") {
-            groupId = "com.savvagent"
+            groupId = "com.savvagent.ottoflags"
             artifactId = "android-sdk"
             version = "0.1.0"
 
@@ -81,9 +81,9 @@ publishing {
             }
 
             pom {
-                name.set("Savvagent Android SDK")
-                description.set("Official Android SDK for Savvagent feature flags")
-                url.set("https://github.com/savvagent/savvagent-sdks")
+                name.set("Otto Flags Android SDK")
+                description.set("Official Android SDK for Otto Flags feature flags")
+                url.set("https://github.com/savvagent/otto-flags")
 
                 licenses {
                     license {
@@ -94,16 +94,16 @@ publishing {
 
                 developers {
                     developer {
-                        id.set("savvagent")
-                        name.set("Savvagent Team")
-                        email.set("support@savvagent.com")
+                        id.set("otto-flags")
+                        name.set("Otto Flags Team")
+                        email.set("support@otto-flags.dev")
                     }
                 }
 
                 scm {
-                    connection.set("scm:git:git://github.com/savvagent/savvagent-sdks.git")
-                    developerConnection.set("scm:git:ssh://github.com/savvagent/savvagent-sdks.git")
-                    url.set("https://github.com/savvagent/savvagent-sdks")
+                    connection.set("scm:git:git://github.com/savvagent/otto-flags.git")
+                    developerConnection.set("scm:git:ssh://github.com/savvagent/otto-flags.git")
+                    url.set("https://github.com/savvagent/otto-flags")
                 }
             }
         }

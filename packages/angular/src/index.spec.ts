@@ -6,26 +6,26 @@ import * as AngularSDK from './index';
 
 describe('Package Exports', () => {
   describe('Module Exports', () => {
-    it('should export SavvagentModule', () => {
-      expect(AngularSDK.SavvagentModule).toBeDefined();
-      expect(typeof AngularSDK.SavvagentModule).toBe('function');
+    it('should export OttoFlagsModule', () => {
+      expect(AngularSDK.OttoFlagsModule).toBeDefined();
+      expect(typeof AngularSDK.OttoFlagsModule).toBe('function');
     });
   });
 
   describe('Service Exports', () => {
-    it('should export SavvagentService', () => {
-      expect(AngularSDK.SavvagentService).toBeDefined();
-      expect(typeof AngularSDK.SavvagentService).toBe('function');
+    it('should export OttoFlagsService', () => {
+      expect(AngularSDK.OttoFlagsService).toBeDefined();
+      expect(typeof AngularSDK.OttoFlagsService).toBe('function');
     });
 
-    it('should export SAVVAGENT_CONFIG injection token', () => {
-      expect(AngularSDK.SAVVAGENT_CONFIG).toBeDefined();
+    it('should export OTTO_FLAGS_CONFIG injection token', () => {
+      expect(AngularSDK.OTTO_FLAGS_CONFIG).toBeDefined();
     });
   });
 
   describe('Type Exports', () => {
-    it('should have correct type structure for SavvagentConfig', () => {
-      const config: AngularSDK.SavvagentConfig = {
+    it('should have correct type structure for OttoFlagsConfig', () => {
+      const config: AngularSDK.OttoFlagsConfig = {
         config: {
           apiKey: 'test',
         },
@@ -70,7 +70,7 @@ describe('Package Exports', () => {
     });
   });
 
-  describe('Re-exported Types from @savvagent/sdk', () => {
+  describe('Re-exported Types from @otto-flags/sdk', () => {
     it('should re-export FlagClient', () => {
       expect(AngularSDK.FlagClient).toBeDefined();
       expect(typeof AngularSDK.FlagClient).toBe('function');
@@ -105,9 +105,9 @@ describe('Package Exports', () => {
   describe('Package Structure', () => {
     it('should export all documented APIs', () => {
       const expectedExports = [
-        'SavvagentModule',
-        'SavvagentService',
-        'SAVVAGENT_CONFIG',
+        'OttoFlagsModule',
+        'OttoFlagsService',
+        'OTTO_FLAGS_CONFIG',
         'FlagClient',
       ];
 

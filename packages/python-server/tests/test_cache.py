@@ -3,7 +3,7 @@
 import time
 import pytest
 
-from savvagent import FlagCache, AsyncFlagCache
+from otto_flags import FlagCache, AsyncFlagCache
 
 
 class TestFlagCache:

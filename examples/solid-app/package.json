@@ -2,7 +2,7 @@
   "name": "solid-example",
   "version": "0.0.3",
   "private": true,
-  "description": "Example SolidJS app using Savvagent SDK",
+  "description": "Example SolidJS app using Otto Flags SDK",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,8 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@savvagent/solid": "workspace:*",
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/solid": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "solid-js": "^1.8.0"
   },
   "devDependencies": {

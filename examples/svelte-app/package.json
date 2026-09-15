@@ -2,7 +2,7 @@
   "name": "svelte-example",
   "version": "0.0.3",
   "private": true,
-  "description": "Example Svelte app using Savvagent SDK",
+  "description": "Example Svelte app using Otto Flags SDK",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,8 +11,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json"
   },
   "dependencies": {
-    "@savvagent/svelte": "workspace:*",
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/svelte": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "svelte": "^4.2.0"
   },
   "devDependencies": {

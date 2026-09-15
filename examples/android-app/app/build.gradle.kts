@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.savvagent.example"
+    namespace = "com.savvagent.ottoflags.example"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.savvagent.example"
+        applicationId = "com.savvagent.ottoflags.example"
         minSdk = 21
         targetSdk = 34
         versionCode = 1
@@ -46,8 +46,8 @@ android {
 }
 
 dependencies {
-    // Savvagent SDK
-    implementation("com.savvagent:android-sdk:0.1.0")
+    // Otto Flags SDK
+    implementation("com.savvagent.ottoflags:android-sdk:0.1.0")
 
     // Kotlin
     implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.22")

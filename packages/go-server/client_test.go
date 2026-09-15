@@ -1,4 +1,4 @@
-package savvagent
+package ottoflags
 
 import (
 	"encoding/json"

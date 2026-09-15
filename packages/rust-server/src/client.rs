@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum SavvagentError {
+pub enum OttoFlagsError {
     #[error("Invalid API key: must start with 'sdk_'")]
     InvalidApiKey,
 
@@ -22,7 +22,7 @@ pub enum SavvagentError {
     ApiError(String),
 }
 
-/// Savvagent FlagClient for server-side feature flag evaluation
+/// Otto Flags FlagClient for server-side feature flag evaluation
 #[derive(Clone)]
 pub struct FlagClient {
     config: Arc<Config>,
@@ -34,20 +34,20 @@ pub struct FlagClient {
 
 impl FlagClient {
     /// Create a new FlagClient with the given configuration
-    pub fn new(config: Config) -> Result<Self, SavvagentError> {
+    pub fn new(config: Config) -> Result<Self, OttoFlagsError> {
         // Validate API key
         if !config.api_key.starts_with("sdk_") {
-            return Err(SavvagentError::InvalidApiKey);
+            return Err(OttoFlagsError::InvalidApiKey);
         }
 
         let http_client = HttpClient::builder()
             .timeout(config.timeout)
             .build()
-            .map_err(SavvagentError::RequestFailed)?;
+            .map_err(OttoFlagsError::RequestFailed)?;
 
         let cache = Cache::new(config.cache_ttl);
 
-        tracing::info!("Savvagent FlagClient initialized");
+        tracing::info!("Otto Flags FlagClient initialized");
 
         Ok(Self {
             config: Arc::new(config),
@@ -63,7 +63,7 @@ impl FlagClient {
         &self,
         flag_key: &str,
         context: Option<Context>,
-    ) -> Result<EvaluationResult, SavvagentError> {
+    ) -> Result<EvaluationResult, OttoFlagsError> {
         // Check cache first
         if let Some(cached_entry) = self.cache.get_entry(flag_key) {
             let mut configuration = cached_entry.configuration.clone();
@@ -200,7 +200,7 @@ impl FlagClient {
         &self,
         flag_key: &str,
         context: Option<Context>,
-    ) -> Result<Option<serde_json::Value>, SavvagentError> {
+    ) -> Result<Option<serde_json::Value>, OttoFlagsError> {
         let result = self.evaluate(flag_key, context).await?;
 
         if !result.value {
@@ -216,7 +216,7 @@ impl FlagClient {
         &self,
         flag_key: &str,
         context: Option<Context>,
-    ) -> Result<VariationResult, SavvagentError> {
+    ) -> Result<VariationResult, OttoFlagsError> {
         let result = self.evaluate(flag_key, context).await?;
 
         let variation = result.variation.unwrap_or_else(|| "control".to_string());
@@ -238,7 +238,7 @@ impl FlagClient {
         self.cache.clear();
     }
 
-    fn get_default_result(&self, flag_key: &str) -> Result<EvaluationResult, SavvagentError> {
+    fn get_default_result(&self, flag_key: &str) -> Result<EvaluationResult, OttoFlagsError> {
         let default_value = self.config.defaults.get(flag_key).copied().unwrap_or(false);
 
         Ok(EvaluationResult {
@@ -258,14 +258,14 @@ impl FlagClient {
         flag_key: impl Into<String>,
         config: serde_json::Value,
         options: Option<ConfigOverrideOptions>,
-    ) -> Result<(), SavvagentError> {
+    ) -> Result<(), OttoFlagsError> {
         let flag_key = flag_key.into();
         let opts = options.unwrap_or_else(ConfigOverrideOptions::new);
 
         // Validate JSON structure
         if opts.validate {
             serde_json::to_string(&config).map_err(|e| {
-                SavvagentError::ApiError(format!("Invalid configuration for flag '{}': {}", flag_key, e))
+                OttoFlagsError::ApiError(format!("Invalid configuration for flag '{}': {}", flag_key, e))
             })?;
         }
 

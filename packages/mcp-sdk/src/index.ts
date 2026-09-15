@@ -1,9 +1,9 @@
 /**
- * @savvagent/mcp-sdk
- * Model Context Protocol SDK for Savvagent integrations
+ * @otto-flags/mcp-sdk
+ * Model Context Protocol SDK for Otto Flags integrations
  *
  * This SDK provides the foundation for building MCP servers that integrate
- * with Savvagent's AI-powered feature flag platform using StreamableHTTP transport
+ * with Otto Flags's AI-powered feature flag platform using StreamableHTTP transport
  * and JSON-RPC 2.0 protocol.
  *
  * Key features:

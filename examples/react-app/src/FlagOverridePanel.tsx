@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSavvagent } from '@savvagent/react';
-import type { FlagDefinition } from '@savvagent/react';
+import { useOttoFlags } from '@otto-flags/react';
+import type { FlagDefinition } from '@otto-flags/react';
 
-const STORAGE_KEY = 'savvagent_local_overrides';
+const STORAGE_KEY = 'otto_flags_local_overrides';
 
 /**
  * Flag Override Panel
@@ -13,7 +13,7 @@ const STORAGE_KEY = 'savvagent_local_overrides';
  * which are applied at the evaluation level (before cache/API).
  */
 export function FlagOverridePanel() {
-  const { client, isReady } = useSavvagent();
+  const { client, isReady } = useOttoFlags();
   const [isOpen, setIsOpen] = useState(false);
   const [flags, setFlags] = useState<FlagDefinition[]>([]);
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
@@ -260,7 +260,7 @@ export function FlagOverridePanel() {
  * This hook subscribes to the client's override changes.
  */
 export function useLocalOverrides(): Record<string, boolean> {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
 
   useEffect(() => {

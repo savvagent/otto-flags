@@ -2,14 +2,14 @@
  * Server-side utilities for Next.js Server Components, Route Handlers, and Server Actions
  */
 
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@otto-flags/sdk';
 import { cookies, headers } from 'next/headers';
 
 // Global client instance for server-side usage
 let serverClient: FlagClient | null = null;
 
 /**
- * Initialize the server-side Savvagent client.
+ * Initialize the server-side Otto Flags client.
  * Call this once in your root layout or at application startup.
  *
  * @param config - Client configuration
@@ -17,11 +17,11 @@ let serverClient: FlagClient | null = null;
  * @example
  * ```tsx
  * // app/layout.tsx
- * import { initServerClient } from '@savvagent/nextjs/server';
+ * import { initServerClient } from '@otto-flags/nextjs/server';
  *
  * initServerClient({
- *   apiKey: process.env.SAVVAGENT_API_KEY!,
- *   applicationId: process.env.SAVVAGENT_APP_ID,
+ *   apiKey: process.env.OTTO_FLAGS_API_KEY!,
+ *   applicationId: process.env.OTTO_FLAGS_APP_ID,
  * });
  * ```
  */
@@ -32,7 +32,7 @@ export function initServerClient(config: FlagClientConfig): void {
 }
 
 /**
- * Get the server-side Savvagent client instance.
+ * Get the server-side Otto Flags client instance.
  *
  * @returns The FlagClient instance
  * @throws Error if client is not initialized
@@ -71,7 +71,7 @@ export async function createServerContext(
 
   const context: FlagContext = {
     user_id: cookieStore.get('user_id')?.value,
-    anonymous_id: cookieStore.get('savvagent_anonymous_id')?.value,
+    anonymous_id: cookieStore.get('otto_flags_anonymous_id')?.value,
     session_id: cookieStore.get('session_id')?.value,
     language: headersList.get('accept-language')?.split(',')[0],
     ...overrides,
@@ -90,7 +90,7 @@ export async function createServerContext(
  * @example
  * ```tsx
  * // Server Component
- * import { isEnabled } from '@savvagent/nextjs/server';
+ * import { isEnabled } from '@otto-flags/nextjs/server';
  *
  * export default async function Page() {
  *   const enabled = await isEnabled('new-layout');
@@ -117,7 +117,7 @@ export async function isEnabled(
  *
  * @example
  * ```tsx
- * import { evaluate } from '@savvagent/nextjs/server';
+ * import { evaluate } from '@otto-flags/nextjs/server';
  *
  * export default async function Page() {
  *   const result = await evaluate('premium-features');
@@ -146,7 +146,7 @@ export async function evaluate(flagKey: string, context?: FlagContext) {
  *
  * @example
  * ```tsx
- * import { withFlag } from '@savvagent/nextjs/server';
+ * import { withFlag } from '@otto-flags/nextjs/server';
  *
  * export default async function Page() {
  *   const data = await withFlag('use-new-api', async () => {
@@ -179,7 +179,7 @@ export async function withFlag<T>(
  * // Server Action
  * 'use server';
  *
- * import { trackError } from '@savvagent/nextjs/server';
+ * import { trackError } from '@otto-flags/nextjs/server';
  *
  * export async function submitForm(data: FormData) {
  *   try {
@@ -212,7 +212,7 @@ export async function trackError(
  * @example
  * ```tsx
  * // app/api/data/route.ts
- * import { evaluateForRequest } from '@savvagent/nextjs/server';
+ * import { evaluateForRequest } from '@otto-flags/nextjs/server';
  * import { NextRequest } from 'next/server';
  *
  * export async function GET(request: NextRequest) {
@@ -241,7 +241,7 @@ export async function evaluateForRequest(
 
   const requestContext: FlagContext = {
     user_id: cookies.user_id,
-    anonymous_id: cookies.savvagent_anonymous_id,
+    anonymous_id: cookies.otto_flags_anonymous_id,
     session_id: cookies.session_id,
     language: request.headers.get('accept-language')?.split(',')[0],
     ...context,
@@ -292,7 +292,7 @@ export interface EvaluateMultipleOptions {
  * @example
  * ```tsx
  * // Server Component
- * import { evaluateMultiple } from '@savvagent/nextjs/server';
+ * import { evaluateMultiple } from '@otto-flags/nextjs/server';
  *
  * export default async function Page() {
  *   const { values } = await evaluateMultiple(
@@ -361,7 +361,7 @@ export async function evaluateMultiple(
  * @example
  * ```tsx
  * // Server Component
- * import { isEnabledMultiple } from '@savvagent/nextjs/server';
+ * import { isEnabledMultiple } from '@otto-flags/nextjs/server';
  *
  * export default async function Page() {
  *   const flags = await isEnabledMultiple(

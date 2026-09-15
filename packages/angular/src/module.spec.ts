@@ -1,30 +1,30 @@
 import { TestBed } from '@angular/core/testing';
-import { SavvagentModule } from './module';
-import { SavvagentService, SAVVAGENT_CONFIG, SavvagentConfig } from './service';
+import { OttoFlagsModule } from './module';
+import { OttoFlagsService, OTTO_FLAGS_CONFIG, OttoFlagsConfig } from './service';
 
-describe('SavvagentModule', () => {
+describe('OttoFlagsModule', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
   });
 
   describe('Module Configuration', () => {
     it('should create module', () => {
-      const module = new SavvagentModule();
+      const module = new OttoFlagsModule();
       expect(module).toBeTruthy();
     });
 
-    it('should provide SavvagentService by default', () => {
+    it('should provide OttoFlagsService by default', () => {
       TestBed.configureTestingModule({
-        imports: [SavvagentModule],
+        imports: [OttoFlagsModule],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
     });
   });
 
   describe('forRoot Configuration', () => {
-    const testConfig: SavvagentConfig = {
+    const testConfig: OttoFlagsConfig = {
       config: {
         apiKey: 'sdk_test_api_key',
         baseUrl: 'https://api.test.com',
@@ -36,57 +36,57 @@ describe('SavvagentModule', () => {
     };
 
     it('should return ModuleWithProviders', () => {
-      const moduleWithProviders = SavvagentModule.forRoot(testConfig);
+      const moduleWithProviders = OttoFlagsModule.forRoot(testConfig);
 
       expect(moduleWithProviders).toEqual({
-        ngModule: SavvagentModule,
+        ngModule: OttoFlagsModule,
         providers: [
           {
-            provide: SAVVAGENT_CONFIG,
+            provide: OTTO_FLAGS_CONFIG,
             useValue: testConfig,
           },
-          SavvagentService,
+          OttoFlagsService,
         ],
       });
     });
 
-    it('should provide SAVVAGENT_CONFIG token', () => {
+    it('should provide OTTO_FLAGS_CONFIG token', () => {
       TestBed.configureTestingModule({
-        imports: [SavvagentModule.forRoot(testConfig)],
+        imports: [OttoFlagsModule.forRoot(testConfig)],
       });
 
-      const config = TestBed.inject(SAVVAGENT_CONFIG);
+      const config = TestBed.inject(OTTO_FLAGS_CONFIG);
       expect(config).toEqual(testConfig);
     });
 
-    it('should initialize SavvagentService with config', () => {
+    it('should initialize OttoFlagsService with config', () => {
       TestBed.configureTestingModule({
-        imports: [SavvagentModule.forRoot(testConfig)],
+        imports: [OttoFlagsModule.forRoot(testConfig)],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       expect(service.isReady).toBe(true);
     });
 
     it('should work with minimal config', () => {
-      const minimalConfig: SavvagentConfig = {
+      const minimalConfig: OttoFlagsConfig = {
         config: {
           apiKey: 'sdk_test_key',
         },
       };
 
       TestBed.configureTestingModule({
-        imports: [SavvagentModule.forRoot(minimalConfig)],
+        imports: [OttoFlagsModule.forRoot(minimalConfig)],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       expect(service.isReady).toBe(true);
     });
 
     it('should work with full config including all context fields', () => {
-      const fullConfig: SavvagentConfig = {
+      const fullConfig: OttoFlagsConfig = {
         config: {
           apiKey: 'sdk_test_api_key',
           baseUrl: 'https://api.test.com',
@@ -110,13 +110,13 @@ describe('SavvagentModule', () => {
       };
 
       TestBed.configureTestingModule({
-        imports: [SavvagentModule.forRoot(fullConfig)],
+        imports: [OttoFlagsModule.forRoot(fullConfig)],
       });
 
-      const config = TestBed.inject(SAVVAGENT_CONFIG);
+      const config = TestBed.inject(OTTO_FLAGS_CONFIG);
       expect(config).toEqual(fullConfig);
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       expect(service.isReady).toBe(true);
     });
@@ -126,24 +126,24 @@ describe('SavvagentModule', () => {
     it('should provide same service instance within module scope', () => {
       TestBed.configureTestingModule({
         imports: [
-          SavvagentModule.forRoot({
+          OttoFlagsModule.forRoot({
             config: { apiKey: 'test' },
           }),
         ],
       });
 
-      const service1 = TestBed.inject(SavvagentService);
-      const service2 = TestBed.inject(SavvagentService);
+      const service1 = TestBed.inject(OttoFlagsService);
+      const service2 = TestBed.inject(OttoFlagsService);
 
       expect(service1).toBe(service2);
     });
 
     it('should work without forRoot (service providedIn: root)', () => {
       TestBed.configureTestingModule({
-        imports: [SavvagentModule],
+        imports: [OttoFlagsModule],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       // Service won't be initialized without config
       expect(service.isReady).toBe(false);
@@ -152,22 +152,22 @@ describe('SavvagentModule', () => {
 
   describe('Multiple Imports', () => {
     it('should handle multiple module imports', () => {
-      const config1: SavvagentConfig = {
+      const config1: OttoFlagsConfig = {
         config: { apiKey: 'key1' },
       };
-      const config2: SavvagentConfig = {
+      const config2: OttoFlagsConfig = {
         config: { apiKey: 'key2' },
       };
 
       // The last imported config should win
       TestBed.configureTestingModule({
         imports: [
-          SavvagentModule.forRoot(config1),
-          SavvagentModule.forRoot(config2),
+          OttoFlagsModule.forRoot(config1),
+          OttoFlagsModule.forRoot(config2),
         ],
       });
 
-      const config = TestBed.inject(SAVVAGENT_CONFIG);
+      const config = TestBed.inject(OTTO_FLAGS_CONFIG);
       // Due to Angular's DI, the first provider typically wins,
       // but this tests that the setup doesn't break
       expect(config).toBeDefined();
@@ -178,7 +178,7 @@ describe('SavvagentModule', () => {
     it('should allow service to evaluate flags after module setup', async () => {
       TestBed.configureTestingModule({
         imports: [
-          SavvagentModule.forRoot({
+          OttoFlagsModule.forRoot({
             config: { apiKey: 'sdk_test' },
             defaultContext: {
               applicationId: 'test-app',
@@ -187,7 +187,7 @@ describe('SavvagentModule', () => {
         ],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       expect(service.isReady).toBe(true);
       expect(service.flagClient).not.toBeNull();
@@ -195,7 +195,7 @@ describe('SavvagentModule', () => {
 
     it('should support standalone component pattern (Angular 14+)', () => {
       // Simulate standalone component setup
-      const providers = SavvagentModule.forRoot({
+      const providers = OttoFlagsModule.forRoot({
         config: { apiKey: 'sdk_test' },
       }).providers || [];
 
@@ -203,7 +203,7 @@ describe('SavvagentModule', () => {
         providers,
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
       expect(service.isReady).toBe(true);
     });
@@ -217,13 +217,13 @@ describe('SavvagentModule', () => {
 
       expect(() => {
         TestBed.configureTestingModule({
-          imports: [SavvagentModule.forRoot(invalidConfig)],
+          imports: [OttoFlagsModule.forRoot(invalidConfig)],
         });
       }).not.toThrow();
     });
 
     it('should handle null/undefined values in config', () => {
-      const configWithNulls: SavvagentConfig = {
+      const configWithNulls: OttoFlagsConfig = {
         config: {
           apiKey: 'test',
           baseUrl: undefined,
@@ -235,17 +235,17 @@ describe('SavvagentModule', () => {
       };
 
       TestBed.configureTestingModule({
-        imports: [SavvagentModule.forRoot(configWithNulls)],
+        imports: [OttoFlagsModule.forRoot(configWithNulls)],
       });
 
-      const service = TestBed.inject(SavvagentService);
+      const service = TestBed.inject(OttoFlagsService);
       expect(service).toBeTruthy();
     });
   });
 
   describe('Type Safety', () => {
     it('should enforce correct config structure', () => {
-      const validConfig: SavvagentConfig = {
+      const validConfig: OttoFlagsConfig = {
         config: {
           apiKey: 'test_api_key',
         },
@@ -254,12 +254,12 @@ describe('SavvagentModule', () => {
         },
       };
 
-      const moduleWithProviders = SavvagentModule.forRoot(validConfig);
-      expect(moduleWithProviders.ngModule).toBe(SavvagentModule);
+      const moduleWithProviders = OttoFlagsModule.forRoot(validConfig);
+      expect(moduleWithProviders.ngModule).toBe(OttoFlagsModule);
     });
 
     it('should accept all valid defaultContext properties', () => {
-      const config: SavvagentConfig = {
+      const config: OttoFlagsConfig = {
         config: { apiKey: 'test' },
         defaultContext: {
           applicationId: 'app',
@@ -275,7 +275,7 @@ describe('SavvagentModule', () => {
 
       expect(() => {
         TestBed.configureTestingModule({
-          imports: [SavvagentModule.forRoot(config)],
+          imports: [OttoFlagsModule.forRoot(config)],
         });
       }).not.toThrow();
     });

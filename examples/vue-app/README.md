@@ -1,13 +1,13 @@
-# Savvagent Vue Example
+# Otto Flags Vue Example
 
-Example Vue 3 application demonstrating how to use the Savvagent Vue SDK with composables.
+Example Vue 3 application demonstrating how to use the Otto Flags Vue SDK with composables.
 
 ## Features
 
 - Vue 3 with Composition API
 - TypeScript
 - Vite for fast development
-- Savvagent Vue composables (`useFeatureFlag`, `useSavvagent`)
+- Otto Flags Vue composables (`useFeatureFlag`, `useOttoFlags`)
 - Real-time feature flag updates
 - Hot module replacement
 
@@ -25,8 +25,8 @@ Example Vue 3 application demonstrating how to use the Savvagent Vue SDK with co
 
    Edit `.env.local`:
    ```bash
-   VITE_SAVVAGENT_API_URL=http://localhost:8080
-   VITE_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   VITE_OTTO_FLAGS_API_URL=http://localhost:8080
+   VITE_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -42,7 +42,7 @@ Example Vue 3 application demonstrating how to use the Savvagent Vue SDK with co
 
 ```vue
 <script setup lang="ts">
-import { useFeatureFlag } from '@savvagent/vue';
+import { useFeatureFlag } from '@otto-flags/vue';
 
 const { isEnabled, loading } = useFeatureFlag('new-feature', {
   userId: 'user-123',
@@ -64,14 +64,14 @@ const { isEnabled, loading } = useFeatureFlag('new-feature', {
 
 ```typescript
 import { createApp } from 'vue';
-import { createSavvagent } from '@savvagent/vue';
+import { createOttoFlags } from '@otto-flags/vue';
 import App from './App.vue';
 
 const app = createApp(App);
 
-app.use(createSavvagent({
-  apiUrl: import.meta.env.VITE_SAVVAGENT_API_URL,
-  sdkKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY,
+app.use(createOttoFlags({
+  apiUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL,
+  sdkKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY,
 }));
 
 app.mount('#app');
@@ -80,5 +80,5 @@ app.mount('#app');
 ## Learn More
 
 - [Vue 3 Documentation](https://vuejs.org/)
-- [Savvagent Vue SDK Documentation](../../packages/vue/README.md)
+- [Otto Flags Vue SDK Documentation](../../packages/vue/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

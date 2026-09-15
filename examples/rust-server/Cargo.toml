@@ -2,11 +2,11 @@
 name = "rust-server-example"
 version = "0.0.0"
 edition = "2021"
-authors = ["Savvagent Team"]
-description = "Example Rust/Axum application using Savvagent SDK"
+authors = ["Otto Flags Team"]
+description = "Example Rust/Axum application using Otto Flags SDK"
 
 [dependencies]
-savvagent = { version = "0.1.0", path = "../../packages/rust-server" }
+otto-flags = { version = "0.1.0", path = "../../packages/rust-server" }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

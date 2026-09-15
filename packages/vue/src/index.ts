@@ -1,5 +1,5 @@
 /**
- * @savvagent/vue - Vue SDK for Savvagent feature flags
+ * @otto-flags/vue - Vue SDK for Otto Flags feature flags
  *
  * Provides Vue 3 Composition API composables for feature flag evaluation.
  *
@@ -16,12 +16,12 @@ import {
   type InjectionKey,
   type App,
 } from 'vue';
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@otto-flags/sdk';
 
 // Injection keys
-const SavvagentClientKey: InjectionKey<FlagClient> = Symbol('SavvagentClient');
-const SavvagentDefaultContextKey: InjectionKey<Ref<FlagContext>> = Symbol('SavvagentDefaultContext');
-const SavvagentReadyKey: InjectionKey<Ref<boolean>> = Symbol('SavvagentReady');
+const OttoFlagsClientKey: InjectionKey<FlagClient> = Symbol('OttoFlagsClient');
+const OttoFlagsDefaultContextKey: InjectionKey<Ref<FlagContext>> = Symbol('OttoFlagsDefaultContext');
+const OttoFlagsReadyKey: InjectionKey<Ref<boolean>> = Symbol('OttoFlagsReady');
 
 /**
  * Default context values that apply to all flag evaluations
@@ -47,9 +47,9 @@ export interface DefaultFlagContext {
 }
 
 /**
- * Plugin options for SavvagentPlugin
+ * Plugin options for OttoFlagsPlugin
  */
-export interface SavvagentPluginOptions {
+export interface OttoFlagsPluginOptions {
   /** Client configuration */
   config: FlagClientConfig;
   /** Default context values applied to all flag evaluations */
@@ -76,7 +76,7 @@ function normalizeContext(defaultContext?: DefaultFlagContext): FlagContext {
 }
 
 /**
- * Vue plugin to install Savvagent globally.
+ * Vue plugin to install Otto Flags globally.
  *
  * @param app - Vue app instance
  * @param options - Plugin options with config and defaultContext
@@ -84,10 +84,10 @@ function normalizeContext(defaultContext?: DefaultFlagContext): FlagContext {
  * @example
  * ```ts
  * import { createApp } from 'vue';
- * import { SavvagentPlugin } from '@savvagent/vue';
+ * import { OttoFlagsPlugin } from '@otto-flags/vue';
  *
  * const app = createApp(App);
- * app.use(SavvagentPlugin, {
+ * app.use(OttoFlagsPlugin, {
  *   config: {
  *     apiKey: 'sdk_...',
  *     applicationId: 'your-app-id',
@@ -99,8 +99,8 @@ function normalizeContext(defaultContext?: DefaultFlagContext): FlagContext {
  * });
  * ```
  */
-export const SavvagentPlugin = {
-  install(app: App, options: SavvagentPluginOptions | FlagClientConfig) {
+export const OttoFlagsPlugin = {
+  install(app: App, options: OttoFlagsPluginOptions | FlagClientConfig) {
     // Support both old format (just config) and new format (options object)
     const config = 'config' in options ? options.config : options;
     const defaultContext = 'defaultContext' in options ? options.defaultContext : undefined;
@@ -120,17 +120,17 @@ export const SavvagentPlugin = {
       client.setOverrides(initialOverrides);
     }
 
-    app.provide(SavvagentClientKey, client);
-    app.provide(SavvagentDefaultContextKey, normalizedContext);
-    app.provide(SavvagentReadyKey, isReady);
+    app.provide(OttoFlagsClientKey, client);
+    app.provide(OttoFlagsDefaultContextKey, normalizedContext);
+    app.provide(OttoFlagsReadyKey, isReady);
 
     // Expose on global properties for debugging
-    app.config.globalProperties.$savvagent = client;
+    app.config.globalProperties.$ottoFlags = client;
   },
 };
 
 /**
- * Provide the Savvagent client to child components.
+ * Provide the Otto Flags client to child components.
  * Alternative to using the plugin.
  *
  * @param config - Client configuration
@@ -140,16 +140,16 @@ export const SavvagentPlugin = {
  * @example
  * ```vue
  * <script setup>
- * import { provideSavvagent } from '@savvagent/vue';
+ * import { provideOttoFlags } from '@otto-flags/vue';
  *
- * provideSavvagent(
+ * provideOttoFlags(
  *   { apiKey: 'sdk_...' },
  *   { environment: 'development', userId: 'user-123' }
  * );
  * </script>
  * ```
  */
-export function provideSavvagent(
+export function provideOttoFlags(
   config: FlagClientConfig,
   defaultContext?: DefaultFlagContext
 ): FlagClient {
@@ -157,17 +157,17 @@ export function provideSavvagent(
   const normalizedContext = ref<FlagContext>(normalizeContext(defaultContext));
   const isReady = ref(true);
 
-  provide(SavvagentClientKey, client);
-  provide(SavvagentDefaultContextKey, normalizedContext);
-  provide(SavvagentReadyKey, isReady);
+  provide(OttoFlagsClientKey, client);
+  provide(OttoFlagsDefaultContextKey, normalizedContext);
+  provide(OttoFlagsReadyKey, isReady);
 
   return client;
 }
 
 /**
- * Return type for useSavvagent composable
+ * Return type for useOttoFlags composable
  */
-export interface UseSavvagentReturn {
+export interface UseOttoFlagsReturn {
   /** The FlagClient instance */
   client: FlagClient;
   /** Whether the client is ready */
@@ -177,8 +177,8 @@ export interface UseSavvagentReturn {
 }
 
 /**
- * Get the Savvagent client instance and context.
- * Must be used within a component that has the plugin installed or provideSavvagent called.
+ * Get the Otto Flags client instance and context.
+ * Must be used within a component that has the plugin installed or provideOttoFlags called.
  *
  * @returns The FlagClient instance, ready state, and default context
  * @throws Error if client is not provided
@@ -186,21 +186,21 @@ export interface UseSavvagentReturn {
  * @example
  * ```vue
  * <script setup>
- * import { useSavvagent } from '@savvagent/vue';
+ * import { useOttoFlags } from '@otto-flags/vue';
  *
- * const { client, isReady, defaultContext } = useSavvagent();
+ * const { client, isReady, defaultContext } = useOttoFlags();
  * const enabled = await client.isEnabled('my-feature');
  * </script>
  * ```
  */
-export function useSavvagent(): UseSavvagentReturn {
-  const client = inject(SavvagentClientKey);
-  const defaultContext = inject(SavvagentDefaultContextKey);
-  const isReady = inject(SavvagentReadyKey);
+export function useOttoFlags(): UseOttoFlagsReturn {
+  const client = inject(OttoFlagsClientKey);
+  const defaultContext = inject(OttoFlagsDefaultContextKey);
+  const isReady = inject(OttoFlagsReadyKey);
 
   if (!client) {
     throw new Error(
-      'Savvagent client not found. Use the SavvagentPlugin or provideSavvagent first.'
+      'Otto Flags client not found. Use the OttoFlagsPlugin or provideOttoFlags first.'
     );
   }
 
@@ -261,7 +261,7 @@ function mergeContext(defaultCtx: FlagContext, callCtx?: FlagContext): FlagConte
  * @example
  * ```vue
  * <script setup>
- * import { useFlag } from '@savvagent/vue';
+ * import { useFlag } from '@otto-flags/vue';
  *
  * const { value: isEnabled, loading } = useFlag('new-feature', {
  *   context: { user_id: user.value?.id },
@@ -281,7 +281,7 @@ export function useFlag(
   flagKey: string,
   options: UseFlagOptions = {}
 ): UseFlagReturn {
-  const { client, isReady, defaultContext } = useSavvagent();
+  const { client, isReady, defaultContext } = useOttoFlags();
   const {
     context,
     defaultValue = false,
@@ -390,7 +390,7 @@ export interface UseFlagsReturn {
  * @example
  * ```vue
  * <script setup>
- * import { useFlags } from '@savvagent/vue';
+ * import { useFlags } from '@otto-flags/vue';
  *
  * const { values, loading } = useFlags(
  *   ['feature-a', 'feature-b', 'feature-c'],
@@ -415,7 +415,7 @@ export function useFlags(
   flagKeys: string[],
   options: UseFlagsOptions = {}
 ): UseFlagsReturn {
-  const { client, isReady, defaultContext } = useSavvagent();
+  const { client, isReady, defaultContext } = useOttoFlags();
   const {
     context,
     defaultValues = {},
@@ -526,7 +526,7 @@ export function useFlags(
  * @example
  * ```vue
  * <script setup>
- * import { useWithFlag } from '@savvagent/vue';
+ * import { useWithFlag } from '@otto-flags/vue';
  *
  * useWithFlag('analytics-enabled', async () => {
  *   await trackEvent('page_view');
@@ -539,7 +539,7 @@ export function useWithFlag(
   callback: () => void | Promise<void>,
   options: UseFlagOptions = {}
 ): void {
-  const { client, isReady, defaultContext } = useSavvagent();
+  const { client, isReady, defaultContext } = useOttoFlags();
   const { context, onError } = options;
 
   onMounted(async () => {
@@ -549,7 +549,7 @@ export function useWithFlag(
       const mergedContext = mergeContext(defaultContext.value, context);
       await client.withFlag(flagKey, callback, mergedContext);
     } catch (error) {
-      console.error(`[Savvagent] Error in withFlag callback for ${flagKey}:`, error);
+      console.error(`[Otto Flags] Error in withFlag callback for ${flagKey}:`, error);
       onError?.(error as Error);
     }
   });
@@ -563,7 +563,7 @@ export function useWithFlag(
  * @example
  * ```vue
  * <script setup>
- * import { useUser } from '@savvagent/vue';
+ * import { useUser } from '@otto-flags/vue';
  *
  * const { userId, setUserId } = useUser();
  * </script>
@@ -575,7 +575,7 @@ export function useWithFlag(
  * ```
  */
 export function useUser() {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
 
   // Reactive refs for userId and anonymousId
   const userId = ref<string | null>(client.getUserId());
@@ -605,7 +605,7 @@ export function useUser() {
  * @example
  * ```vue
  * <script setup>
- * import { useEnvironment } from '@savvagent/vue';
+ * import { useEnvironment } from '@otto-flags/vue';
  *
  * const { environment, setEnvironment } = useEnvironment();
  * </script>
@@ -620,7 +620,7 @@ export function useUser() {
  * ```
  */
 export function useEnvironment() {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const environment = ref<string>(client.getEnvironment());
 
   const setEnvironment = (env: string) => {
@@ -647,7 +647,7 @@ export function useEnvironment() {
  * @example
  * ```vue
  * <script setup>
- * import { useTrackError } from '@savvagent/vue';
+ * import { useTrackError } from '@otto-flags/vue';
  *
  * const trackError = useTrackError('new-payment-flow');
  *
@@ -662,7 +662,7 @@ export function useEnvironment() {
  * ```
  */
 export function useTrackError(flagKey: string, context?: FlagContext) {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
 
   return (error: Error) => {
     client.trackError(flagKey, error, context);
@@ -678,7 +678,7 @@ export function useTrackError(flagKey: string, context?: FlagContext) {
  * @example
  * ```vue
  * <script setup>
- * import { useLocalOverrides } from '@savvagent/vue';
+ * import { useLocalOverrides } from '@otto-flags/vue';
  *
  * const overrides = useLocalOverrides();
  * // Access: overrides.value['my-flag']
@@ -686,7 +686,7 @@ export function useTrackError(flagKey: string, context?: FlagContext) {
  * ```
  */
 export function useLocalOverrides(): Ref<Record<string, boolean>> {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const overrides = ref<Record<string, boolean>>(client.getOverrides());
 
   onMounted(() => {
@@ -736,7 +736,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

@@ -1,4 +1,4 @@
-# @savvagent/sveltekit
+# @otto-flags/sveltekit
 
 ## 1.1.0
 
@@ -9,8 +9,8 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
-  - @savvagent/svelte@1.1.0
+  - @otto-flags/sdk@1.1.0
+  - @otto-flags/svelte@1.1.0
 
 ## 1.0.1
 
@@ -18,17 +18,17 @@
 
 - Updates for new API parameters
 - Updated dependencies
-  - @savvagent/svelte@1.0.1
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/svelte@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 1.0.0
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/svelte@1.0.0
-  - @savvagent/sdk@1.0.0
+  - @otto-flags/svelte@1.0.0
+  - @otto-flags/sdk@1.0.0

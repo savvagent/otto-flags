@@ -4,14 +4,14 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.savvagent</groupId>
-    <artifactId>savvagent-java-server-sdk</artifactId>
+    <groupId>com.savvagent.ottoflags</groupId>
+    <artifactId>otto-flags-java-server-sdk</artifactId>
     <version>0.1.0</version>
     <packaging>jar</packaging>
 
-    <name>Savvagent Java Server SDK</name>
-    <description>Java Server SDK for Savvagent feature flags with AI-powered error detection</description>
-    <url>https://github.com/savvagent/savvagent-sdks</url>
+    <name>Otto Flags Java Server SDK</name>
+    <description>Java Server SDK for Otto Flags feature flags with AI-powered error detection</description>
+    <url>https://github.com/savvagent/otto-flags</url>
 
     <licenses>
         <license>
@@ -22,17 +22,17 @@
 
     <developers>
         <developer>
-            <name>Savvagent Team</name>
-            <email>support@savvagent.com</email>
-            <organization>Savvagent</organization>
-            <organizationUrl>https://flags.savvagent.com</organizationUrl>
+            <name>Otto Flags Team</name>
+            <email>support@otto-flags.dev</email>
+            <organization>Otto Flags</organization>
+            <organizationUrl>https://flags.otto-flags.dev</organizationUrl>
         </developer>
     </developers>
 
     <scm>
-        <connection>scm:git:git://github.com/savvagent/savvagent-sdks.git</connection>
-        <developerConnection>scm:git:ssh://github.com:savvagent/savvagent-sdks.git</developerConnection>
-        <url>https://github.com/savvagent/savvagent-sdks/tree/main/packages/java-server</url>
+        <connection>scm:git:git://github.com/savvagent/otto-flags.git</connection>
+        <developerConnection>scm:git:ssh://github.com:ottoFlags/otto-flags.git</developerConnection>
+        <url>https://github.com/savvagent/otto-flags/tree/main/packages/java-server</url>
     </scm>
 
     <properties>

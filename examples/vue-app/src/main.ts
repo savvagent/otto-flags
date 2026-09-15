@@ -1,11 +1,11 @@
 import { createApp } from 'vue';
-import { SavvagentPlugin } from '@savvagent/vue';
-import type { FlagClientConfig, DefaultFlagContext } from '@savvagent/vue';
+import { OttoFlagsPlugin } from '@otto-flags/vue';
+import type { FlagClientConfig, DefaultFlagContext } from '@otto-flags/vue';
 import App from './App.vue';
 import './style.css';
 
 // Storage key for local overrides (must match FlagOverridePanel)
-const OVERRIDE_STORAGE_KEY = 'savvagent_local_overrides';
+const OVERRIDE_STORAGE_KEY = 'otto_flags_local_overrides';
 
 /**
  * Load overrides from localStorage for initial SDK configuration.
@@ -31,9 +31,9 @@ const initialOverrides = loadInitialOverrides();
 // Per SDK Developer Guide: FlagClientConfig with proper authentication
 const config: FlagClientConfig = {
   // SDK API key (starts with sdk_) - safe to embed in client-side code
-  apiKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY || 'sdk_your_key_here',
-  // Base URL for the Savvagent API
-  baseUrl: import.meta.env.VITE_SAVVAGENT_API_URL || 'http://localhost:8080',
+  apiKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY || 'sdk_your_key_here',
+  // Base URL for the Otto Flags API
+  baseUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL || 'http://localhost:8080',
   // Application ID for application-scoped flags
   applicationId: 'f8209ef5-a661-4f46-8b84-4c855a97d5ef',
   // Enable real-time updates via SSE (default: true)
@@ -50,7 +50,7 @@ const config: FlagClientConfig = {
   },
   // Custom error handler
   onError: (error) => {
-    console.error('[App] Savvagent error:', error);
+    console.error('[App] Otto Flags error:', error);
   },
 };
 
@@ -74,7 +74,7 @@ const defaultContext: DefaultFlagContext = {
   },
 };
 
-app.use(SavvagentPlugin, {
+app.use(OttoFlagsPlugin, {
   config,
   defaultContext,
   initialOverrides,

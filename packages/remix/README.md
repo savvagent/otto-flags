@@ -1,11 +1,11 @@
-# @savvagent/remix
+# @otto-flags/remix
 
-Remix SDK for Savvagent with support for loaders, actions, and client-side hooks.
+Remix SDK for Otto Flags with support for loaders, actions, and client-side hooks.
 
 ## Installation
 
 ```bash
-npm install @savvagent/remix
+npm install @otto-flags/remix
 ```
 
 ## Quick Start
@@ -14,11 +14,11 @@ npm install @savvagent/remix
 
 ```tsx
 // app/root.tsx
-import { initRemixClient } from '@savvagent/remix';
+import { initRemixClient } from '@otto-flags/remix';
 
 initRemixClient({
-  apiKey: process.env.SAVVAGENT_API_KEY!,
-  applicationId: process.env.SAVVAGENT_APP_ID,
+  apiKey: process.env.OTTO_FLAGS_API_KEY!,
+  applicationId: process.env.OTTO_FLAGS_APP_ID,
 });
 
 export default function App() {
@@ -36,7 +36,7 @@ export default function App() {
 
 ```tsx
 // app/routes/dashboard.tsx
-import { isEnabled } from '@savvagent/remix';
+import { isEnabled } from '@otto-flags/remix';
 import { LoaderFunctionArgs, json } from '@remix-run/node';
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -56,7 +56,7 @@ export default function Dashboard() {
 ### 3. Use in actions
 
 ```tsx
-import { trackError } from '@savvagent/remix';
+import { trackError } from '@otto-flags/remix';
 import { ActionFunctionArgs, json } from '@remix-run/node';
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -75,7 +75,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
 ```tsx
 // app/routes/feature.tsx
-import { useFlag } from '@savvagent/remix';
+import { useFlag } from '@otto-flags/remix';
 
 export default function Feature() {
   const { value, loading } = useFlag('client-feature');
@@ -112,9 +112,9 @@ Track errors with flag context.
 
 ### Client-Side
 
-All hooks from `@savvagent/react` are available:
+All hooks from `@otto-flags/react` are available:
 - `useFlag(flagKey, options)`
-- `useSavvagent()`
+- `useOttoFlags()`
 - `useUser()`
 - `useTrackError(flagKey, context)`
 
@@ -123,7 +123,7 @@ All hooks from `@savvagent/react` are available:
 ### User-Targeted Feature
 
 ```tsx
-import { isEnabled, getRequestContext } from '@savvagent/remix';
+import { isEnabled, getRequestContext } from '@otto-flags/remix';
 import { LoaderFunctionArgs } from '@remix-run/node';
 
 export async function loader({ request }: LoaderFunctionArgs) {

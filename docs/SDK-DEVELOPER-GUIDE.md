@@ -1,8 +1,8 @@
-# Savvagent SDK Developer Guide
+# Otto Flags SDK Developer Guide
 
-This guide is for developers building SDKs that integrate with the Savvagent feature flag platform. It covers the API endpoints, authentication, real-time updates, and best practices.
+This guide is for developers building SDKs that integrate with the Otto Flags feature flag platform. It covers the API endpoints, authentication, real-time updates, and best practices.
 
-> **Note:** For official SDKs and examples, see the [savvagent-sdks repository](https://github.com/savvagent/savvagent-sdks).
+> **Note:** For official SDKs and examples, see the [otto-flags repository](https://github.com/savvagent/otto-flags).
 
 ## Table of Contents
 
@@ -21,7 +21,7 @@ This guide is for developers building SDKs that integrate with the Savvagent fea
 
 ## Authentication
 
-Savvagent uses two types of API keys:
+Otto Flags uses two types of API keys:
 
 | Key Type | Prefix | Use Case | Security Level |
 |----------|--------|----------|----------------|
@@ -220,7 +220,7 @@ Same structure as `/api/sdk/flags`, but only includes flags with `scope: "enterp
 #### SDK Implementation Example
 
 ```javascript
-class SavvagentClient {
+class OttoFlagsClient {
   async getAllFlags(environment = 'development') {
     const response = await fetch(
       `${this.baseUrl}/api/sdk/flags?environment=${environment}`,
@@ -260,7 +260,7 @@ Server-Sent Events stream for real-time flag change notifications.
 // Using @microsoft/fetch-event-source (recommended)
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 
-await fetchEventSource('https://flags-api.savvagent.com/api/flags/stream', {
+await fetchEventSource('https://flags-api.otto-flags.dev/api/flags/stream', {
   method: 'GET',
   headers: {
     'Authorization': `Bearer ${sdkKey}`,
@@ -329,7 +329,7 @@ const reconnect = (attempt) => {
 
 ### Telemetry
 
-SDKs should report evaluation metrics and errors back to Savvagent for analytics.
+SDKs should report evaluation metrics and errors back to Otto Flags for analytics.
 
 #### Track Evaluations
 
@@ -387,7 +387,7 @@ Authorization: Bearer sdk_xxx
 
 ## Backend Performance Features
 
-The Savvagent backend includes several performance optimizations that benefit SDK integrations:
+The Otto Flags backend includes several performance optimizations that benefit SDK integrations:
 
 ### Database Connection Pool
 
@@ -532,12 +532,12 @@ Create a single SDK instance at application startup:
 
 ```javascript
 // Good
-const client = new SavvagentClient({ apiKey: 'sdk_xxx' });
+const client = new OttoFlagsClient({ apiKey: 'sdk_xxx' });
 export default client;
 
 // Bad - creates multiple connections
 function getFlag(key) {
-  const client = new SavvagentClient({ apiKey: 'sdk_xxx' });
+  const client = new OttoFlagsClient({ apiKey: 'sdk_xxx' });
   return client.isEnabled(key);
 }
 ```
@@ -635,6 +635,6 @@ process.on('SIGTERM', () => client.destroy());
 
 ## Related Documentation
 
-- [ADMIN-UI-DOGFOODING.md](./ADMIN-UI-DOGFOODING.md) - How the admin UI uses Savvagent flags internally
+- [ADMIN-UI-DOGFOODING.md](./ADMIN-UI-DOGFOODING.md) - How the admin UI uses Otto Flags flags internally
 - [PRD.md](./PRD.md) - Product requirements and feature overview
-- External: [savvagent-sdks](https://github.com/savvagent/savvagent-sdks) - Official SDK implementations
+- External: [otto-flags](https://github.com/savvagent/otto-flags) - Official SDK implementations

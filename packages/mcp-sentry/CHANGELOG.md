@@ -1,4 +1,4 @@
-# @savvagent/mcp-sentry
+# @otto-flags/mcp-sentry
 
 ## 1.0.1
 
@@ -6,15 +6,15 @@
 
 - Updates for new API parameters
 - Updated dependencies
-  - @savvagent/mcp-sdk@1.0.1
+  - @otto-flags/mcp-sdk@1.0.1
 
 ## 1.0.0
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/mcp-sdk@1.0.0
+  - @otto-flags/mcp-sdk@1.0.0

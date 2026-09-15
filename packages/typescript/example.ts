@@ -1,12 +1,12 @@
 /**
- * Example usage of Savvagent SDK
+ * Example usage of Otto Flags SDK
  * Run with: npx tsx example.ts
  */
 
 import { FlagClient } from './src';
 
 async function main() {
-  console.log('🚀 Savvagent SDK Example\n');
+  console.log('🚀 Otto Flags SDK Example\n');
 
   // Initialize the client
   const client = new FlagClient({

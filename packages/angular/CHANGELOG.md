@@ -1,4 +1,4 @@
-# @savvagent/angular
+# @otto-flags/angular
 
 ## 1.1.0
 
@@ -9,7 +9,7 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
+  - @otto-flags/sdk@1.1.0
 
 ## 1.0.1
 
@@ -17,15 +17,15 @@
 
 - Updates for new API parameters
 - Updated dependencies
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 1.0.0
 
 ### Features
 
-- Initial release of Angular SDK for Savvagent feature flags
-- `SavvagentModule` - Angular module for easy SDK configuration with `forRoot()`
-- `SavvagentService` - Injectable service with full feature flag functionality
+- Initial release of Angular SDK for Otto Flags feature flags
+- `OttoFlagsModule` - Angular module for easy SDK configuration with `forRoot()`
+- `OttoFlagsService` - Injectable service with full feature flag functionality
 - Reactive API with RxJS Observables (`flag$`, `flagValue$`, `getAllFlags$`)
 - Promise-based API for non-reactive use cases (`evaluate`, `isEnabled`, `withFlag`)
 - Real-time flag updates via SSE subscription

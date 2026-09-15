@@ -1,20 +1,20 @@
 # SDK Integration Guide
 
-Complete guide for integrating Savvagent SDK into your application.
+Complete guide for integrating Otto Flags SDK into your application.
 
-> **For SDK Developers:** If you're building a new SDK or integrating with the Savvagent API directly, see the [SDK Developer Guide](./SDK-DEVELOPER-GUIDE.md) for API specifications, authentication details, and best practices.
+> **For SDK Developers:** If you're building a new SDK or integrating with the Otto Flags API directly, see the [SDK Developer Guide](./SDK-DEVELOPER-GUIDE.md) for API specifications, authentication details, and best practices.
 
 ## Installation
 
 ```bash
 # Using pnpm (recommended)
-pnpm add @savvagent/sdk
+pnpm add @otto-flags/sdk
 
 # Using npm
-npm install @savvagent/sdk
+npm install @otto-flags/sdk
 
 # Using yarn
-yarn add @savvagent/sdk
+yarn add @otto-flags/sdk
 ```
 
 ## Quick Start
@@ -22,12 +22,12 @@ yarn add @savvagent/sdk
 ### 1. Initialize the Client
 
 ```typescript
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 
 // Create a single SDK instance at application startup (recommended)
 // Per SDK Developer Guide: Initialize once, create a single SDK instance
-const savvagent = new FlagClient({
-  baseUrl: 'https://flags-api.savvagent.com',
+const ottoFlags = new FlagClient({
+  baseUrl: 'https://flags-api.otto-flags.dev',
   apiKey: 'sdk_your_key_here', // SDK keys start with 'sdk_' prefix
   applicationId: 'your-app-id', // For application-scoped flags
   enableRealtime: true, // Enable SSE for real-time updates
@@ -36,7 +36,7 @@ const savvagent = new FlagClient({
 });
 
 // Export for use throughout your application
-export default savvagent;
+export default ottoFlags;
 ```
 
 > **API Key Types (per SDK Developer Guide):**
@@ -48,7 +48,7 @@ export default savvagent;
 ```typescript
 // Always include user context for consistent rollout behavior
 // Per SDK Developer Guide: Context fields for flag evaluation
-const isEnabled = await savvagent.isEnabled('new-feature', {
+const isEnabled = await ottoFlags.isEnabled('new-feature', {
   user_id: 'user-123',           // Required for percentage rollouts
   anonymous_id: 'anon-456',      // Alternative for anonymous users
   session_id: 'session-789',     // Fallback identifier
@@ -81,7 +81,7 @@ interface FlagClientConfig {
   apiKey: string;              // SDK key (sdk_) or Server key (srv_) from dashboard
 
   // Optional
-  baseUrl?: string;            // Your Savvagent API URL (default: https://flags-api.savvagent.com)
+  baseUrl?: string;            // Your Otto Flags API URL (default: https://flags-api.otto-flags.dev)
   applicationId?: string;      // Application ID for hierarchical flag lookup
 
   // Caching
@@ -113,15 +113,15 @@ interface FlagClientConfig {
 #### Using the React SDK (Recommended)
 
 ```typescript
-// Use the @savvagent/react package for React applications
-import { SavvagentProvider, useFlag, useUser } from '@savvagent/react';
-import type { FlagClientConfig, DefaultFlagContext } from '@savvagent/react';
+// Use the @otto-flags/react package for React applications
+import { OttoFlagsProvider, useFlag, useUser } from '@otto-flags/react';
+import type { FlagClientConfig, DefaultFlagContext } from '@otto-flags/react';
 
 // App.tsx - Per SDK Developer Guide: Initialize once at app startup
 function App() {
   const config: FlagClientConfig = {
-    apiKey: process.env.NEXT_PUBLIC_SAVVAGENT_SDK_KEY!,
-    baseUrl: process.env.NEXT_PUBLIC_SAVVAGENT_API_URL,
+    apiKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY!,
+    baseUrl: process.env.NEXT_PUBLIC_OTTO_FLAGS_API_URL,
     enableRealtime: true,
     enableTelemetry: true,
   };
@@ -134,9 +134,9 @@ function App() {
   };
 
   return (
-    <SavvagentProvider config={config} defaultContext={defaultContext}>
+    <OttoFlagsProvider config={config} defaultContext={defaultContext}>
       <MyComponent />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 
@@ -157,13 +157,13 @@ function MyComponent() {
 ```typescript
 'use client';
 
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 import { useEffect, useState } from 'react';
 
 // Per SDK Developer Guide: Create single instance
 const client = new FlagClient({
-  apiKey: process.env.NEXT_PUBLIC_SAVVAGENT_SDK_KEY!,
-  baseUrl: process.env.NEXT_PUBLIC_SAVVAGENT_API_URL,
+  apiKey: process.env.NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY!,
+  baseUrl: process.env.NEXT_PUBLIC_OTTO_FLAGS_API_URL,
 });
 
 export default function MyComponent() {
@@ -186,15 +186,15 @@ export default function MyComponent() {
 
 ```typescript
 import express from 'express';
-import { FlagClient } from '@savvagent/node-server';
+import { FlagClient } from '@otto-flags/node-server';
 
 const app = express();
 
 // Per SDK Developer Guide: Create single instance at startup
 // Server SDK accepts both sdk_ and srv_ keys
-const savvagent = new FlagClient({
-  apiKey: process.env.SAVVAGENT_SERVER_KEY!, // srv_ key for server-side
-  baseUrl: process.env.SAVVAGENT_API_URL,
+const ottoFlags = new FlagClient({
+  apiKey: process.env.OTTO_FLAGS_SERVER_KEY!, // srv_ key for server-side
+  baseUrl: process.env.OTTO_FLAGS_API_URL,
   cacheTtl: 60000, // 1 minute
   enableRealtime: true,
   timeout: 5000, // 5 second timeout
@@ -204,7 +204,7 @@ app.get('/api/users/:userId', async (req, res) => {
   const { userId } = req.params;
 
   // Per SDK Developer Guide: Include context for targeting
-  const useNewEndpoint = await savvagent.isEnabled('new-user-endpoint', {
+  const useNewEndpoint = await ottoFlags.isEnabled('new-user-endpoint', {
     user_id: userId,
     ip_address: req.ip, // Server-side only field
     user_agent: req.headers['user-agent'], // Server-side only field
@@ -221,7 +221,7 @@ app.get('/api/users/:userId', async (req, res) => {
 });
 
 // Per SDK Developer Guide: Clean shutdown
-process.on('SIGTERM', () => savvagent.close());
+process.on('SIGTERM', () => ottoFlags.close());
 ```
 
 ### SvelteKit
@@ -229,7 +229,7 @@ process.on('SIGTERM', () => savvagent.close());
 ```svelte
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { FlagClient } from '@savvagent/sdk';
+  import { FlagClient } from '@otto-flags/sdk';
 
   let newFeatureEnabled = $state(false);
   let loading = $state(true);
@@ -238,8 +238,8 @@ process.on('SIGTERM', () => savvagent.close());
   onMount(async () => {
     // Per SDK Developer Guide: Create single instance
     client = new FlagClient({
-      apiKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY,
-      baseUrl: import.meta.env.VITE_SAVVAGENT_API_URL,
+      apiKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY,
+      baseUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL,
       enableRealtime: true,
     });
 
@@ -271,11 +271,11 @@ process.on('SIGTERM', () => savvagent.close());
 Enable Server-Sent Events for instant flag updates. Per SDK Developer Guide, the SDK uses `@microsoft/fetch-event-source` internally for header-based authentication (native EventSource doesn't support custom headers):
 
 ```typescript
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 
 const client = new FlagClient({
   apiKey: 'sdk_your_key',
-  baseUrl: 'https://flags-api.savvagent.com',
+  baseUrl: 'https://flags-api.otto-flags.dev',
   enableRealtime: true, // Enable SSE connection
 });
 
@@ -433,17 +433,17 @@ Per SDK Developer Guide, follow these best practices:
 Create a single SDK instance at application startup:
 
 ```typescript
-// lib/savvagent.ts
-import { FlagClient } from '@savvagent/sdk';
+// lib/ottoFlags.ts
+import { FlagClient } from '@otto-flags/sdk';
 
 // Good - single instance (per SDK Developer Guide)
-export const savvagent = new FlagClient({
-  apiKey: process.env.SAVVAGENT_SDK_KEY!,
-  baseUrl: process.env.SAVVAGENT_API_URL,
+export const ottoFlags = new FlagClient({
+  apiKey: process.env.OTTO_FLAGS_SDK_KEY!,
+  baseUrl: process.env.OTTO_FLAGS_API_URL,
 });
 
 // Use everywhere
-import { savvagent } from '@/lib/savvagent';
+import { ottoFlags } from '@/lib/ottoFlags';
 ```
 
 ```typescript
@@ -472,12 +472,12 @@ Never hardcode API keys:
 
 ```bash
 # .env
-SAVVAGENT_API_URL=https://flags-api.savvagent.com
-SAVVAGENT_SDK_KEY=sdk_prod_xxx  # SDK keys use sdk_ prefix
+OTTO_FLAGS_API_URL=https://flags-api.otto-flags.dev
+OTTO_FLAGS_SDK_KEY=sdk_prod_xxx  # SDK keys use sdk_ prefix
 
 # .env.local (for frontend)
-NEXT_PUBLIC_SAVVAGENT_API_URL=https://flags-api.savvagent.com
-NEXT_PUBLIC_SAVVAGENT_SDK_KEY=sdk_prod_xxx
+NEXT_PUBLIC_OTTO_FLAGS_API_URL=https://flags-api.otto-flags.dev
+NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY=sdk_prod_xxx
 ```
 
 ### 4. Enable Caching
@@ -486,8 +486,8 @@ Cache evaluations with TTL, invalidate on SSE events for instant updates (per SD
 
 ```typescript
 const client = new FlagClient({
-  apiKey: process.env.SAVVAGENT_SDK_KEY!,
-  baseUrl: process.env.SAVVAGENT_API_URL,
+  apiKey: process.env.OTTO_FLAGS_SDK_KEY!,
+  baseUrl: process.env.OTTO_FLAGS_API_URL,
   cacheTtl: 300000, // 5 minutes (per SDK Developer Guide)
   enableRealtime: true, // Invalidates cache on flag changes
 });
@@ -501,7 +501,7 @@ Per SDK Developer Guide: SSE is optional - the SDK should work without it:
 // SDK automatically handles SSE failures gracefully
 // If SSE connection fails, SDK continues working with cached values
 const client = new FlagClient({
-  apiKey: process.env.SAVVAGENT_SDK_KEY!,
+  apiKey: process.env.OTTO_FLAGS_SDK_KEY!,
   enableRealtime: true, // SSE enhances but isn't required
 });
 ```
@@ -515,7 +515,7 @@ Per SDK Developer Guide: Don't send telemetry on every evaluation - batch evalua
 // - Evaluations: batched and sent every 5 seconds
 // - Errors: sent immediately (critical telemetry)
 const client = new FlagClient({
-  apiKey: process.env.SAVVAGENT_SDK_KEY!,
+  apiKey: process.env.OTTO_FLAGS_SDK_KEY!,
   enableTelemetry: true, // Enabled by default
 });
 ```
@@ -550,7 +550,7 @@ const client = new FlagClient({
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_staging_xxx',
-  baseUrl: 'https://flags-api.savvagent.com',
+  baseUrl: 'https://flags-api.otto-flags.dev',
   cacheTtl: 60000, // 1 minute
   enableRealtime: true,
   enableTelemetry: true,
@@ -562,7 +562,7 @@ const client = new FlagClient({
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_prod_xxx',
-  baseUrl: 'https://flags-api.savvagent.com',
+  baseUrl: 'https://flags-api.otto-flags.dev',
   cacheTtl: 300000, // 5 minutes (per SDK Developer Guide)
   enableRealtime: true, // Enable SSE for instant updates
   enableTelemetry: true,
@@ -635,6 +635,6 @@ See [SDK-DEVELOPER-GUIDE.md](./SDK-DEVELOPER-GUIDE.md) for complete API document
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- GitHub Issues: https://github.com/yourusername/savvagent-sdks/issues
-- Examples: https://github.com/yourusername/savvagent-sdks/tree/main/examples
+- Documentation: https://flags-docs.otto-flags.dev
+- GitHub Issues: https://github.com/yourusername/otto-flags/issues
+- Examples: https://github.com/yourusername/otto-flags/tree/main/examples

@@ -1,6 +1,6 @@
-# Savvagent iOS SDK
+# Otto Flags iOS SDK
 
-The official iOS SDK for [Savvagent](https://flags.savvagent.com) - the AI-powered feature flag platform that prevents production incidents.
+The official iOS SDK for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
 
 ## Features
 
@@ -25,26 +25,26 @@ Add the following to your `Package.swift` file:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/savvagent/savvagent-sdks", from: "0.1.0")
+    .package(url: "https://github.com/savvagent/otto-flags", from: "0.1.0")
 ]
 ```
 
 Or in Xcode:
 
 1. File > Add Package Dependencies
-2. Enter package URL: `https://github.com/savvagent/savvagent-sdks`
-3. Select `SavvagentSDK` package
+2. Enter package URL: `https://github.com/savvagent/otto-flags`
+3. Select `OttoFlagsSDK` package
 
 ### CocoaPods
 
 ```ruby
-pod 'SavvagentSDK', '~> 0.1.0'
+pod 'OttoFlagsSDK', '~> 0.1.0'
 ```
 
 ### Carthage
 
 ```
-github "savvagent/savvagent-sdks" ~> 0.1.0
+github "ottoFlags/otto-flags" ~> 0.1.0
 ```
 
 ## Quick Start
@@ -52,17 +52,17 @@ github "savvagent/savvagent-sdks" ~> 0.1.0
 ### Basic Usage
 
 ```swift
-import SavvagentSDK
+import OttoFlagsSDK
 
 // Configure the SDK
-let config = SavvagentConfig(
-    apiUrl: "https://flags-beta.savvagent.com",
+let config = OttoFlagsConfig(
+    apiUrl: "https://flags-beta.otto-flags.dev",
     sdkKey: "your-sdk-key",
     environment: "production"
 )
 
 // Initialize the client
-let client = SavvagentClient(config: config)
+let client = OttoFlagsClient(config: config)
 
 // Create user context
 let context = UserContext(
@@ -94,7 +94,7 @@ do {
 
 ```swift
 import SwiftUI
-import SavvagentSDK
+import OttoFlagsSDK
 
 struct ContentView: View {
     @StateObject private var featureFlags = FeatureFlagManager()
@@ -116,14 +116,14 @@ struct ContentView: View {
 @MainActor
 class FeatureFlagManager: ObservableObject {
     @Published var flags: [String: Bool] = [:]
-    private let client: SavvagentClient
+    private let client: OttoFlagsClient
 
     init() {
-        let config = SavvagentConfig(
+        let config = OttoFlagsConfig(
             sdkKey: "your-sdk-key",
             environment: "production"
         )
-        self.client = SavvagentClient(config: config)
+        self.client = OttoFlagsClient(config: config)
     }
 
     func isEnabled(_ key: String) -> Bool {
@@ -149,17 +149,17 @@ class FeatureFlagManager: ObservableObject {
 
 ```swift
 import UIKit
-import SavvagentSDK
+import OttoFlagsSDK
 
 class ViewController: UIViewController {
-    private let client: SavvagentClient
+    private let client: OttoFlagsClient
 
     init() {
-        let config = SavvagentConfig(
+        let config = OttoFlagsConfig(
             sdkKey: "your-sdk-key",
             environment: "production"
         )
-        self.client = SavvagentClient(config: config)
+        self.client = OttoFlagsClient(config: config)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -197,8 +197,8 @@ class ViewController: UIViewController {
 ### Configuration Options
 
 ```swift
-let config = SavvagentConfig(
-    apiUrl: "https://flags-beta.savvagent.com",
+let config = OttoFlagsConfig(
+    apiUrl: "https://flags-beta.otto-flags.dev",
     sdkKey: "your-sdk-key",
     environment: "production",
     pollingInterval: 60,        // Poll every 60 seconds
@@ -277,7 +277,7 @@ let context = UserContext(
 Enable WebSocket for real-time flag updates:
 
 ```swift
-let config = SavvagentConfig(
+let config = OttoFlagsConfig(
     sdkKey: "your-sdk-key",
     enableWebSocket: true  // Flags update in real-time
 )
@@ -288,7 +288,7 @@ let config = SavvagentConfig(
 The SDK automatically caches flag evaluations to improve performance. Configure polling interval:
 
 ```swift
-let config = SavvagentConfig(
+let config = OttoFlagsConfig(
     sdkKey: "your-sdk-key",
     pollingInterval: 30  // Poll every 30 seconds
 )
@@ -307,7 +307,7 @@ swift test
 The SDK defines the following errors:
 
 ```swift
-enum SavvagentError: Error {
+enum OttoFlagsError: Error {
     case invalidURL
     case requestFailed
     case invalidResponse
@@ -323,9 +323,9 @@ do {
         flagKey: "feature",
         context: context
     )
-} catch SavvagentError.requestFailed {
+} catch OttoFlagsError.requestFailed {
     print("Request failed")
-} catch SavvagentError.invalidResponse {
+} catch OttoFlagsError.invalidResponse {
     print("Invalid response")
 } catch {
     print("Unknown error: \(error)")
@@ -346,15 +346,15 @@ See the [iOS example app](../../examples/ios-app) for a complete implementation.
 
 ## Documentation
 
-- [API Reference](https://flags-docs.savvagent.com/ios-sdk)
-- [Integration Guide](https://flags-docs.savvagent.com/guides/ios)
-- [Migration Guide](https://flags-docs.savvagent.com/migration/ios)
+- [API Reference](https://flags-docs.otto-flags.dev/ios-sdk)
+- [Integration Guide](https://flags-docs.otto-flags.dev/guides/ios)
+- [Migration Guide](https://flags-docs.otto-flags.dev/migration/ios)
 
 ## Support
 
-- [GitHub Issues](https://github.com/savvagent/savvagent-sdks/issues)
-- [Documentation](https://flags-docs.savvagent.com)
-- [Email](mailto:support@savvagent.com)
+- [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
+- [Documentation](https://flags-docs.otto-flags.dev)
+- [Email](mailto:support@otto-flags.dev)
 
 ## License
 

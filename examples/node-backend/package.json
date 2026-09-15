@@ -2,14 +2,14 @@
   "name": "node-backend-example",
   "version": "0.0.3",
   "private": true,
-  "description": "Example Node.js backend using Savvagent SDK",
+  "description": "Example Node.js backend using Otto Flags SDK",
   "type": "module",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@savvagent/sdk": "workspace:*",
+    "@otto-flags/sdk": "workspace:*",
     "express": "^4.18.0"
   },
   "devDependencies": {

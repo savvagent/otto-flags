@@ -1,6 +1,6 @@
-# Savvagent Rust Server SDK
+# Otto Flags Rust Server SDK
 
-Official Rust Server SDK for Savvagent - AI-powered feature flags with automatic error detection.
+Official Rust Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
 ## Features
 
@@ -22,14 +22,14 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-savvagent = "0.1.0"
+otto_flags = "0.1.0"
 tokio = { version = "1.0", features = ["full"] }
 ```
 
 ## Quick Start
 
 ```rust
-use savvagent::{Config, Context, FlagClient};
+use otto_flags::{Config, Context, FlagClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,12 +59,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Configuration
 
 ```rust
-use savvagent::Config;
+use otto_flags::Config;
 use std::time::Duration;
 
 let config = Config::new("sdk_your_api_key_here")
     .with_application_id("your-app-id")
-    .with_base_url("https://flags-api.savvagent.com")
+    .with_base_url("https://flags-api.otto-flags.dev")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_default("feature-a", false)
@@ -79,7 +79,7 @@ let client = FlagClient::new(config)?;
 
 ```rust
 use actix_web::{web, App, HttpResponse, HttpServer};
-use savvagent::{Config, Context, FlagClient};
+use otto_flags::{Config, Context, FlagClient};
 
 struct AppState {
     flag_client: FlagClient,
@@ -130,7 +130,7 @@ use axum::{
     routing::get,
     Router,
 };
-use savvagent::{Config, Context, FlagClient};
+use otto_flags::{Config, Context, FlagClient};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -175,7 +175,7 @@ async fn main() {
 
 ```rust
 use rocket::{State, get, launch, routes};
-use savvagent::{Config, Context, FlagClient};
+use otto_flags::{Config, Context, FlagClient};
 
 #[get("/")]
 async fn index(client: &State<FlagClient>) -> String {
@@ -203,7 +203,7 @@ fn rocket() -> _ {
 ### Middleware Pattern
 
 ```rust
-use savvagent::{Context, FlagClient};
+use otto_flags::{Context, FlagClient};
 
 async fn feature_middleware(
     client: &FlagClient,
@@ -223,7 +223,7 @@ async fn feature_middleware(
 ### With Custom Context
 
 ```rust
-use savvagent::Context;
+use otto_flags::Context;
 use serde_json::json;
 
 let context = Context::new()
@@ -248,7 +248,7 @@ Configuration builder for the FlagClient.
 ```rust
 let config = Config::new("sdk_key")
     .with_application_id("app-id")
-    .with_base_url("https://flags-api.savvagent.com")
+    .with_base_url("https://flags-api.otto-flags.dev")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_default("flag", false);
@@ -281,7 +281,7 @@ pub struct EvaluationResult {
 
 ### Methods
 
-#### FlagClient::new(config: Config) -> Result<Self, SavvagentError>
+#### FlagClient::new(config: Config) -> Result<Self, OttoFlagsError>
 
 Creates a new FlagClient.
 
@@ -289,7 +289,7 @@ Creates a new FlagClient.
 let client = FlagClient::new(config)?;
 ```
 
-#### evaluate(&self, flag_key: &str, context: Option<Context>) -> Result<EvaluationResult, SavvagentError>
+#### evaluate(&self, flag_key: &str, context: Option<Context>) -> Result<EvaluationResult, OttoFlagsError>
 
 Evaluates a feature flag.
 
@@ -325,19 +325,19 @@ client.clear_cache();
 ## Error Handling
 
 ```rust
-use savvagent::SavvagentError;
+use otto_flags::OttoFlagsError;
 
 match client.evaluate("my-flag", None).await {
     Ok(result) => {
         println!("Flag value: {}", result.value);
     }
-    Err(SavvagentError::InvalidApiKey) => {
+    Err(OttoFlagsError::InvalidApiKey) => {
         eprintln!("Invalid API key");
     }
-    Err(SavvagentError::RequestFailed(e)) => {
+    Err(OttoFlagsError::RequestFailed(e)) => {
         eprintln!("Request failed: {}", e);
     }
-    Err(SavvagentError::ApiError(msg)) => {
+    Err(OttoFlagsError::ApiError(msg)) => {
         eprintln!("API error: {}", msg);
     }
 }
@@ -378,7 +378,7 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- API Docs: https://docs.rs/savvagent
-- Issues: https://github.com/savvagent/savvagent-sdks/issues
-- Email: support@savvagent.com
+- Documentation: https://flags-docs.otto-flags.dev
+- API Docs: https://docs.rs/otto-flags
+- Issues: https://github.com/savvagent/otto-flags/issues
+- Email: support@otto-flags.dev

@@ -1,53 +1,53 @@
 /**
- * Tests for @savvagent/sveltekit client-side exports
+ * Tests for @otto-flags/sveltekit client-side exports
  *
  * This test suite verifies:
- * - Re-exports from @savvagent/svelte are properly exposed
+ * - Re-exports from @otto-flags/svelte are properly exposed
  * - Type exports are available
  * - FlagClient is re-exported from core SDK
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-describe('@savvagent/sveltekit - Client-side exports', () => {
+describe('@otto-flags/sveltekit - Client-side exports', () => {
   describe('Module re-exports', () => {
-    it('should re-export initSavvagent from @savvagent/svelte', async () => {
-      const { initSavvagent } = await import('../src/index');
-      expect(initSavvagent).toBeDefined();
-      expect(typeof initSavvagent).toBe('function');
+    it('should re-export initOttoFlags from @otto-flags/svelte', async () => {
+      const { initOttoFlags } = await import('../src/index');
+      expect(initOttoFlags).toBeDefined();
+      expect(typeof initOttoFlags).toBe('function');
     });
 
-    it('should re-export getSavvagent from @savvagent/svelte', async () => {
-      const { getSavvagent } = await import('../src/index');
-      expect(getSavvagent).toBeDefined();
-      expect(typeof getSavvagent).toBe('function');
+    it('should re-export getOttoFlags from @otto-flags/svelte', async () => {
+      const { getOttoFlags } = await import('../src/index');
+      expect(getOttoFlags).toBeDefined();
+      expect(typeof getOttoFlags).toBe('function');
     });
 
-    it('should re-export createFlagStore from @savvagent/svelte', async () => {
+    it('should re-export createFlagStore from @otto-flags/svelte', async () => {
       const { createFlagStore } = await import('../src/index');
       expect(createFlagStore).toBeDefined();
       expect(typeof createFlagStore).toBe('function');
     });
 
-    it('should re-export createFlag from @savvagent/svelte', async () => {
+    it('should re-export createFlag from @otto-flags/svelte', async () => {
       const { createFlag } = await import('../src/index');
       expect(createFlag).toBeDefined();
       expect(typeof createFlag).toBe('function');
     });
 
-    it('should re-export createUserIdStore from @savvagent/svelte', async () => {
+    it('should re-export createUserIdStore from @otto-flags/svelte', async () => {
       const { createUserIdStore } = await import('../src/index');
       expect(createUserIdStore).toBeDefined();
       expect(typeof createUserIdStore).toBe('function');
     });
 
-    it('should re-export trackErrorClient as trackErrorClient from @savvagent/svelte', async () => {
+    it('should re-export trackErrorClient as trackErrorClient from @otto-flags/svelte', async () => {
       const { trackErrorClient } = await import('../src/index');
       expect(trackErrorClient).toBeDefined();
       expect(typeof trackErrorClient).toBe('function');
     });
 
-    it('should re-export FlagClient from @savvagent/sdk', async () => {
+    it('should re-export FlagClient from @otto-flags/sdk', async () => {
       const { FlagClient } = await import('../src/index');
       expect(FlagClient).toBeDefined();
       expect(typeof FlagClient).toBe('function');
@@ -112,17 +112,17 @@ describe('@savvagent/sveltekit - Client-side exports', () => {
     });
   });
 
-  describe('Integration with @savvagent/svelte', () => {
+  describe('Integration with @otto-flags/svelte', () => {
     it('should allow initialization through re-exported function', async () => {
       // This test verifies that functions are properly re-exported
       // Actual initialization requires a real FlagClient instance which
-      // is tested in the @savvagent/svelte package
-      const { initSavvagent, getSavvagent } = await import('../src/index');
+      // is tested in the @otto-flags/svelte package
+      const { initOttoFlags, getOttoFlags } = await import('../src/index');
 
-      expect(initSavvagent).toBeDefined();
-      expect(getSavvagent).toBeDefined();
-      expect(typeof initSavvagent).toBe('function');
-      expect(typeof getSavvagent).toBe('function');
+      expect(initOttoFlags).toBeDefined();
+      expect(getOttoFlags).toBeDefined();
+      expect(typeof initOttoFlags).toBe('function');
+      expect(typeof getOttoFlags).toBe('function');
     });
   });
 

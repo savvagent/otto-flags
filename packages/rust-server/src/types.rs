@@ -11,7 +11,7 @@ pub struct Config {
     /// Application ID for application-scoped flags
     pub application_id: Option<String>,
 
-    /// Base URL for the Savvagent API
+    /// Base URL for the Otto Flags API
     pub base_url: String,
 
     /// Enable real-time flag updates via SSE
@@ -35,7 +35,7 @@ impl Default for Config {
         Self {
             api_key: String::new(),
             application_id: None,
-            base_url: "https://api.savvagent.com".to_string(),
+            base_url: "https://api.otto-flags.dev".to_string(),
             enable_realtime: true,
             cache_ttl: Duration::from_secs(60),
             enable_telemetry: true,

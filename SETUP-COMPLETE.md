@@ -1,17 +1,17 @@
 # Repository Setup Complete! 🎉
 
-The `savvagent-sdks` repository has been successfully scaffolded with all packages, examples, and documentation.
+The `otto-flags` repository has been successfully scaffolded with all packages, examples, and documentation.
 
 ## What Was Created
 
 ### ✅ Repository Structure
 
 ```
-savvagent-sdks/
+otto-flags/
 ├── packages/
-│   ├── typescript/          # @savvagent/sdk (renamed from @savvagent/typescript)
-│   ├── mcp-sdk/            # @savvagent/mcp-sdk
-│   └── mcp-sentry/         # @savvagent/mcp-sentry
+│   ├── typescript/          # @otto-flags/sdk (renamed from @otto-flags/typescript)
+│   ├── mcp-sdk/            # @otto-flags/mcp-sdk
+│   └── mcp-sentry/         # @otto-flags/mcp-sentry
 ├── examples/
 │   ├── nextjs-app/         # Next.js 14 example
 │   ├── sveltekit-app/      # SvelteKit 2 + Svelte 5 example
@@ -76,7 +76,7 @@ Three complete example apps with:
 ### 1. Initialize Git Repository
 
 ```bash
-cd /home/robhicks/dev/savvagent-sdks
+cd /home/robhicks/dev/otto-flags
 
 # Initialize git
 git init
@@ -92,7 +92,7 @@ git commit -m "feat: initial repository setup with packages and examples"
 
 ```bash
 # Create repo on GitHub (replace with your username)
-gh repo create savvagent/savvagent-sdks --public --source=. --remote=origin
+gh repo create ottoFlags/otto-flags --public --source=. --remote=origin
 
 # Push to GitHub
 git push -u origin main
@@ -110,7 +110,7 @@ Add the following secrets in GitHub repository settings:
 ### 4. Install Dependencies
 
 ```bash
-cd /home/robhicks/dev/savvagent-sdks
+cd /home/robhicks/dev/otto-flags
 pnpm install
 ```
 
@@ -152,7 +152,7 @@ In `savvagent-flags/frontend/package.json`:
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "file:../../savvagent-sdks/packages/typescript"
+    "@otto-flags/sdk": "file:../../otto-flags/packages/typescript"
   }
 }
 ```
@@ -161,7 +161,7 @@ In `savvagent-flags/frontend/package.json`:
 ```json
 {
   "dependencies": {
-    "@savvagent/sdk": "^0.1.0"
+    "@otto-flags/sdk": "^0.1.0"
   }
 }
 ```
@@ -214,8 +214,8 @@ When merged to main:
 ## Package Names
 
 The SDK package has been renamed:
-- **Old:** `@savvagent/typescript`
-- **New:** `@savvagent/sdk`
+- **Old:** `@otto-flags/typescript`
+- **New:** `@otto-flags/sdk`
 
 This is more intuitive for users and follows industry standards (like `@stripe/stripe-js`, `@vercel/analytics`, etc.).
 
@@ -227,7 +227,7 @@ This is more intuitive for users and follows industry standards (like `@stripe/s
 # In savvagent-flags/frontend/package.json
 {
   "dependencies": {
-    "@savvagent/sdk": "file:../../savvagent-sdks/packages/typescript"
+    "@otto-flags/sdk": "file:../../otto-flags/packages/typescript"
   }
 }
 
@@ -284,7 +284,7 @@ Replace `yourusername` with actual GitHub username/org in:
 
 Use find/replace:
 ```bash
-find . -type f -name "*.json" -o -name "*.md" | xargs sed -i 's/yourusername/savvagent/g'
+find . -type f -name "*.json" -o -name "*.md" | xargs sed -i 's/yourusername/ottoFlags/g'
 ```
 
 ## Success Criteria

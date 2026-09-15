@@ -1,6 +1,6 @@
-# Savvagent iOS Example App
+# Otto Flags iOS Example App
 
-This is an example iOS application demonstrating how to integrate and use the Savvagent iOS SDK.
+This is an example iOS application demonstrating how to integrate and use the Otto Flags iOS SDK.
 
 ## Features
 
@@ -21,13 +21,13 @@ This is an example iOS application demonstrating how to integrate and use the Sa
 1. Open the project in Xcode:
    ```bash
    cd examples/ios-app
-   open SavvagentExample.xcodeproj
+   open OttoFlagsExample.xcodeproj
    ```
 
-2. Update the SDK key in `SavvagentExampleApp.swift`:
+2. Update the SDK key in `OttoFlagsExampleApp.swift`:
    ```swift
-   let config = SavvagentConfig(
-       apiUrl: "https://flags-beta.savvagent.com",
+   let config = OttoFlagsConfig(
+       apiUrl: "https://flags-beta.otto-flags.dev",
        sdkKey: "your-sdk-key",  // Replace with your SDK key
        environment: "production"
    )
@@ -40,8 +40,8 @@ This is an example iOS application demonstrating how to integrate and use the Sa
 ## Project Structure
 
 ```
-SavvagentExample/
-├── SavvagentExampleApp.swift      # App entry point and flag manager
+OttoFlagsExample/
+├── OttoFlagsExampleApp.swift      # App entry point and flag manager
 ├── ContentView.swift               # Main view with feature flag list
 └── Assets.xcassets/                # App assets
 ```
@@ -50,7 +50,7 @@ SavvagentExample/
 
 ### FeatureFlagManager
 
-The `FeatureFlagManager` class manages the Savvagent SDK client and provides feature flag state to the SwiftUI views:
+The `FeatureFlagManager` class manages the Otto Flags SDK client and provides feature flag state to the SwiftUI views:
 
 ```swift
 @StateObject private var featureFlags = FeatureFlagManager()
@@ -95,7 +95,7 @@ You can add more feature flags by:
 ## Learn More
 
 - [iOS SDK Documentation](../../packages/ios-sdk/README.md)
-- [Savvagent Documentation](https://flags-docs.savvagent.com)
+- [Otto Flags Documentation](https://flags-docs.otto-flags.dev)
 - [SwiftUI Guide](https://developer.apple.com/tutorials/swiftui)
 
 ## License

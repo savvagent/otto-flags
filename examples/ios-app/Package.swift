@@ -2,23 +2,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "SavvagentExample",
+    name: "OttoFlagsExample",
     platforms: [
         .iOS(.v17)
     ],
     products: [
         .library(
-            name: "SavvagentExample",
-            targets: ["SavvagentExample"]),
+            name: "OttoFlagsExample",
+            targets: ["OttoFlagsExample"]),
     ],
     dependencies: [
         .package(path: "../../packages/ios-sdk")
     ],
     targets: [
         .target(
-            name: "SavvagentExample",
+            name: "OttoFlagsExample",
             dependencies: [
-                .product(name: "SavvagentSDK", package: "ios-sdk")
+                .product(name: "OttoFlagsSDK", package: "ios-sdk")
             ]
         )
     ]

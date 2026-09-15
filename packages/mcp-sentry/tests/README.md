@@ -1,7 +1,7 @@
 # MCP Sentry SDK Test Suite
 
 ## Overview
-Comprehensive unit tests for the `@savvagent/mcp-sentry` package, providing 100% statement coverage and 96% branch coverage.
+Comprehensive unit tests for the `@otto-flags/mcp-sentry` package, providing 100% statement coverage and 96% branch coverage.
 
 ## Test Coverage
 
@@ -139,7 +139,7 @@ pnpm test sentry-server.test.ts
 ### Mocked Dependencies
 - `@sentry/node` - Mocked for Sentry SDK testing
 - `axios` - Mocked for API client testing
-- `@savvagent/mcp-sdk` - Types imported, base class tested via implementation
+- `@otto-flags/mcp-sdk` - Types imported, base class tested via implementation
 
 ### Testing Tools
 - **Jest** - Test runner and assertion library

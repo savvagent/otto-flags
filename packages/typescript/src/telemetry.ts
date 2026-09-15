@@ -93,7 +93,7 @@ export class TelemetryService {
       if (this.queue.length < 1000) {
         this.queue.unshift(...batch);
       }
-      console.error('[Savvagent] Failed to send telemetry:', error);
+      console.error('[Otto Flags] Failed to send telemetry:', error);
     }
   }
 

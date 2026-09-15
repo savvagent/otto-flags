@@ -1,4 +1,4 @@
-# @savvagent/nextjs
+# @otto-flags/nextjs
 
 ## 1.1.0
 
@@ -9,8 +9,8 @@
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/sdk@1.1.0
-  - @savvagent/react@1.1.0
+  - @otto-flags/sdk@1.1.0
+  - @otto-flags/react@1.1.0
 
 ## 1.0.1
 
@@ -18,17 +18,17 @@
 
 - Updates for new API parameters
 - Updated dependencies
-  - @savvagent/react@1.0.1
-  - @savvagent/sdk@1.0.1
+  - @otto-flags/react@1.0.1
+  - @otto-flags/sdk@1.0.1
 
 ## 1.0.0
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs
 
 ### Patch Changes
 
 - Updated dependencies
-  - @savvagent/react@1.0.0
-  - @savvagent/sdk@1.0.0
+  - @otto-flags/react@1.0.0
+  - @otto-flags/sdk@1.0.0

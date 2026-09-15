@@ -12,7 +12,7 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   moduleNameMapper: {
-    '^@savvagent/sdk$': '<rootDir>/../typescript/src/index.ts',
+    '^@otto-flags/sdk$': '<rootDir>/../typescript/src/index.ts',
     '^@angular/core/testing$': '<rootDir>/test-utils/angular-testing-mock.ts',
     '^@angular/core$': '<rootDir>/test-utils/angular-core-mock.ts',
   },

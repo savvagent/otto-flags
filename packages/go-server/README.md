@@ -1,6 +1,6 @@
-# Savvagent Go Server SDK
+# Otto Flags Go Server SDK
 
-Official Go Server SDK for Savvagent - AI-powered feature flags with automatic error detection.
+Official Go Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
 ## Features
 
@@ -18,7 +18,7 @@ Official Go Server SDK for Savvagent - AI-powered feature flags with automatic e
 ## Installation
 
 ```bash
-go get github.com/savvagent/savvagent-go-server-sdk
+go get github.com/savvagent/otto-flags-go-server-sdk
 ```
 
 ## Quick Start
@@ -30,24 +30,24 @@ import (
     "fmt"
     "log"
 
-    savvagent "github.com/savvagent/savvagent-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
 )
 
 func main() {
     // Initialize the client
-    config := savvagent.Config{
+    config := ottoflags.Config{
         APIKey:        "sdk_your_api_key_here",
         ApplicationID: "your-app-id",
     }
 
-    client, err := savvagent.NewClient(config)
+    client, err := ottoflags.NewClient(config)
     if err != nil {
         log.Fatal(err)
     }
     defer client.Close()
 
     // Evaluate a flag
-    ctx := &savvagent.Context{
+    ctx := &ottoflags.Context{
         UserID:      "user-123",
         Environment: "production",
     }
@@ -69,10 +69,10 @@ func main() {
 ## Configuration
 
 ```go
-config := savvagent.Config{
+config := ottoflags.Config{
     APIKey:          "sdk_your_api_key_here",
     ApplicationID:   "your-app-id",
-    BaseURL:         "https://flags-api.savvagent.com", // optional
+    BaseURL:         "https://flags-api.otto-flags.dev", // optional
     EnableRealtime:  true,                         // default: true
     CacheTTL:        60 * time.Second,            // default: 60 seconds
     EnableTelemetry: true,                         // default: true
@@ -82,11 +82,11 @@ config := savvagent.Config{
         "feature-b": true,
     },
     OnError: func(err error) {
-        log.Printf("Savvagent error: %v", err)
+        log.Printf("Otto Flags error: %v", err)
     },
 }
 
-client, err := savvagent.NewClient(config)
+client, err := ottoflags.NewClient(config)
 if err != nil {
     log.Fatal(err)
 }
@@ -102,17 +102,17 @@ package main
 
 import (
     "net/http"
-    savvagent "github.com/savvagent/savvagent-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
 )
 
 func main() {
-    client, _ := savvagent.NewClient(savvagent.Config{
+    client, _ := ottoflags.NewClient(ottoflags.Config{
         APIKey: "sdk_your_key",
     })
     defer client.Close()
 
     http.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-        ctx := &savvagent.Context{
+        ctx := &ottoflags.Context{
             UserID:    r.Header.Get("X-User-ID"),
             IPAddress: r.RemoteAddr,
             UserAgent: r.UserAgent(),
@@ -141,11 +141,11 @@ package main
 
 import (
     "github.com/gin-gonic/gin"
-    savvagent "github.com/savvagent/savvagent-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
 )
 
 func main() {
-    client, _ := savvagent.NewClient(savvagent.Config{
+    client, _ := ottoflags.NewClient(ottoflags.Config{
         APIKey: "sdk_your_key",
     })
     defer client.Close()
@@ -154,7 +154,7 @@ func main() {
 
     // Middleware for feature flags
     r.Use(func(c *gin.Context) {
-        ctx := &savvagent.Context{
+        ctx := &ottoflags.Context{
             UserID:    c.GetHeader("X-User-ID"),
             IPAddress: c.ClientIP(),
             UserAgent: c.Request.UserAgent(),
@@ -165,7 +165,7 @@ func main() {
     })
 
     r.GET("/premium-feature", func(c *gin.Context) {
-        ctx := c.MustGet("flagContext").(*savvagent.Context)
+        ctx := c.MustGet("flagContext").(*ottoflags.Context)
 
         if !client.IsEnabled("premium-access", ctx) {
             c.JSON(403, gin.H{"error": "Premium access required"})
@@ -188,10 +188,10 @@ import (
     "context"
 
     "google.golang.org/grpc"
-    savvagent "github.com/savvagent/savvagent-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
 )
 
-func FlagInterceptor(client *savvagent.FlagClient) grpc.UnaryServerInterceptor {
+func FlagInterceptor(client *ottoflags.FlagClient) grpc.UnaryServerInterceptor {
     return func(
         ctx context.Context,
         req interface{},
@@ -199,7 +199,7 @@ func FlagInterceptor(client *savvagent.FlagClient) grpc.UnaryServerInterceptor {
         handler grpc.UnaryHandler,
     ) (interface{}, error) {
         // Extract user context from gRPC metadata
-        flagCtx := &savvagent.Context{
+        flagCtx := &ottoflags.Context{
             UserID: extractUserID(ctx),
         }
 
@@ -217,8 +217,8 @@ type MyService struct {
 }
 
 func (s *MyService) GetData(ctx context.Context, req *Request) (*Response, error) {
-    client := ctx.Value("flagClient").(*savvagent.FlagClient)
-    flagCtx := ctx.Value("flagContext").(*savvagent.Context)
+    client := ctx.Value("flagClient").(*ottoflags.FlagClient)
+    flagCtx := ctx.Value("flagContext").(*ottoflags.Context)
 
     if client.IsEnabled("new-feature", flagCtx) {
         return newImplementation(req), nil
@@ -231,7 +231,7 @@ func (s *MyService) GetData(ctx context.Context, req *Request) (*Response, error
 
 ```go
 func handler(w http.ResponseWriter, r *http.Request) {
-    ctx := &savvagent.Context{
+    ctx := &ottoflags.Context{
         UserID:      r.Header.Get("X-User-ID"),
         SessionID:   getSessionID(r),
         Environment: os.Getenv("ENVIRONMENT"),
@@ -313,7 +313,7 @@ type EvaluationResult struct {
 Creates a new FlagClient with the given configuration.
 
 ```go
-client, err := savvagent.NewClient(config)
+client, err := ottoflags.NewClient(config)
 ```
 
 #### Evaluate(flagKey string, ctx *Context) (*EvaluationResult, error)
@@ -389,6 +389,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.savvagent.com
-- Issues: https://github.com/savvagent/savvagent-sdks/issues
-- Email: support@savvagent.com
+- Documentation: https://flags-docs.otto-flags.dev
+- Issues: https://github.com/savvagent/otto-flags/issues
+- Email: support@otto-flags.dev

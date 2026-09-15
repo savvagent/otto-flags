@@ -1,11 +1,11 @@
-# @savvagent/astro
+# @otto-flags/astro
 
-Astro integration for Savvagent with server-side rendering and middleware support.
+Astro integration for Otto Flags with server-side rendering and middleware support.
 
 ## Installation
 
 ```bash
-npm install @savvagent/astro
+npm install @otto-flags/astro
 ```
 
 ## Quick Start
@@ -15,14 +15,14 @@ npm install @savvagent/astro
 ```ts
 // astro.config.mjs
 import { defineConfig } from 'astro/config';
-import savvagent from '@savvagent/astro';
+import ottoFlags from '@otto-flags/astro';
 
 export default defineConfig({
   integrations: [
-    savvagent({
+    ottoFlags({
       config: {
-        apiKey: process.env.SAVVAGENT_API_KEY,
-        applicationId: process.env.SAVVAGENT_APP_ID,
+        apiKey: process.env.OTTO_FLAGS_API_KEY,
+        applicationId: process.env.OTTO_FLAGS_APP_ID,
       },
     }),
   ],
@@ -33,7 +33,7 @@ export default defineConfig({
 
 ```astro
 ---
-import { isEnabled } from '@savvagent/astro';
+import { isEnabled } from '@otto-flags/astro';
 
 const showNewLayout = await isEnabled('new-layout', {
   user_id: Astro.cookies.get('user_id')?.value,
@@ -57,7 +57,7 @@ Check if a flag is enabled.
 
 ```astro
 ---
-import { isEnabled } from '@savvagent/astro';
+import { isEnabled } from '@otto-flags/astro';
 
 const enabled = await isEnabled('my-feature');
 ---
@@ -69,7 +69,7 @@ Get detailed evaluation result.
 
 ```astro
 ---
-import { evaluate } from '@savvagent/astro';
+import { evaluate } from '@otto-flags/astro';
 
 const result = await evaluate('premium-features');
 const { value, reason, metadata } = result;
@@ -82,7 +82,7 @@ Execute code conditionally.
 
 ```astro
 ---
-import { withFlag } from '@savvagent/astro';
+import { withFlag } from '@otto-flags/astro';
 
 const data = await withFlag('use-new-api', async () => {
   return await fetchFromNewAPI();
@@ -96,7 +96,7 @@ Evaluate with automatic request context.
 
 ```astro
 ---
-import { evaluateForRequest } from '@savvagent/astro';
+import { evaluateForRequest } from '@otto-flags/astro';
 
 const showBeta = await evaluateForRequest(Astro.request, 'beta-ui');
 ---
@@ -109,7 +109,7 @@ Create middleware for flag-based routing:
 ```ts
 // src/middleware.ts
 import { sequence } from 'astro/middleware';
-import { createFlagMiddleware } from '@savvagent/astro';
+import { createFlagMiddleware } from '@otto-flags/astro';
 
 const flagMiddleware = createFlagMiddleware({
   'maintenance-mode': {
@@ -132,13 +132,13 @@ Astro supports multiple UI frameworks. Use the appropriate SDK in your islands:
 ```astro
 ---
 // Import server-side
-import { isEnabled } from '@savvagent/astro';
+import { isEnabled } from '@otto-flags/astro';
 const serverFlag = await isEnabled('ssr-feature');
 ---
 
 <!-- Client-side React island -->
 <ReactComponent client:load>
-  {/* Use @savvagent/react hooks inside */}
+  {/* Use @otto-flags/react hooks inside */}
 </ReactComponent>
 ```
 
@@ -146,7 +146,7 @@ const serverFlag = await isEnabled('ssr-feature');
 
 ```astro
 <VueComponent client:load>
-  {/* Use @savvagent/vue composables inside */}
+  {/* Use @otto-flags/vue composables inside */}
 </VueComponent>
 ```
 

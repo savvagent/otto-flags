@@ -722,7 +722,7 @@ class App : Application() {
             )
         )
 
-        val configMap = savvagentClient
+        val configMap = ottoFlagsClient
             .getConfig("app-config", userContext)
             .getOrNull()
 

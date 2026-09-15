@@ -3,8 +3,8 @@
  */
 
 import {
-  SavvagentProvider,
-  useSavvagent,
+  OttoFlagsProvider,
+  useOttoFlags,
   useFlag,
   useFlags,
   useWithFlag,
@@ -15,13 +15,13 @@ import {
 
 describe('Client Module', () => {
   describe('Re-exports from React SDK', () => {
-    it('should export SavvagentProvider', () => {
-      expect(SavvagentProvider).toBeDefined();
+    it('should export OttoFlagsProvider', () => {
+      expect(OttoFlagsProvider).toBeDefined();
     });
 
-    it('should export useSavvagent hook', () => {
-      expect(useSavvagent).toBeDefined();
-      expect(typeof useSavvagent).toBe('function');
+    it('should export useOttoFlags hook', () => {
+      expect(useOttoFlags).toBeDefined();
+      expect(typeof useOttoFlags).toBe('function');
     });
 
     it('should export useFlag hook', () => {
@@ -61,15 +61,15 @@ describe('Client Module', () => {
       // The actual 'use client' directive is checked at the top of client.ts
       const clientModule = require('../src/client');
       expect(clientModule).toBeDefined();
-      expect(clientModule.SavvagentProvider).toBeDefined();
+      expect(clientModule.OttoFlagsProvider).toBeDefined();
     });
 
     it('should export all expected client-side functionality', () => {
       const clientModule = require('../src/client');
 
       const expectedExports = [
-        'SavvagentProvider',
-        'useSavvagent',
+        'OttoFlagsProvider',
+        'useOttoFlags',
         'useFlag',
         'useFlags',
         'useWithFlag',
@@ -119,10 +119,10 @@ describe('Client Module', () => {
     it('should properly wrap React SDK exports', () => {
       // Verify that the exports are actually from the React SDK
       const nextjsClient = require('../src/client');
-      const reactSdk = require('@savvagent/react');
+      const reactSdk = require('@otto-flags/react');
 
       // These should be the same references (re-exports)
-      expect(nextjsClient.SavvagentProvider).toBe(reactSdk.SavvagentProvider);
+      expect(nextjsClient.OttoFlagsProvider).toBe(reactSdk.OttoFlagsProvider);
       expect(nextjsClient.useFlag).toBe(reactSdk.useFlag);
       expect(nextjsClient.FlagClient).toBe(reactSdk.FlagClient);
     });

@@ -1,4 +1,4 @@
-# @savvagent/mcp-sdk
+# @otto-flags/mcp-sdk
 
 ## 1.0.1
 
@@ -10,4 +10,4 @@
 
 ### Major Changes
 
-- Initial Release of Savvagent SDKs
+- Initial Release of Otto Flags SDKs

@@ -1,7 +1,7 @@
 /**
  * Example Datadog MCP Server
  *
- * This example shows how to set up a Datadog MCP server that Savvagent
+ * This example shows how to set up a Datadog MCP server that Otto Flags
  * can query for APM, metrics, and monitoring data using StreamableHTTP transport.
  *
  * Usage:
@@ -16,7 +16,7 @@
  */
 
 import express from 'express';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import { DatadogMCPServer } from './src/datadog-server';
 
 const CONFIG = {

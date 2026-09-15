@@ -1,21 +1,21 @@
-# @savvagent/mcp-pagerduty
+# @otto-flags/mcp-pagerduty
 
-PagerDuty MCP integration for Savvagent - Connect feature flags with PagerDuty incident management.
+PagerDuty MCP integration for Otto Flags - Connect feature flags with PagerDuty incident management.
 
 ## Installation
 
 ```bash
-npm install @savvagent/mcp-pagerduty
+npm install @otto-flags/mcp-pagerduty
 # or
-pnpm add @savvagent/mcp-pagerduty
+pnpm add @otto-flags/mcp-pagerduty
 ```
 
 ## Quick Start
 
 ```typescript
 import express from 'express';
-import { PagerDutyMCPServer } from '@savvagent/mcp-pagerduty';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { PagerDutyMCPServer } from '@otto-flags/mcp-pagerduty';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 
 const app = express();
 app.use(express.json());

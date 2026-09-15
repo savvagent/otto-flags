@@ -32,7 +32,7 @@ test.describe('SDK Provider Initialization', () => {
   test('should not show error state on successful initialization', async ({ page, featureDemo }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
-      if (msg.type() === 'error' && msg.text().includes('Savvagent')) {
+      if (msg.type() === 'error' && msg.text().includes('Otto Flags')) {
         consoleErrors.push(msg.text());
       }
     });
@@ -40,7 +40,7 @@ test.describe('SDK Provider Initialization', () => {
     await featureDemo.waitForLoad();
     await page.waitForTimeout(1000);
 
-    // No Savvagent-specific errors should be logged
+    // No Otto Flags-specific errors should be logged
     expect(consoleErrors).toHaveLength(0);
   });
 });

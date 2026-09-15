@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { createFlagsStore, createUserIdStore, createOverridesStore, trackError } from '@savvagent/svelte';
+  import { createFlagsStore, createUserIdStore, createOverridesStore, trackError } from '@otto-flags/svelte';
   import FlagOverridePanel from './FlagOverridePanel.svelte';
 
   /**
    * Feature Demo Component
-   * Demonstrates best practices for using Savvagent Svelte SDK
+   * Demonstrates best practices for using Otto Flags Svelte SDK
    */
 
   // Per SDK Developer Guide: Use createFlagsStore for multiple flags in the same component
@@ -54,7 +54,7 @@
 </script>
 
 <div class="container">
-  <h1>Savvagent Svelte Example</h1>
+  <h1>Otto Flags Svelte Example</h1>
   <p class="subtitle">SDK Developer Guide Best Practices Demo</p>
 
   {#if $flags.loading}

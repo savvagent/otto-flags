@@ -14,7 +14,7 @@ import {
   evaluateMultiple,
   isEnabledMultiple,
 } from '../src/server';
-import { FlagClient } from '@savvagent/sdk';
+import { FlagClient } from '@otto-flags/sdk';
 
 // Mock Next.js headers and cookies
 jest.mock('next/headers', () => ({
@@ -44,7 +44,7 @@ describe('Server Module', () => {
       get: jest.fn((name: string) => {
         const cookieMap: Record<string, any> = {
           user_id: { value: 'user-123' },
-          savvagent_anonymous_id: { value: 'anon-456' },
+          otto_flags_anonymous_id: { value: 'anon-456' },
           session_id: { value: 'session-789' },
         };
         return cookieMap[name];
@@ -315,7 +315,7 @@ describe('Server Module', () => {
     it('should extract context from request headers and cookies', async () => {
       const mockRequest = new Request('https://example.com', {
         headers: {
-          cookie: 'user_id=req-user; session_id=req-session; savvagent_anonymous_id=req-anon',
+          cookie: 'user_id=req-user; session_id=req-session; otto_flags_anonymous_id=req-anon',
           'accept-language': 'fr-FR,fr;q=0.9',
         },
       });

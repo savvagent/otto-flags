@@ -2,13 +2,13 @@
  * Server-side utilities for SvelteKit load functions and form actions
  */
 
-import { FlagClient, FlagClientConfig, FlagContext } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 import type { RequestEvent } from '@sveltejs/kit';
 
 let serverClient: FlagClient | null = null;
 
 /**
- * Initialize the server-side Savvagent client.
+ * Initialize the server-side Otto Flags client.
  * Call this once in hooks.server.ts or root +layout.server.ts.
  *
  * @param config - Client configuration
@@ -17,11 +17,11 @@ let serverClient: FlagClient | null = null;
  * @example
  * ```ts
  * // src/hooks.server.ts
- * import { initSvelteKitServer } from '@savvagent/sveltekit/server';
+ * import { initSvelteKitServer } from '@otto-flags/sveltekit/server';
  *
  * initSvelteKitServer({
- *   apiKey: process.env.SAVVAGENT_API_KEY!,
- *   applicationId: process.env.SAVVAGENT_APP_ID,
+ *   apiKey: process.env.OTTO_FLAGS_API_KEY!,
+ *   applicationId: process.env.OTTO_FLAGS_APP_ID,
  * });
  * ```
  */
@@ -33,7 +33,7 @@ export function initSvelteKitServer(config: FlagClientConfig): FlagClient {
 }
 
 /**
- * Get the server-side Savvagent client instance.
+ * Get the server-side Otto Flags client instance.
  *
  * @returns The FlagClient instance
  * @throws Error if client is not initialized
@@ -70,7 +70,7 @@ export function getEventContext(
 ): FlagContext {
   const context: FlagContext = {
     user_id: event.cookies.get('user_id'),
-    anonymous_id: event.cookies.get('savvagent_anonymous_id'),
+    anonymous_id: event.cookies.get('otto_flags_anonymous_id'),
     session_id: event.cookies.get('session_id'),
     language: event.request.headers.get('accept-language')?.split(',')[0] || undefined,
     ...overrides,
@@ -89,7 +89,7 @@ export function getEventContext(
  * @example
  * ```ts
  * // +page.server.ts
- * import { isEnabled } from '@savvagent/sveltekit/server';
+ * import { isEnabled } from '@otto-flags/sveltekit/server';
  *
  * export async function load({ cookies, request }) {
  *   const enabled = await isEnabled('new-feature', {
@@ -163,7 +163,7 @@ export function trackError(
  *
  * @example
  * ```ts
- * import { evaluateForEvent } from '@savvagent/sveltekit/server';
+ * import { evaluateForEvent } from '@otto-flags/sveltekit/server';
  *
  * export async function load(event) {
  *   const showBeta = await evaluateForEvent(event, 'beta-ui');

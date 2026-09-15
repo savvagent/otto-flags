@@ -1,20 +1,20 @@
-# @savvagent/mcp-sdk
+# @otto-flags/mcp-sdk
 
-Model Context Protocol (MCP) SDK for Savvagent integrations. This is the base framework for building MCP servers using **StreamableHTTP transport** and JSON-RPC 2.0, allowing Savvagent to query observability data from tools like Sentry, Datadog, Splunk, and more.
+Model Context Protocol (MCP) SDK for Otto Flags integrations. This is the base framework for building MCP servers using **StreamableHTTP transport** and JSON-RPC 2.0, allowing Otto Flags to query observability data from tools like Sentry, Datadog, Splunk, and more.
 
 ## What is MCP?
 
 MCP (Model Context Protocol) is a standardized protocol for AI systems to interact with external data sources and tools:
 
 - **StreamableHTTP Transport**: Single HTTP endpoint (`POST /mcp`) handles all JSON-RPC requests
-- **Pull-based architecture**: Savvagent queries your server for data on-demand
+- **Pull-based architecture**: Otto Flags queries your server for data on-demand
 - **Bearer Token Auth**: Simple, secure authentication using `Authorization: Bearer <token>`
-- **Tool-based interface**: Define tools that Savvagent can call
+- **Tool-based interface**: Define tools that Otto Flags can call
 
 ## Installation
 
 ```bash
-npm install @savvagent/mcp-sdk
+npm install @otto-flags/mcp-sdk
 ```
 
 ## Quick Start
@@ -22,7 +22,7 @@ npm install @savvagent/mcp-sdk
 ### Creating an MCP Server with Bearer Token Auth
 
 ```typescript
-import { MCPServer, createHttpHandler } from '@savvagent/mcp-sdk';
+import { MCPServer, createHttpHandler } from '@otto-flags/mcp-sdk';
 import express from 'express';
 
 // Create server
@@ -102,10 +102,10 @@ Authorization: Bearer <your-token>
 
 ### MCPServer
 
-The main class for building MCP servers. Register tools that Savvagent can call:
+The main class for building MCP servers. Register tools that Otto Flags can call:
 
 ```typescript
-import { MCPServer } from '@savvagent/mcp-sdk';
+import { MCPServer } from '@otto-flags/mcp-sdk';
 
 const server = new MCPServer({
   name: 'my-server',
@@ -144,7 +144,7 @@ MCP uses JSON-RPC 2.0 with these methods:
 #### Built-in Bearer Token Auth
 
 ```typescript
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 
 // With authentication
 app.post('/mcp', createHttpHandler(server, {
@@ -160,7 +160,7 @@ app.post('/mcp', createHttpHandler(server, {
 For more control over authentication:
 
 ```typescript
-import { createAuthMiddleware, createHttpHandler } from '@savvagent/mcp-sdk';
+import { createAuthMiddleware, createHttpHandler } from '@otto-flags/mcp-sdk';
 
 const authMiddleware = createAuthMiddleware({
   token: process.env.MCP_AUTH_TOKEN!,
@@ -176,7 +176,7 @@ app.post('/mcp', createHttpHandler(server));
 #### HTTP/HTTPS (Recommended)
 
 ```typescript
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import express from 'express';
 
 const app = express();
@@ -191,7 +191,7 @@ app.post('/mcp', createHttpHandler(server, {
 #### Stdio
 
 ```typescript
-import { createStdioHandler } from '@savvagent/mcp-sdk';
+import { createStdioHandler } from '@otto-flags/mcp-sdk';
 
 // Reads JSON-RPC from stdin, writes responses to stdout
 createStdioHandler(server);
@@ -274,7 +274,7 @@ import {
   createToolResponse,
   isErrorResponse,
   createAuthMiddleware,
-} from '@savvagent/mcp-sdk';
+} from '@otto-flags/mcp-sdk';
 
 // Create JSON-RPC responses
 const success = createSuccessResponse(1, { data: 'result' });
@@ -287,9 +287,9 @@ const toolError = createToolResponse({ error: 'Failed' }, true);
 
 ## Official MCP Integrations
 
-- [@savvagent/mcp-sentry](../mcp-sentry) - Sentry error tracking integration
-- @savvagent/mcp-datadog - Datadog integration (coming soon)
-- @savvagent/mcp-splunk - Splunk integration (coming soon)
+- [@otto-flags/mcp-sentry](../mcp-sentry) - Sentry error tracking integration
+- @otto-flags/mcp-datadog - Datadog integration (coming soon)
+- @otto-flags/mcp-splunk - Splunk integration (coming soon)
 
 ## Development
 
@@ -319,4 +319,4 @@ MIT
 
 ## Support
 
-For questions and support, visit [savvagent.com/docs](https://flags-docs.savvagent.com) or open an issue on GitHub.
+For questions and support, visit [otto-flags.dev/docs](https://flags-docs.otto-flags.dev) or open an issue on GitHub.

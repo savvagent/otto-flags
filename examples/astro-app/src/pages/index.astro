@@ -1,5 +1,5 @@
 ---
-const newFeatureEnabled = await Astro.locals.savvagent.isEnabled('new-feature', {
+const newFeatureEnabled = await Astro.locals.ottoFlags.isEnabled('new-feature', {
   userId: 'user-123',
   attributes: {
     email: 'user@example.com',
@@ -7,7 +7,7 @@ const newFeatureEnabled = await Astro.locals.savvagent.isEnabled('new-feature', 
   },
 });
 
-const betaFeatureEnabled = await Astro.locals.savvagent.isEnabled('beta-feature', {
+const betaFeatureEnabled = await Astro.locals.ottoFlags.isEnabled('beta-feature', {
   userId: 'user-123',
 });
 ---
@@ -17,7 +17,7 @@ const betaFeatureEnabled = await Astro.locals.savvagent.isEnabled('beta-feature'
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Savvagent Astro Example</title>
+    <title>Otto Flags Astro Example</title>
     <style>
       * {
         margin: 0;
@@ -88,7 +88,7 @@ const betaFeatureEnabled = await Astro.locals.savvagent.isEnabled('beta-feature'
   </head>
   <body>
     <div class="container">
-      <h1>Savvagent Astro Example</h1>
+      <h1>Otto Flags Astro Example</h1>
 
       <div>
         <div class="feature-card">

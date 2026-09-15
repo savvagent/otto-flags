@@ -1,5 +1,5 @@
 /**
- * @savvagent/solid - SolidJS SDK for Savvagent feature flags
+ * @otto-flags/solid - SolidJS SDK for Otto Flags feature flags
  *
  * Provides SolidJS reactive primitives for feature flag evaluation.
  *
@@ -17,11 +17,11 @@ import {
   type Accessor,
   type ParentProps,
 } from 'solid-js';
-import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext, FlagEvaluationResult } from '@otto-flags/sdk';
 
 /**
  * Default context values that apply to all flag evaluations
- * Per SDK Developer Guide: https://flags-docs.savvagent.com/sdk-developer-guide
+ * Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
  */
 export interface DefaultFlagContext {
   /** Application ID for application-scoped flags */
@@ -42,30 +42,30 @@ export interface DefaultFlagContext {
   attributes?: Record<string, any>;
 }
 
-interface SavvagentContextValue {
+interface OttoFlagsContextValue {
   client: FlagClient;
   isReady: Accessor<boolean>;
   defaultContext: Accessor<FlagContext>;
 }
 
-const SavvagentContext = createContext<SavvagentContextValue>();
+const OttoFlagsContext = createContext<OttoFlagsContextValue>();
 
-export interface SavvagentProviderProps extends ParentProps {
+export interface OttoFlagsProviderProps extends ParentProps {
   config: FlagClientConfig;
   /** Default context values applied to all flag evaluations */
   defaultContext?: DefaultFlagContext;
 }
 
 /**
- * Provider component that initializes and provides the Savvagent client.
+ * Provider component that initializes and provides the Otto Flags client.
  *
  * @example
  * ```tsx
- * import { SavvagentProvider } from '@savvagent/solid';
+ * import { OttoFlagsProvider } from '@otto-flags/solid';
  *
  * function App() {
  *   return (
- *     <SavvagentProvider
+ *     <OttoFlagsProvider
  *       config={{ apiKey: 'sdk_...' }}
  *       defaultContext={{
  *         applicationId: 'my-app-id',
@@ -75,12 +75,12 @@ export interface SavvagentProviderProps extends ParentProps {
  *       }}
  *     >
  *       <MyApp />
- *     </SavvagentProvider>
+ *     </OttoFlagsProvider>
  *   );
  * }
  * ```
  */
-export function SavvagentProvider(props: SavvagentProviderProps) {
+export function OttoFlagsProvider(props: OttoFlagsProviderProps) {
   const [isReady, setIsReady] = createSignal(false);
 
   // Initialize client
@@ -89,7 +89,7 @@ export function SavvagentProvider(props: SavvagentProviderProps) {
     client = new FlagClient(props.config);
     setIsReady(true);
   } catch (error) {
-    console.error('[Savvagent] Failed to initialize client:', error);
+    console.error('[Otto Flags] Failed to initialize client:', error);
     props.config.onError?.(error as Error);
     // Create a non-functional client to prevent crashes
     client = new FlagClient({ ...props.config, apiKey: '' });
@@ -116,32 +116,32 @@ export function SavvagentProvider(props: SavvagentProviderProps) {
     client.close();
   });
 
-  const contextValue: SavvagentContextValue = {
+  const contextValue: OttoFlagsContextValue = {
     client,
     isReady,
     defaultContext: normalizedDefaultContext,
   };
 
   return (
-    <SavvagentContext.Provider value={contextValue}>
+    <OttoFlagsContext.Provider value={contextValue}>
       {props.children}
-    </SavvagentContext.Provider>
+    </OttoFlagsContext.Provider>
   );
 }
 
 /**
- * Get the Savvagent context including client, ready state, and default context.
- * Must be used within a SavvagentProvider.
+ * Get the Otto Flags context including client, ready state, and default context.
+ * Must be used within a OttoFlagsProvider.
  *
  * @returns The FlagClient instance, ready state accessor, and default context accessor
- * @throws Error if used outside of SavvagentProvider
+ * @throws Error if used outside of OttoFlagsProvider
  *
  * @example
  * ```tsx
- * import { useSavvagent } from '@savvagent/solid';
+ * import { useOttoFlags } from '@otto-flags/solid';
  *
  * function MyComponent() {
- *   const { client, isReady, defaultContext } = useSavvagent();
+ *   const { client, isReady, defaultContext } = useOttoFlags();
  *
  *   return (
  *     <Show when={isReady()}>
@@ -151,10 +151,10 @@ export function SavvagentProvider(props: SavvagentProviderProps) {
  * }
  * ```
  */
-export function useSavvagent(): SavvagentContextValue {
-  const context = useContext(SavvagentContext);
+export function useOttoFlags(): OttoFlagsContextValue {
+  const context = useContext(OttoFlagsContext);
   if (!context) {
-    throw new Error('useSavvagent must be used within a SavvagentProvider');
+    throw new Error('useOttoFlags must be used within a OttoFlagsProvider');
   }
   return context;
 }
@@ -215,7 +215,7 @@ export interface CreateFlagReturn {
  *
  * @example
  * ```tsx
- * import { createFlag } from '@savvagent/solid';
+ * import { createFlag } from '@otto-flags/solid';
  * import { Show } from 'solid-js';
  *
  * function MyComponent() {
@@ -239,7 +239,7 @@ export function createFlag(
   flagKey: string,
   options: CreateFlagOptions = {}
 ): CreateFlagReturn {
-  const { client, isReady, defaultContext } = useSavvagent();
+  const { client, isReady, defaultContext } = useOttoFlags();
   const {
     context,
     defaultValue = false,
@@ -339,7 +339,7 @@ export function createFlag(
  *
  * @example
  * ```tsx
- * import { createFlagValue } from '@savvagent/solid';
+ * import { createFlagValue } from '@otto-flags/solid';
  * import { Show } from 'solid-js';
  *
  * function MyComponent() {
@@ -396,7 +396,7 @@ export interface CreateFlagsReturn {
  *
  * @example
  * ```tsx
- * import { createFlags } from '@savvagent/solid';
+ * import { createFlags } from '@otto-flags/solid';
  * import { Show, For } from 'solid-js';
  *
  * function MyComponent() {
@@ -428,7 +428,7 @@ export function createFlags(
   flagKeys: string[],
   options: CreateFlagsOptions = {}
 ): CreateFlagsReturn {
-  const { client, isReady, defaultContext } = useSavvagent();
+  const { client, isReady, defaultContext } = useOttoFlags();
   const {
     context,
     defaultValues = {},
@@ -571,7 +571,7 @@ export function createFlags(
  *
  * @example
  * ```tsx
- * import { createWithFlag } from '@savvagent/solid';
+ * import { createWithFlag } from '@otto-flags/solid';
  *
  * function MyComponent() {
  *   createWithFlag('analytics-enabled', async () => {
@@ -587,14 +587,14 @@ export function createWithFlag(
   callback: () => void | Promise<void>,
   options: CreateFlagOptions = {}
 ): void {
-  const { client, isReady } = useSavvagent();
+  const { client, isReady } = useOttoFlags();
   const { context, onError } = options;
 
   createEffect(() => {
     if (!isReady()) return;
 
     client.withFlag(flagKey, callback, context).catch((error) => {
-      console.error(`[Savvagent] Error in withFlag callback for ${flagKey}:`, error);
+      console.error(`[Otto Flags] Error in withFlag callback for ${flagKey}:`, error);
       onError?.(error);
     });
   });
@@ -622,7 +622,7 @@ export interface CreateUserReturn {
  *
  * @example
  * ```tsx
- * import { createUser } from '@savvagent/solid';
+ * import { createUser } from '@otto-flags/solid';
  * import { createEffect } from 'solid-js';
  *
  * function AuthHandler() {
@@ -641,7 +641,7 @@ export interface CreateUserReturn {
  * ```
  */
 export function createUser(): CreateUserReturn {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const [userId, setUserIdSignal] = createSignal<string | null>(client.getUserId());
   const [anonymousId, setAnonymousIdSignal] = createSignal<string | null>(client.getAnonymousId());
 
@@ -689,7 +689,7 @@ export interface CreateEnvironmentReturn {
  *
  * @example
  * ```tsx
- * import { createEnvironment } from '@savvagent/solid';
+ * import { createEnvironment } from '@otto-flags/solid';
  *
  * function EnvironmentSwitcher() {
  *   const { environment, setEnvironment } = createEnvironment();
@@ -705,7 +705,7 @@ export interface CreateEnvironmentReturn {
  * ```
  */
 export function createEnvironment(): CreateEnvironmentReturn {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const [environment, setEnvironmentSignal] = createSignal<string>(client.getEnvironment());
 
   const setEnvironment = (env: string) => {
@@ -733,7 +733,7 @@ export function createEnvironment(): CreateEnvironmentReturn {
  *
  * @example
  * ```tsx
- * import { createUserSignals } from '@savvagent/solid';
+ * import { createUserSignals } from '@otto-flags/solid';
  *
  * function AuthHandler() {
  *   const [userId, setUserId] = createUserSignals();
@@ -743,7 +743,7 @@ export function createEnvironment(): CreateEnvironmentReturn {
  * ```
  */
 export function createUserSignals() {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   const [userId, setUserIdSignal] = createSignal<string | null>(client.getUserId());
 
   const setUserId = (id: string | null) => {
@@ -763,7 +763,7 @@ export function createUserSignals() {
  *
  * @example
  * ```tsx
- * import { createTrackError } from '@savvagent/solid';
+ * import { createTrackError } from '@otto-flags/solid';
  *
  * function FeatureComponent() {
  *   const trackError = createTrackError('new-feature');
@@ -781,7 +781,7 @@ export function createUserSignals() {
  * ```
  */
 export function createTrackError(flagKey: string, context?: FlagContext) {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
 
   return (error: Error) => {
     client.trackError(flagKey, error, context);
@@ -798,7 +798,7 @@ export function createTrackError(flagKey: string, context?: FlagContext) {
  *
  * @example
  * ```tsx
- * import { trackError } from '@savvagent/solid';
+ * import { trackError } from '@otto-flags/solid';
  *
  * function MyComponent() {
  *   const handleAction = async () => {
@@ -818,7 +818,7 @@ export function trackError(
   error: Error,
   context?: FlagContext
 ): void {
-  const { client } = useSavvagent();
+  const { client } = useOttoFlags();
   client.trackError(flagKey, error, context);
 }
 
@@ -834,7 +834,7 @@ export type {
   // Generated API types for advanced users
   ApiTypes,
   components,
-} from '@savvagent/sdk';
+} from '@otto-flags/sdk';
 
 // Re-export FlagClient for advanced use cases
-export { FlagClient } from '@savvagent/sdk';
+export { FlagClient } from '@otto-flags/sdk';

@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useState, useRef, useMemo } from 'react';
-import { FlagClient, FlagClientConfig, FlagContext } from '@savvagent/sdk';
+import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 
 /**
  * Default context values that apply to all flag evaluations
- * Per SDK Developer Guide: https://flags-docs.savvagent.com/sdk-developer-guide
+ * Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
  */
 export interface DefaultFlagContext {
   /** Application ID for application-scoped flags */
@@ -24,19 +24,19 @@ export interface DefaultFlagContext {
   attributes?: Record<string, any>;
 }
 
-interface SavvagentContextValue {
+interface OttoFlagsContextValue {
   client: FlagClient | null;
   isReady: boolean;
   defaultContext: FlagContext;
 }
 
-const SavvagentContext = createContext<SavvagentContextValue>({
+const OttoFlagsContext = createContext<OttoFlagsContextValue>({
   client: null,
   isReady: false,
   defaultContext: {},
 });
 
-export interface SavvagentProviderProps {
+export interface OttoFlagsProviderProps {
   config: FlagClientConfig;
   children: React.ReactNode;
   /** Default context values applied to all flag evaluations */
@@ -46,12 +46,12 @@ export interface SavvagentProviderProps {
 }
 
 /**
- * Provider component that initializes and provides the Savvagent client
+ * Provider component that initializes and provides the Otto Flags client
  * to all child components via React context.
  *
  * @example
  * ```tsx
- * <SavvagentProvider
+ * <OttoFlagsProvider
  *   config={{ apiKey: 'sdk_...' }}
  *   defaultContext={{
  *     applicationId: 'my-app-id',
@@ -61,10 +61,10 @@ export interface SavvagentProviderProps {
  *   }}
  * >
  *   <App />
- * </SavvagentProvider>
+ * </OttoFlagsProvider>
  * ```
  */
-export function SavvagentProvider({ config, children, defaultContext, initialOverrides }: SavvagentProviderProps) {
+export function OttoFlagsProvider({ config, children, defaultContext, initialOverrides }: OttoFlagsProviderProps) {
   const [isReady, setIsReady] = useState(false);
   const clientRef = useRef<FlagClient | null>(null);
 
@@ -113,7 +113,7 @@ export function SavvagentProvider({ config, children, defaultContext, initialOve
 
       setIsReady(true);
     } catch (error) {
-      console.error('[Savvagent] Failed to initialize client:', error);
+      console.error('[Otto Flags] Failed to initialize client:', error);
       config.onError?.(error as Error);
     }
 
@@ -128,7 +128,7 @@ export function SavvagentProvider({ config, children, defaultContext, initialOve
 
   // Memoize the context value to prevent unnecessary re-renders of all consumers
   // Only re-creates when isReady or normalizedDefaultContext actually change
-  const contextValue = useMemo<SavvagentContextValue>(
+  const contextValue = useMemo<OttoFlagsContextValue>(
     () => ({
       client: clientRef.current,
       isReady,
@@ -138,22 +138,22 @@ export function SavvagentProvider({ config, children, defaultContext, initialOve
   );
 
   return (
-    <SavvagentContext.Provider value={contextValue}>
+    <OttoFlagsContext.Provider value={contextValue}>
       {children}
-    </SavvagentContext.Provider>
+    </OttoFlagsContext.Provider>
   );
 }
 
 /**
- * Hook to access the Savvagent client instance and default context.
- * Must be used within a SavvagentProvider.
+ * Hook to access the Otto Flags client instance and default context.
+ * Must be used within a OttoFlagsProvider.
  *
  * @returns The FlagClient instance, ready state, and default context
- * @throws Error if used outside of SavvagentProvider
+ * @throws Error if used outside of OttoFlagsProvider
  *
  * @example
  * ```tsx
- * const { client, isReady, defaultContext } = useSavvagent();
+ * const { client, isReady, defaultContext } = useOttoFlags();
  *
  * if (!isReady) {
  *   return <div>Loading...</div>;
@@ -162,11 +162,11 @@ export function SavvagentProvider({ config, children, defaultContext, initialOve
  * const enabled = await client.isEnabled('my-feature');
  * ```
  */
-export function useSavvagent(): SavvagentContextValue {
-  const context = useContext(SavvagentContext);
+export function useOttoFlags(): OttoFlagsContextValue {
+  const context = useContext(OttoFlagsContext);
 
   if (context === undefined) {
-    throw new Error('useSavvagent must be used within a SavvagentProvider');
+    throw new Error('useOttoFlags must be used within a OttoFlagsProvider');
   }
 
   return context;

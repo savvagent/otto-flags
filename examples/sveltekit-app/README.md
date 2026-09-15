@@ -1,6 +1,6 @@
-# Savvagent SvelteKit Example
+# Otto Flags SvelteKit Example
 
-Example SvelteKit application demonstrating how to use the Savvagent SDK with Svelte 5.
+Example SvelteKit application demonstrating how to use the Otto Flags SDK with Svelte 5.
 
 ## Features
 
@@ -24,8 +24,8 @@ Example SvelteKit application demonstrating how to use the Savvagent SDK with Sv
 
    Edit `.env`:
    ```bash
-   VITE_SAVVAGENT_API_URL=http://localhost:8080
-   VITE_SAVVAGENT_SDK_KEY=your-sdk-key-here
+   VITE_OTTO_FLAGS_API_URL=http://localhost:8080
+   VITE_OTTO_FLAGS_SDK_KEY=your-sdk-key-here
    ```
 
 3. **Run the development server:**
@@ -42,15 +42,15 @@ Example SvelteKit application demonstrating how to use the Savvagent SDK with Sv
 ```svelte
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { SavvagentClient } from '@savvagent/sdk';
+  import { OttoFlagsClient } from '@otto-flags/sdk';
 
   let isEnabled = $state(false);
   let loading = $state(true);
 
   onMount(async () => {
-    const client = new SavvagentClient({
-      apiUrl: import.meta.env.VITE_SAVVAGENT_API_URL,
-      sdkKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY,
+    const client = new OttoFlagsClient({
+      apiUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL,
+      sdkKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY,
     });
 
     isEnabled = await client.isEnabled('new-feature', {
@@ -74,7 +74,7 @@ Example SvelteKit application demonstrating how to use the Savvagent SDK with Sv
 ```svelte
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { SavvagentClient } from '@savvagent/sdk';
+  import { OttoFlagsClient } from '@otto-flags/sdk';
 
   let isEnabled = $state(false);
   let loading = $state(true);
@@ -82,9 +82,9 @@ Example SvelteKit application demonstrating how to use the Savvagent SDK with Sv
 
   onMount(async () => {
     try {
-      const client = new SavvagentClient({
-        apiUrl: import.meta.env.VITE_SAVVAGENT_API_URL,
-        sdkKey: import.meta.env.VITE_SAVVAGENT_SDK_KEY,
+      const client = new OttoFlagsClient({
+        apiUrl: import.meta.env.VITE_OTTO_FLAGS_API_URL,
+        sdkKey: import.meta.env.VITE_OTTO_FLAGS_SDK_KEY,
       });
 
       isEnabled = await client.isEnabled('new-feature', {
@@ -103,5 +103,5 @@ Example SvelteKit application demonstrating how to use the Savvagent SDK with Sv
 
 - [SvelteKit Documentation](https://kit.svelte.dev/)
 - [Svelte 5 Documentation](https://svelte-5-preview.vercel.app/)
-- [Savvagent SDK Documentation](../../packages/typescript/README.md)
+- [Otto Flags SDK Documentation](../../packages/typescript/README.md)
 - [SDK Integration Guide](../../docs/SDK-INTEGRATION.md)

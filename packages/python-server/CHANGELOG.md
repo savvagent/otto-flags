@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial release of the Savvagent Python Server SDK
+- Initial release of the Otto Flags Python Server SDK
 - `FlagClient` - Synchronous client for feature flag evaluation
 - `AsyncFlagClient` - Asynchronous client for async applications
 - `FlagCache` and `AsyncFlagCache` - TTL-based in-memory caching

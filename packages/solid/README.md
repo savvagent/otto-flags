@@ -1,24 +1,24 @@
-# @savvagent/solid
+# @otto-flags/solid
 
-SolidJS SDK for Savvagent with reactive primitives (signals and resources).
+SolidJS SDK for Otto Flags with reactive primitives (signals and resources).
 
 ## Installation
 
 ```bash
-npm install @savvagent/solid
+npm install @otto-flags/solid
 ```
 
 ## Quick Start
 
 ```tsx
-import { SavvagentProvider, createFlag } from '@savvagent/solid';
+import { OttoFlagsProvider, createFlag } from '@otto-flags/solid';
 import { Show } from 'solid-js';
 
 function App() {
   return (
-    <SavvagentProvider config={{ apiKey: 'sdk_...' }}>
+    <OttoFlagsProvider config={{ apiKey: 'sdk_...' }}>
       <MyFeature />
-    </SavvagentProvider>
+    </OttoFlagsProvider>
   );
 }
 

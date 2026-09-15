@@ -1,4 +1,4 @@
-module github.com/savvagent/savvagent-go-server-sdk
+module github.com/savvagent/otto-flags-go-server-sdk
 
 go 1.21
 

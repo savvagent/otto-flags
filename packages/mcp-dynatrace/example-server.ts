@@ -3,7 +3,7 @@
  */
 
 import express from 'express';
-import { createHttpHandler } from '@savvagent/mcp-sdk';
+import { createHttpHandler } from '@otto-flags/mcp-sdk';
 import { DynatraceMCPServer } from './src/dynatrace-server';
 
 const CONFIG = {

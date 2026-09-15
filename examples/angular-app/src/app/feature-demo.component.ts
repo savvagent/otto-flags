@@ -2,11 +2,11 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subject } from 'rxjs';
 import { takeUntil } from 'rxjs/operators';
-import { SavvagentService, FlagObservableResult, FlagEvaluationResult } from '@savvagent/angular';
+import { OttoFlagsService, FlagObservableResult, FlagEvaluationResult } from '@otto-flags/angular';
 
 /**
  * Feature Demo Component
- * Demonstrates best practices for using Savvagent Angular SDK
+ * Demonstrates best practices for using Otto Flags Angular SDK
  *
  * Uses the flag$ observable for reactive flag evaluation with automatic updates.
  */
@@ -16,7 +16,7 @@ import { SavvagentService, FlagObservableResult, FlagEvaluationResult } from '@s
   imports: [CommonModule],
   template: `
     <div class="container">
-      <h1>Savvagent Angular Example</h1>
+      <h1>Otto Flags Angular Example</h1>
       <p class="subtitle">SDK Developer Guide Best Practices Demo</p>
 
       <ng-container *ngIf="loading; else content">
@@ -138,42 +138,42 @@ export class FeatureDemoComponent implements OnInit, OnDestroy {
   // User ID
   currentUserId: string | null = null;
 
-  constructor(private savvagent: SavvagentService) {}
+  constructor(private ottoFlags: OttoFlagsService) {}
 
   ngOnInit(): void {
     // Subscribe to new-feature flag
-    this.savvagent
+    this.ottoFlags
       .flag$('new-feature', { defaultValue: false, realtime: true })
       .pipe(takeUntil(this.destroy$))
       .subscribe((result: FlagObservableResult) => {
         this.newFeatureEnabled = result.value;
         this.newFeatureResult = result.result;
         this.loading = result.loading;
-        this.isNewFeatureOverridden = this.savvagent.hasOverride('new-feature');
+        this.isNewFeatureOverridden = this.ottoFlags.hasOverride('new-feature');
       });
 
     // Subscribe to beta-feature flag
-    this.savvagent
+    this.ottoFlags
       .flag$('beta-feature', { defaultValue: false, realtime: true })
       .pipe(takeUntil(this.destroy$))
       .subscribe((result: FlagObservableResult) => {
         this.betaFeatureEnabled = result.value;
         this.betaFeatureResult = result.result;
-        this.isBetaFeatureOverridden = this.savvagent.hasOverride('beta-feature');
+        this.isBetaFeatureOverridden = this.ottoFlags.hasOverride('beta-feature');
       });
 
     // Subscribe to enterprise-one flag
-    this.savvagent
+    this.ottoFlags
       .flag$('enterprise-one', { defaultValue: false, realtime: true })
       .pipe(takeUntil(this.destroy$))
       .subscribe((result: FlagObservableResult) => {
         this.enterpriseOneEnabled = result.value;
         this.enterpriseOneResult = result.result;
-        this.isEnterpriseOneOverridden = this.savvagent.hasOverride('enterprise-one');
+        this.isEnterpriseOneOverridden = this.ottoFlags.hasOverride('enterprise-one');
       });
 
     // Get initial user ID
-    this.currentUserId = this.savvagent.getUserId();
+    this.currentUserId = this.ottoFlags.getUserId();
   }
 
   ngOnDestroy(): void {
@@ -190,7 +190,7 @@ export class FeatureDemoComponent implements OnInit, OnDestroy {
       throw new Error('Example error for demonstration');
     } catch (error) {
       // Track errors for AI-powered correlation
-      this.savvagent.trackError('new-feature', error as Error);
+      this.ottoFlags.trackError('new-feature', error as Error);
       console.error('Action failed:', error);
     }
   }
@@ -200,7 +200,7 @@ export class FeatureDemoComponent implements OnInit, OnDestroy {
    */
   setRandomUserId(): void {
     const userId = 'user-' + Date.now();
-    this.savvagent.setUserId(userId);
+    this.ottoFlags.setUserId(userId);
     this.currentUserId = userId;
   }
 
@@ -208,7 +208,7 @@ export class FeatureDemoComponent implements OnInit, OnDestroy {
    * Clear the user ID
    */
   clearUserId(): void {
-    this.savvagent.setUserId(null);
+    this.ottoFlags.setUserId(null);
     this.currentUserId = null;
   }
 }

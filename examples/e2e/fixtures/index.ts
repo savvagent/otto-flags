@@ -4,14 +4,14 @@ import { FlagOverridePanelPage } from '../page-objects/flag-override-panel.page'
 import { UserSectionPage } from '../page-objects/user-section.page';
 import { APP_CONFIGS, AppConfig } from '../utils/app-configs';
 
-interface SavvagentFixtures {
+interface OttoFlagsFixtures {
   featureDemo: FeatureDemoPage;
   overridePanel: FlagOverridePanelPage;
   userSection: UserSectionPage;
   appConfig: AppConfig;
 }
 
-export const test = base.extend<SavvagentFixtures>({
+export const test = base.extend<OttoFlagsFixtures>({
   appConfig: async ({}, use, testInfo) => {
     const projectName = testInfo.project.name;
     const config = APP_CONFIGS[projectName];
