@@ -1,8 +1,10 @@
 # otto-flags design: MCP-only feature flags on the otto platform
 
-**Status:** Brainstorm, pre-implementation. No code exists yet in this repo.
+**Status:** Brainstorm, pre-implementation. No server/SDK code exists yet in this repo.
 **Supersedes:** savvagent-flags (`~/dev/savvagent-flags`). No production users exist there,
 so this is a successor design, not a migration — nothing needs to move at the data layer.
+**License:** otto-flags is open source (server + SDKs). The shared otto-platform
+(identity/auth/billing/console) is not affected by this and stays closed — see §7.
 
 ## 1. Vision
 
@@ -11,13 +13,14 @@ otto-factory. Where savvagent-flags was a human-operated SaaS dashboard with an 
 integration bolted on the side, otto-flags inverts that: **flag management, targeting,
 rollout, and incident response are MCP tools an agent calls**, not a UI a human clicks
 through. The one deliberate exception is the flag-evaluation hot path inside a running
-customer app (`isEnabled()` on every request) — that stays SDK/REST, per the existing
-`savvagent-sdks` split, because a prod request can't do an LLM tool-call round trip.
+customer app (`isEnabled()` on every request) — that stays SDK/REST, because a prod request
+can't do an LLM tool-call round trip.
 
 otto-flags does not stand alone. It is built on a shared **otto-platform** — the identity,
 auth, tenant-isolation, billing, and console substrate extracted from otto-factory — so
-that signing up once gives an org access to every otto-* server, and each new otto-* server
-after this one is mostly a domain crate plugged into infrastructure that already exists.
+that signing up once gives an org access to every otto-* server. otto-flags itself, being
+open source, is a **monorepo**: the MCP server and the client/framework/mobile/server SDKs
+(currently `savvagent-sdks`) live together in one public repo (§7).
 
 ## 2. otto-platform: what gets extracted from otto-factory
 
@@ -104,7 +107,7 @@ billing, all of which now live in otto-platform.
 - `flag_errors` (with Sentry correlation columns) + `ai_insights`.
 - the observability-integration config table (`mcp_integrations` → rename
   `observability_connections`) — otto-flags acting as an MCP *client* to
-  `mcp-sentry`/`mcp-datadog`/`mcp-dynatrace`/etc. from `savvagent-sdks`.
+  `mcp-sentry`/`mcp-datadog`/`mcp-dynatrace`/etc.
 
 ### Dropped — now the shared platform's job
 
@@ -137,16 +140,54 @@ Insight: `assess_risk` (pre-deploy), `correlate_errors`, `get_incident_history`,
 Resources: subscribable flag-state and incident-state resources for an agent to watch
 without polling.
 
-## 7. Explicitly out of scope for this doc
+## 7. Open source & monorepo layout
+
+otto-flags is going open source, and `savvagent-sdks` moves into this repo rather than
+staying a separate one — a single public monorepo covering the server and every SDK,
+mirroring how otto-factory keeps `client-skills/` alongside its server rather than in a
+separate repo.
+
+**Proposed layout:**
+
+```
+otto-flags/
+├── crates/              # Rust workspace: MCP server + domain logic
+│   ├── flags-core/      #   domain model, RLS-scoped queries (of-core equivalent, §5)
+│   ├── flags-mcp/       #   MCP tool surface (of-mcp equivalent, §6)
+│   └── flags-server/    #   binary: config, migrations, router assembly (of-server equivalent)
+├── web/                 # flags-specific console panels (registers into the shared Otto Console)
+├── packages/            # moved from savvagent-sdks: client/framework/mobile/server SDKs,
+│                         #   plus the mcp-sentry/mcp-datadog/etc. observability integrations
+├── examples/             # moved from savvagent-sdks
+├── docs/
+├── Cargo.toml            # Rust workspace root
+├── pnpm-workspace.yaml   # JS/TS workspace root (unchanged from savvagent-sdks)
+├── LICENSE
+└── README.md
+```
+
+**The open-source boundary.** otto-flags going public does not make otto-platform public.
+otto-flags' server depends on otto-platform at the *network* boundary (an OAuth resource
+server validating tokens minted elsewhere), the same way of-mcp does today — not as a
+source dependency — so nothing proprietary needs to be vendored in or open-sourced just to
+ship otto-flags. The one thing that needs an explicit call is the shared `otto-tenant` RLS
+crate (§3): either it's also open-sourced (it's generic infrastructure with no business
+logic in it, so a reasonable candidate) or otto-flags reimplements the same pattern locally
+without a shared-crate dependency. Not deciding this here — see open questions.
+
+**CI/versioning stay per-language, not unified.** Keep `savvagent-sdks`' existing
+Changesets-based release flow for the JS/TS packages; keep a release-please-style flow (as
+otto-factory already uses) for the Rust crates/binary; path-filter CI so a docs-only or
+single-SDK change doesn't trigger every language's test suite.
+
+## 8. Explicitly out of scope for this doc
 
 - **No migration plan.** savvagent-flags has no production users; otto-flags is a clean
   build, not a data migration.
-- **SDK/evaluation-path design.** `savvagent-sdks` already covers this; otto-flags reuses
-  it rather than re-designing it.
 - **otto-platform's own internal workspace layout** (crate boundaries, deploy topology) —
   worth its own doc once extraction starts.
 
-## 8. Open questions
+## 9. Open questions
 
 - Exact naming for `otto-platform` and whether it deploys as one binary (like
   `of-server`) or as separate auth/console/billing services.
@@ -154,8 +195,14 @@ without polling.
   into the shared console shell.
 - Whether the shared usage bucket needs per-service sub-accounting for internal cost
   attribution even though the org only sees one number.
+- License choice for the monorepo (savvagent-sdks already ships a LICENSE — carry it
+  over as-is, or pick deliberately now that the server is joining it under the same terms).
+- Whether `otto-tenant` (the RLS crate) is itself open-sourced, or reimplemented locally
+  in otto-flags without a dependency on otto-platform's source.
+- Whether moving `savvagent-sdks` into this repo preserves its git history (e.g. via
+  `git subtree`) or starts fresh with a clean copy.
 
-## 9. Suggested next steps
+## 10. Suggested next steps
 
 1. Scaffold the `otto-platform` workspace by extracting `of-core` migrations
    0001/0005/0006/0007 and `of-auth` out of otto-factory.
@@ -165,3 +212,5 @@ without polling.
    RLS crate, starting with `flag_apps` + `feature_flags` + evaluation ingestion.
 4. Add the `plans.features` JSONB column and wire one capability (e.g. `auto_rollback`)
    through it end-to-end as the pattern for everything after.
+5. Merge `savvagent-sdks` into this repo under `packages/`/`examples/` (§7), choosing
+   history-preserving vs. fresh-copy per the open question above.
