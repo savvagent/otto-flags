@@ -132,7 +132,7 @@ yarn add @otto-flags/sdk
 import { OttoFlagsClient } from '@otto-flags/sdk';
 
 const client = new OttoFlagsClient({
-  apiUrl: 'https://flags-api.otto-flags.dev',
+  apiUrl: 'https://otto-flags.savvagent.com',
   sdkKey: 'your-sdk-key',
   environment: 'production',
 });
@@ -368,10 +368,6 @@ pnpm --filter @otto-flags/sdk test
 pnpm --filter @otto-flags/sdk test:watch
 ```
 
-## License
-
-MIT License - see [LICENSE](./LICENSE) for details
-
 ## Support
 
 - **Documentation**: [docs/](./docs)
@@ -381,8 +377,8 @@ MIT License - see [LICENSE](./LICENSE) for details
 
 ## Related Projects
 
-- **[Otto Flags Platform](https://flags.otto-flags.dev)** - The main platform repository
-- **[Otto Flags Docs](https://flags.otto-flags.dev/docs)** - Official documentation
+- **[Otto Flags Platform](https://github.com/savvagent/otto-flags)** - The main platform repository
+- **[Otto Flags Docs](https://github.com/savvagent/otto-flags#readme)** - Official documentation
 
 ## Packages Status
 
@@ -422,3 +418,13 @@ MIT License - see [LICENSE](./LICENSE) for details
 |---------|---------|--------|
 | [@otto-flags/mcp-sdk](./packages/mcp-sdk) | [![npm](https://img.shields.io/npm/v/@otto-flags/mcp-sdk)](https://www.npmjs.com/package/@otto-flags/mcp-sdk) | Beta |
 | [@otto-flags/mcp-sentry](./packages/mcp-sentry) | [![npm](https://img.shields.io/npm/v/@otto-flags/mcp-sentry)](https://www.npmjs.com/package/@otto-flags/mcp-sentry) | Beta |
+
+## License
+
+Two licenses, by directory:
+
+- **The server** (`crates/`) is [AGPL-3.0-or-later](./LICENSE). Running a modified
+  version as a network service obliges you to offer its source to its users.
+- **The SDKs and examples** (`packages/`, `examples/`) are [MIT](./packages/typescript/LICENSE).
+  Embedding an SDK in your application puts no AGPL obligations on it.
+

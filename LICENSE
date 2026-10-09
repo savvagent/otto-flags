@@ -1,14 +1,21 @@
-otto-flags
+otto-flags server
 
 Copyright (C) 2026 Savvagent, LLC
+
+This license covers the server: everything under crates/, and the repository's
+build, deploy, and documentation files. The SDKs under packages/ and the
+example applications under examples/ are licensed separately under the MIT
+License; see the LICENSE file in each of those directories.
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
+
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU Affero General Public License for more details.
+
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
