@@ -116,12 +116,18 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
     if !looks_like_key(key) {
         return Ok(None);
     }
+    resolve_hash(db, &hash(key)).await
+}
+
+/// [`resolve`] by the key's hash, for re-checking a key that is no longer held
+/// in clear (a long-lived stream).
+pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
            AND NOT EXISTS (SELECT 1 FROM deleted_orgs d WHERE d.org_id = k.org_id)",
     )
-    .bind(hash(key))
+    .bind(key_hash)
     .fetch_optional(db.pool())
     .await?;
     Ok(row.and_then(|(org, app, kind)| {

@@ -604,7 +604,13 @@ impl SdkFlag {
     /// `enabled` is the environment's master switch, not an evaluation: with no
     /// context there is nobody to evaluate for. SDKs that need per-user answers
     /// call the evaluate endpoint.
-    pub fn from_flag(flag: &FeatureFlag, environment: &str) -> Self {
+    ///
+    /// `with_rules` is false for a client key. That key is public (it ships in
+    /// web pages), and targeting rules routinely name people -- user ids, email
+    /// addresses, customer accounts -- so a client key sees each environment's
+    /// switch, rollout, and default variation, never its rules. Evaluation
+    /// still applies them server-side.
+    pub fn from_flag(flag: &FeatureFlag, environment: &str, with_rules: bool) -> Self {
         let enabled = flag.status == FlagStatus::Active
             && flag
                 .environments
@@ -613,14 +619,60 @@ impl SdkFlag {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
         let has_variations = flag.variations.as_object().is_some_and(|m| !m.is_empty());
+        let mut environments = flag.environments.clone();
+        if !with_rules {
+            if let Some(map) = environments.as_object_mut() {
+                for env in map.values_mut() {
+                    if let Some(env) = env.as_object_mut() {
+                        env.remove("rules");
+                    }
+                }
+            }
+        }
         Self {
             key: flag.key.clone(),
             enabled,
             scope: "application",
-            environments: flag.environments.clone(),
+            environments,
             variations: has_variations.then(|| flag.variations.clone()),
             configuration: flag.configuration.clone(),
             version: flag.version,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_client_key_never_sees_targeting_rules() {
+        let now = chrono::Utc::now();
+        let flag = FeatureFlag {
+            id: FlagId::new(),
+            org_id: OrgId::new(),
+            app_id: FlagAppId::new(),
+            key: "beta".into(),
+            name: "beta".into(),
+            description: None,
+            status: FlagStatus::Active,
+            environments: serde_json::json!({"production": {
+                "enabled": true,
+                "rollout_percentage": 10,
+                "rules": [{"attribute": "email", "operator": "in", "values": ["ceo@example.com"]}]
+            }}),
+            variations: serde_json::json!({}),
+            configuration: None,
+            version: 3,
+            created_at: now,
+            updated_at: now,
+            archived_at: None,
+        };
+        let public = SdkFlag::from_flag(&flag, "production", false);
+        assert!(public.enabled);
+        assert!(!public.environments.to_string().contains("ceo@example.com"));
+        assert_eq!(public.environments["production"]["rollout_percentage"], 10);
+        let private = SdkFlag::from_flag(&flag, "production", true);
+        assert!(private.environments.to_string().contains("ceo@example.com"));
     }
 }

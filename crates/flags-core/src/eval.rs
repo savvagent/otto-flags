@@ -403,9 +403,8 @@ fn loosely_equal(a: &Value, b: &Value) -> bool {
     if a == b {
         return true;
     }
-    match (number(a), number(b)) {
-        (Some(x), Some(y)) => return x == y,
-        _ => {}
+    if let (Some(x), Some(y)) = (number(a), number(b)) {
+        return x == y;
     }
     text(a).zip(text(b)).is_some_and(|(x, y)| x == y)
 }

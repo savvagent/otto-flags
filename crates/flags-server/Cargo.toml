@@ -7,10 +7,33 @@ rust-version.workspace = true
 
 [dependencies]
 flags-core.workspace = true
+flags-mcp.workspace = true
+flags-api.workspace = true
 otto-tenant.workspace = true
+otto-resource.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+url.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 dotenvy.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+chrono.workspace = true
+otto-resource.workspace = true
+otto-tenant.workspace = true
+flags-core.workspace = true
+sqlx.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+axum.workspace = true
+http.workspace = true

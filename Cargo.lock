@@ -547,6 +547,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror",
  "tokio",
  "tracing",
@@ -559,13 +560,24 @@ name = "flags-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
+ "chrono",
  "dotenvy",
+ "flags-api",
  "flags-core",
+ "flags-mcp",
+ "http",
+ "otto-resource",
  "otto-tenant",
+ "serde_json",
  "sqlx",
  "tokio",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]
