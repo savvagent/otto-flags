@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+exclude = [
+  # Standalone SDK and example crates with their own lockfiles; not part of the server.
+  "packages/rust-server",
+  "examples/rust-server",
+]
+members = [
+  "crates/flags-core",
+  "crates/flags-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+rust-version = "1.88"
+
+[workspace.dependencies]
+flags-core = { path = "crates/flags-core" }
+
+# Pinned to a specific otto-platform commit rather than a branch, per
+# docs/specs/2026-09-15-otto-flags-design.md §9. Bumping the pin is a
+# deliberate, reviewable edit to this line, not an implicit "whatever main
+# happens to be."
+otto-tenant = { git = "https://github.com/savvagent/otto-platform", rev = "80b17eb9d9161b818c2649e530c9733f989534df" }
+
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid", "macros", "migrate", "json",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+schemars = { version = "1.1", features = ["chrono04", "uuid1"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+dotenvy = "0.15"
+
+[profile.release]
+lto = "thin"
+strip = true

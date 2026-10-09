@@ -1,8 +1,30 @@
-# Otto Flags SDKs
+# Otto Flags
 
-Official SDKs, MCP servers, and example applications for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
+otto-flags is a feature flag platform built for agentic coding agents to manage, not
+for humans to click through. **See [VISION.md](./VISION.md) for the full scope and
+vision** — the short version: flag *management* (create, target, roll out, roll back,
+assess risk) is an MCP tool surface an agent calls; flag *evaluation* inside a running
+production app stays SDK/REST, because a prod request can't do an LLM tool-call round
+trip.
+
+## Status
+
+The MCP server that does flag management — the primary interface this project exists
+to build — **does not exist yet.** It's designed but not scaffolded; see
+[docs/specs/2026-09-15-otto-flags-design.md](./docs/specs/2026-09-15-otto-flags-design.md)
+for the architecture and current build status.
+
+What *is* in this repo today is the other half: the client/framework/mobile/server SDKs
+and example apps for the flag-**evaluation** side (`isEnabled()` at runtime), plus a
+base MCP SDK and observability-integration MCP clients (Sentry, Datadog, …) that the
+future flags MCP server will use to correlate flags with incidents. These are listed
+below.
 
 ## Packages
+
+The packages below are the evaluation-side SDKs and supporting MCP client
+integrations — not the agent-facing flags-management MCP server described in
+[VISION.md](./VISION.md), which is still to be built.
 
 ### Client SDKs
 

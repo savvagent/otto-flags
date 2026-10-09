@@ -145,3 +145,8 @@ next-env.d.ts
 examples/**/package-lock.json
 examples/**/yarn.lock
 examples/**/pnpm-lock.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
