@@ -96,7 +96,7 @@ publishing {
                     developer {
                         id.set("otto-flags")
                         name.set("Otto Flags Team")
-                        email.set("support@otto-flags.dev")
+                        email.set("support@savvagent.com")
                     }
                 }
 

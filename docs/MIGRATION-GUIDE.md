@@ -729,7 +729,7 @@ const config = await client.getConfig<MyConfig>('flag');
 - [SDK Integration Guide](./SDK-INTEGRATION.md)
 - [Community Forum](https://github.com/savvagent/otto-flags/discussions)
 - [Report Issues](https://github.com/savvagent/otto-flags/issues)
-- support@otto-flags.dev
+- support@savvagent.com
 
 ---
 

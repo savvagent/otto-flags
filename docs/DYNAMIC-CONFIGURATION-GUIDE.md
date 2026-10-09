@@ -975,7 +975,7 @@ See [MIGRATION-GUIDE.md](./MIGRATION-GUIDE.md) for detailed migration instructio
 - 📚 [Full API Reference](./SDK-REFERENCE.md)
 - 💬 [GitHub Discussions](https://github.com/savvagent/otto-flags/discussions)
 - 🐛 [Report Issues](https://github.com/savvagent/otto-flags/issues)
-- 📧 Email: support@otto-flags.dev
+- 📧 Email: support@savvagent.com
 
 ---
 

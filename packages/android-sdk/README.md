@@ -363,7 +363,7 @@ See the [Android example app](../../examples/android-app) for a complete impleme
 
 - [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
 - [Documentation](https://github.com/savvagent/otto-flags#readme)
-- [Email](mailto:support@otto-flags.dev)
+- [Email](mailto:support@savvagent.com)
 
 ## License
 
