@@ -19,7 +19,7 @@ import { FlagClient } from '@otto-flags/sdk';
 
 const client = new FlagClient({
   apiKey: 'sdk_your_key_here',
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
 });
 
 // Check if flag is enabled

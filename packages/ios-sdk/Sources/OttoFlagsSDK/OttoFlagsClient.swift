@@ -10,7 +10,7 @@ public struct OttoFlagsConfig {
     let timeout: TimeInterval
 
     public init(
-        apiUrl: String = "https://beta.otto-flags.dev",
+        apiUrl: String = "https://otto-flags.savvagent.com",
         sdkKey: String,
         environment: String = "production",
         pollingInterval: TimeInterval = 60,

@@ -3,7 +3,7 @@ import { FlagClient, FlagClientConfig, FlagContext } from '@otto-flags/sdk';
 
 /**
  * Default context values that apply to all flag evaluations
- * Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
+ * Per SDK Developer Guide: https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md
  */
 export interface DefaultFlagContext {
   /** Application ID for application-scoped flags */

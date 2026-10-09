@@ -35,7 +35,7 @@ impl Default for Config {
         Self {
             api_key: String::new(),
             application_id: None,
-            base_url: "https://api.otto-flags.dev".to_string(),
+            base_url: "https://otto-flags.savvagent.com".to_string(),
             enable_realtime: true,
             cache_ttl: Duration::from_secs(60),
             enable_telemetry: true,

@@ -85,7 +85,7 @@ describe('@otto-flags/sveltekit/server - Server-side functionality', () => {
       const config = {
         apiKey: 'test-api-key',
         applicationId: 'test-app-id',
-        baseUrl: 'https://custom.otto-flags.dev',
+        baseUrl: 'https://flags.example.com',
         pollingInterval: 60000,
       };
 

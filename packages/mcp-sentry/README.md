@@ -279,5 +279,5 @@ MIT
 
 ## Support
 
-- Documentation: [otto-flags.dev/docs/integrations/sentry](https://flags-docs.otto-flags.dev/integrations/sentry)
+- Documentation: [packages/mcp-sentry](https://github.com/savvagent/otto-flags/tree/main/packages/mcp-sentry)
 - Issues: [GitHub Issues](https://github.com/savvagent/otto-flags/issues)

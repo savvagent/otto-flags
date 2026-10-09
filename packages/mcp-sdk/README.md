@@ -319,4 +319,4 @@ MIT
 
 ## Support
 
-For questions and support, visit [otto-flags.dev/docs](https://flags-docs.otto-flags.dev) or open an issue on GitHub.
+For questions and support, visit [the otto-flags README](https://github.com/savvagent/otto-flags#readme) or open an issue on GitHub.

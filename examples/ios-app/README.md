@@ -27,7 +27,7 @@ This is an example iOS application demonstrating how to integrate and use the Ot
 2. Update the SDK key in `OttoFlagsExampleApp.swift`:
    ```swift
    let config = OttoFlagsConfig(
-       apiUrl: "https://flags-beta.otto-flags.dev",
+       apiUrl: "https://otto-flags.savvagent.com",
        sdkKey: "your-sdk-key",  // Replace with your SDK key
        environment: "production"
    )
@@ -95,7 +95,7 @@ You can add more feature flags by:
 ## Learn More
 
 - [iOS SDK Documentation](../../packages/ios-sdk/README.md)
-- [Otto Flags Documentation](https://flags-docs.otto-flags.dev)
+- [Otto Flags Documentation](https://github.com/savvagent/otto-flags#readme)
 - [SwiftUI Guide](https://developer.apple.com/tutorials/swiftui)
 
 ## License

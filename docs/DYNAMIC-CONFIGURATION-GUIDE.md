@@ -402,7 +402,7 @@ class MainActivity : AppCompatActivity() {
         client = OttoFlagsClient(
             config = OttoFlagsConfig(
                 sdkKey = BuildConfig.OTTO_FLAGS_API_KEY,
-                apiUrl = "https://flags-api.otto-flags.dev"
+                apiUrl = "https://otto-flags.savvagent.com"
             ),
             context = this
         )
@@ -465,7 +465,7 @@ class ViewController: UIViewController {
     init() {
         let config = OttoFlagsConfig(
             sdkKey: Bundle.main.infoDictionary?["OTTO_FLAGS_API_KEY"] as! String,
-            apiUrl: "https://flags-api.otto-flags.dev"
+            apiUrl: "https://otto-flags.savvagent.com"
         )
         client = OttoFlagsClient(config: config)
         super.init(nibName: nil, bundle: nil)

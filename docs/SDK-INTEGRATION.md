@@ -27,7 +27,7 @@ import { FlagClient } from '@otto-flags/sdk';
 // Create a single SDK instance at application startup (recommended)
 // Per SDK Developer Guide: Initialize once, create a single SDK instance
 const ottoFlags = new FlagClient({
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   apiKey: 'sdk_your_key_here', // SDK keys start with 'sdk_' prefix
   applicationId: 'your-app-id', // For application-scoped flags
   enableRealtime: true, // Enable SSE for real-time updates
@@ -81,7 +81,7 @@ interface FlagClientConfig {
   apiKey: string;              // SDK key (sdk_) or Server key (srv_) from dashboard
 
   // Optional
-  baseUrl?: string;            // Your Otto Flags API URL (default: https://flags-api.otto-flags.dev)
+  baseUrl?: string;            // Your Otto Flags API URL (default: https://otto-flags.savvagent.com)
   applicationId?: string;      // Application ID for hierarchical flag lookup
 
   // Caching
@@ -275,7 +275,7 @@ import { FlagClient } from '@otto-flags/sdk';
 
 const client = new FlagClient({
   apiKey: 'sdk_your_key',
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   enableRealtime: true, // Enable SSE connection
 });
 
@@ -472,11 +472,11 @@ Never hardcode API keys:
 
 ```bash
 # .env
-OTTO_FLAGS_API_URL=https://flags-api.otto-flags.dev
+OTTO_FLAGS_API_URL=https://otto-flags.savvagent.com
 OTTO_FLAGS_SDK_KEY=sdk_prod_xxx  # SDK keys use sdk_ prefix
 
 # .env.local (for frontend)
-NEXT_PUBLIC_OTTO_FLAGS_API_URL=https://flags-api.otto-flags.dev
+NEXT_PUBLIC_OTTO_FLAGS_API_URL=https://otto-flags.savvagent.com
 NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY=sdk_prod_xxx
 ```
 
@@ -550,7 +550,7 @@ const client = new FlagClient({
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_staging_xxx',
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   cacheTtl: 60000, // 1 minute
   enableRealtime: true,
   enableTelemetry: true,
@@ -562,7 +562,7 @@ const client = new FlagClient({
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_prod_xxx',
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   cacheTtl: 300000, // 5 minutes (per SDK Developer Guide)
   enableRealtime: true, // Enable SSE for instant updates
   enableTelemetry: true,
@@ -635,6 +635,6 @@ See [SDK-DEVELOPER-GUIDE.md](./SDK-DEVELOPER-GUIDE.md) for complete API document
 
 ## Support
 
-- Documentation: https://flags-docs.otto-flags.dev
+- Documentation: https://github.com/savvagent/otto-flags#readme
 - GitHub Issues: https://github.com/yourusername/otto-flags/issues
 - Examples: https://github.com/yourusername/otto-flags/tree/main/examples

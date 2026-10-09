@@ -1,6 +1,6 @@
 # Otto Flags iOS SDK
 
-The official iOS SDK for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
+The official iOS SDK for [Otto Flags](https://github.com/savvagent/otto-flags) - the AI-powered feature flag platform that prevents production incidents.
 
 ## Features
 
@@ -56,7 +56,7 @@ import OttoFlagsSDK
 
 // Configure the SDK
 let config = OttoFlagsConfig(
-    apiUrl: "https://flags-beta.otto-flags.dev",
+    apiUrl: "https://otto-flags.savvagent.com",
     sdkKey: "your-sdk-key",
     environment: "production"
 )
@@ -198,7 +198,7 @@ class ViewController: UIViewController {
 
 ```swift
 let config = OttoFlagsConfig(
-    apiUrl: "https://flags-beta.otto-flags.dev",
+    apiUrl: "https://otto-flags.savvagent.com",
     sdkKey: "your-sdk-key",
     environment: "production",
     pollingInterval: 60,        // Poll every 60 seconds
@@ -346,14 +346,14 @@ See the [iOS example app](../../examples/ios-app) for a complete implementation.
 
 ## Documentation
 
-- [API Reference](https://flags-docs.otto-flags.dev/ios-sdk)
-- [Integration Guide](https://flags-docs.otto-flags.dev/guides/ios)
-- [Migration Guide](https://flags-docs.otto-flags.dev/migration/ios)
+- [API Reference](https://github.com/savvagent/otto-flags/tree/main/packages/ios-sdk)
+- [Integration Guide](https://github.com/savvagent/otto-flags/tree/main/packages/ios-sdk)
+- [Migration Guide](https://github.com/savvagent/otto-flags/tree/main/packages/ios-sdk)
 
 ## Support
 
 - [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
-- [Documentation](https://flags-docs.otto-flags.dev)
+- [Documentation](https://github.com/savvagent/otto-flags#readme)
 - [Email](mailto:support@otto-flags.dev)
 
 ## License

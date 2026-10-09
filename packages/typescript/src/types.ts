@@ -38,7 +38,7 @@ export interface FlagClientConfig {
 
 /**
  * Context passed to flag evaluation
- * Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
+ * Per SDK Developer Guide: https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md
  */
 export interface FlagContext {
   /** User ID for targeted rollouts (logged-in users) - required for percentage rollouts */

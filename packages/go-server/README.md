@@ -72,7 +72,7 @@ func main() {
 config := ottoflags.Config{
     APIKey:          "sdk_your_api_key_here",
     ApplicationID:   "your-app-id",
-    BaseURL:         "https://flags-api.otto-flags.dev", // optional
+    BaseURL:         "https://otto-flags.savvagent.com", // optional
     EnableRealtime:  true,                         // default: true
     CacheTTL:        60 * time.Second,            // default: 60 seconds
     EnableTelemetry: true,                         // default: true
@@ -389,6 +389,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.otto-flags.dev
+- Documentation: https://github.com/savvagent/otto-flags#readme
 - Issues: https://github.com/savvagent/otto-flags/issues
 - Email: support@otto-flags.dev

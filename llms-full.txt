@@ -93,7 +93,7 @@ import { FlagClient } from '@otto-flags/sdk';
 // Initialize the client
 const client = new FlagClient({
   apiKey: 'sdk_your_api_key_here',
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   enableRealtime: true,
   enableTelemetry: true,
 });
@@ -272,7 +272,7 @@ import (
 func main() {
     client, err := ottoFlags.NewClient(ottoFlags.Config{
         APIKey:  "sdk_your_api_key",
-        BaseURL: "https://flags-api.otto-flags.dev",
+        BaseURL: "https://otto-flags.savvagent.com",
     })
     if err != nil {
         log.Fatal(err)
@@ -303,7 +303,7 @@ public class Example {
     public static void main(String[] args) {
         FlagClient client = FlagClient.builder()
             .apiKey("sdk_your_api_key")
-            .baseUrl("https://flags-api.otto-flags.dev")
+            .baseUrl("https://otto-flags.savvagent.com")
             .build();
 
         FlagContext context = FlagContext.builder()
@@ -331,7 +331,7 @@ use ottoFlags::{FlagClient, FlagContext};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = FlagClient::new(
         "sdk_your_api_key",
-        "https://flags-api.otto-flags.dev",
+        "https://otto-flags.savvagent.com",
     )?;
 
     let context = FlagContext::new()
@@ -356,7 +356,7 @@ import OttoFlagsSDK
 // Initialize
 let client = try FlagClient(
     apiKey: "sdk_your_api_key",
-    baseURL: "https://flags-api.otto-flags.dev"
+    baseURL: "https://otto-flags.savvagent.com"
 )
 
 // Check flag
@@ -393,7 +393,7 @@ import com.savvagent.ottoflags.sdk.FlagContext
 // Initialize
 val client = FlagClient(
     apiKey = "sdk_your_api_key",
-    baseUrl = "https://flags-api.otto-flags.dev"
+    baseUrl = "https://otto-flags.savvagent.com"
 )
 
 // Check flag
@@ -434,7 +434,7 @@ interface FlagClientConfig {
   apiKey: string;              // SDK key (starts with sdk_)
 
   // Optional - API
-  baseUrl?: string;            // API URL (default: https://flags-api.otto-flags.dev)
+  baseUrl?: string;            // API URL (default: https://otto-flags.savvagent.com)
   timeout?: number;            // Request timeout in ms (default: 5000)
 
   // Optional - Caching
@@ -785,7 +785,7 @@ const client = new FlagClient({
 ```typescript
 const client = new FlagClient({
   apiKey: process.env.OTTO_FLAGS_SDK_KEY!,
-  baseUrl: 'https://flags-api.otto-flags.dev',
+  baseUrl: 'https://otto-flags.savvagent.com',
   cache: { enabled: true, ttl: 60000 },
   enableTelemetry: true,
 });
@@ -796,7 +796,7 @@ const client = new FlagClient({
 ```bash
 # .env
 OTTO_FLAGS_SDK_KEY=sdk_prod_xxx
-OTTO_FLAGS_API_URL=https://flags-api.otto-flags.dev
+OTTO_FLAGS_API_URL=https://otto-flags.savvagent.com
 
 # .env.local (client-side)
 NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY=sdk_prod_xxx
@@ -844,6 +844,6 @@ VITE_OTTO_FLAGS_SDK_KEY=sdk_prod_xxx
 
 ## Support
 
-- **Documentation**: https://flags-docs.otto-flags.dev
+- **Documentation**: https://github.com/savvagent/otto-flags#readme
 - **GitHub Issues**: https://github.com/savvagent/otto-flags/issues
 - **Email**: support@otto-flags.dev

@@ -67,7 +67,7 @@ final class OttoFlagsClientTests: XCTestCase {
     func testConfigDefaults() {
         let config = OttoFlagsConfig(sdkKey: "test-key")
 
-        XCTAssertEqual(config.apiUrl, "https://beta.otto-flags.dev")
+        XCTAssertEqual(config.apiUrl, "https://otto-flags.savvagent.com")
         XCTAssertEqual(config.environment, "production")
         XCTAssertEqual(config.pollingInterval, 60)
         XCTAssertTrue(config.enableWebSocket)
@@ -76,7 +76,7 @@ final class OttoFlagsClientTests: XCTestCase {
 
     func testConfigCustomValues() {
         let config = OttoFlagsConfig(
-            apiUrl: "https://staging.otto-flags.dev",
+            apiUrl: "https://flags.example.com",
             sdkKey: "staging-key",
             environment: "staging",
             pollingInterval: 120,
@@ -84,7 +84,7 @@ final class OttoFlagsClientTests: XCTestCase {
             timeout: 60
         )
 
-        XCTAssertEqual(config.apiUrl, "https://staging.otto-flags.dev")
+        XCTAssertEqual(config.apiUrl, "https://flags.example.com")
         XCTAssertEqual(config.sdkKey, "staging-key")
         XCTAssertEqual(config.environment, "staging")
         XCTAssertEqual(config.pollingInterval, 120)

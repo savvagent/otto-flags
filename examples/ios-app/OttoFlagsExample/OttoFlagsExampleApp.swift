@@ -25,7 +25,7 @@ class FeatureFlagManager: ObservableObject {
 
     func initialize() async {
         let config = OttoFlagsConfig(
-            apiUrl: "https://beta.otto-flags.dev",
+            apiUrl: "https://otto-flags.savvagent.com",
             sdkKey: "demo-sdk-key",
             environment: "development"
         )
