@@ -1,6 +1,6 @@
 # Otto Flags Android SDK
 
-The official Android SDK for [Otto Flags](https://flags.otto-flags.dev) - the AI-powered feature flag platform that prevents production incidents.
+The official Android SDK for [Otto Flags](https://github.com/savvagent/otto-flags) - the AI-powered feature flag platform that prevents production incidents.
 
 ## Features
 
@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
 
 // Configure the SDK
 val config = OttoFlagsConfig(
-    apiUrl = "https://flags-beta.otto-flags.dev",
+    apiUrl = "https://otto-flags.savvagent.com",
     sdkKey = "your-sdk-key",
     environment = "production"
 )
@@ -171,7 +171,7 @@ class MainActivity : AppCompatActivity() {
 
 ```kotlin
 val config = OttoFlagsConfig(
-    apiUrl = "https://flags-beta.otto-flags.dev",
+    apiUrl = "https://otto-flags.savvagent.com",
     sdkKey = "your-sdk-key",
     environment = "production",
     pollingInterval = 60_000L,     // Poll every 60 seconds
@@ -355,14 +355,14 @@ See the [Android example app](../../examples/android-app) for a complete impleme
 
 ## Documentation
 
-- [API Reference](https://flags-docs.otto-flags.dev/android-sdk)
-- [Integration Guide](https://flags-docs.otto-flags.dev/guides/android)
-- [Migration Guide](https://flags-docs.otto-flags.dev/migration/android)
+- [API Reference](https://github.com/savvagent/otto-flags/tree/main/packages/android-sdk)
+- [Integration Guide](https://github.com/savvagent/otto-flags/tree/main/packages/android-sdk)
+- [Migration Guide](https://github.com/savvagent/otto-flags/tree/main/packages/android-sdk)
 
 ## Support
 
 - [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
-- [Documentation](https://flags-docs.otto-flags.dev)
+- [Documentation](https://github.com/savvagent/otto-flags#readme)
 - [Email](mailto:support@otto-flags.dev)
 
 ## License

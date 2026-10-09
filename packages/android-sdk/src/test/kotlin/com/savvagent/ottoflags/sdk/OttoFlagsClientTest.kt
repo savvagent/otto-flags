@@ -22,7 +22,7 @@ class OttoFlagsClientTest {
     fun testConfigDefaults() {
         val config = OttoFlagsConfig(sdkKey = "test-key")
 
-        assertEquals("https://flags-beta.otto-flags.dev", config.apiUrl)
+        assertEquals("https://otto-flags.savvagent.com", config.apiUrl)
         assertEquals("production", config.environment)
         assertEquals(60_000L, config.pollingInterval)
         assertTrue(config.enableWebSocket)
@@ -33,7 +33,7 @@ class OttoFlagsClientTest {
     @Test
     fun testConfigCustomValues() {
         val config = OttoFlagsConfig(
-            apiUrl = "https://flags.otto-flags.dev",
+            apiUrl = "https://github.com/savvagent/otto-flags",
             sdkKey = "staging-key",
             environment = "staging",
             pollingInterval = 120_000L,
@@ -42,7 +42,7 @@ class OttoFlagsClientTest {
             enableLogging = true
         )
 
-        assertEquals("https://flags.otto-flags.dev", config.apiUrl)
+        assertEquals("https://github.com/savvagent/otto-flags", config.apiUrl)
         assertEquals("staging-key", config.sdkKey)
         assertEquals("staging", config.environment)
         assertEquals(120_000L, config.pollingInterval)

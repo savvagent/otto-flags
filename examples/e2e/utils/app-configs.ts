@@ -103,10 +103,10 @@ export const APP_CONFIGS: Record<string, AppConfig> = {
 };
 
 export const BETA_ENV = {
-  OTTO_FLAGS_API_URL: 'https://flags-api-beta.otto-flags.dev',
+  OTTO_FLAGS_API_URL: 'https://otto-flags.savvagent.com',
   OTTO_FLAGS_SDK_KEY: 'sdk_dev_ca6aeb1de1308034e5fcb23db66cb35f',
-  VITE_OTTO_FLAGS_API_URL: 'https://flags-api-beta.otto-flags.dev',
+  VITE_OTTO_FLAGS_API_URL: 'https://otto-flags.savvagent.com',
   VITE_OTTO_FLAGS_SDK_KEY: 'sdk_dev_ca6aeb1de1308034e5fcb23db66cb35f',
-  NEXT_PUBLIC_OTTO_FLAGS_API_URL: 'https://flags-api-beta.otto-flags.dev',
+  NEXT_PUBLIC_OTTO_FLAGS_API_URL: 'https://otto-flags.savvagent.com',
   NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY: 'sdk_dev_ca6aeb1de1308034e5fcb23db66cb35f',
 };

@@ -13,7 +13,7 @@ class FlagClientConfig:
     """
     Configuration for initializing the FlagClient.
 
-    Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
+    Per SDK Developer Guide: https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md
     """
 
     api_key: str
@@ -26,7 +26,7 @@ class FlagClientConfig:
     application_id: str | None = None
     """Application ID for application-scoped flags (omit for enterprise flags only)."""
 
-    base_url: str = "https://flags-api.otto-flags.dev"
+    base_url: str = "https://otto-flags.savvagent.com"
     """Base URL for the Otto Flags API."""
 
     environment: str = "production"
@@ -56,7 +56,7 @@ class FlagContext:
     """
     Context passed to flag evaluation.
 
-    Per SDK Developer Guide: https://flags-docs.otto-flags.dev/sdk-developer-guide
+    Per SDK Developer Guide: https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md
     """
 
     user_id: str | None = None

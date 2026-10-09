@@ -45,7 +45,7 @@ describe('@otto-flags/remix - Server Utilities', () => {
       const config: FlagClientConfig = {
         apiKey: 'sdk_test_key_123',
         applicationId: 'app_123',
-        baseUrl: 'https://flags-api.otto-flags.dev',
+        baseUrl: 'https://otto-flags.savvagent.com',
       };
 
       server.initRemixClient(config);

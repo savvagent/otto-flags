@@ -1,14 +1,14 @@
 {
   "name": "@otto-flags/monorepo",
   "version": "0.0.0",
-  "private": false,
+  "private": true,
   "description": "Otto Flags SDKs, MCP servers, and example applications",
   "repository": {
     "type": "git",
     "url": "https://github.com/savvagent/otto-flags.git"
   },
-  "license": "MIT",
-  "author": "Otto Flags",
+  "license": "(AGPL-3.0-or-later AND MIT)",
+  "author": "Savvagent, LLC",
   "scripts": {
     "build": "pnpm -r --filter='./packages/*' run build",
     "test": "pnpm -r --filter='./packages/*' run test",

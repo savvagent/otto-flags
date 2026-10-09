@@ -49,7 +49,7 @@ class FeatureFlagsViewModel(application: Application) : AndroidViewModel(applica
 
     init {
         val config = OttoFlagsConfig(
-            apiUrl = "https://flags-beta.otto-flags.dev",
+            apiUrl = "https://otto-flags.savvagent.com",
             sdkKey = "demo-sdk-key",
             environment = "development",
             enableLogging = true

@@ -117,7 +117,7 @@ class TestFlagEvaluation:
     ) -> None:
         """Test that API errors return default value."""
         mock_api.post(
-            "https://flags-api.otto-flags.dev/api/flags/test-flag/evaluate"
+            "https://otto-flags.savvagent.com/api/flags/test-flag/evaluate"
         ).mock(return_value=httpx.Response(500, json={"error": "Internal error"}))
 
         result = client.evaluate("test-flag")
@@ -136,7 +136,7 @@ class TestFlagEvaluation:
 
         with respx.mock:
             respx.post(
-                "https://flags-api.otto-flags.dev/api/flags/my-flag/evaluate"
+                "https://otto-flags.savvagent.com/api/flags/my-flag/evaluate"
             ).mock(return_value=httpx.Response(500))
 
             with FlagClient(config) as client:

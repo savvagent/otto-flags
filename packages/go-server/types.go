@@ -10,7 +10,7 @@ type Config struct {
 	// ApplicationID for application-scoped flags (optional)
 	ApplicationID string
 
-	// BaseURL is the Otto Flags API base URL (default: https://flags-api.otto-flags.dev)
+	// BaseURL is the Otto Flags API base URL (default: https://otto-flags.savvagent.com)
 	BaseURL string
 
 	// EnableRealtime enables real-time flag updates via SSE (default: true)

@@ -64,7 +64,7 @@ use std::time::Duration;
 
 let config = Config::new("sdk_your_api_key_here")
     .with_application_id("your-app-id")
-    .with_base_url("https://flags-api.otto-flags.dev")
+    .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_default("feature-a", false)
@@ -248,7 +248,7 @@ Configuration builder for the FlagClient.
 ```rust
 let config = Config::new("sdk_key")
     .with_application_id("app-id")
-    .with_base_url("https://flags-api.otto-flags.dev")
+    .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_default("flag", false);
@@ -378,7 +378,7 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.otto-flags.dev
+- Documentation: https://github.com/savvagent/otto-flags#readme
 - API Docs: https://docs.rs/otto-flags
 - Issues: https://github.com/savvagent/otto-flags/issues
 - Email: support@otto-flags.dev

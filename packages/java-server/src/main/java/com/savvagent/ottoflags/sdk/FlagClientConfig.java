@@ -47,7 +47,7 @@ public class FlagClientConfig {
     public static class Builder {
         private final String apiKey;
         private String applicationId = "";
-        private String baseUrl = "https://flags-api.otto-flags.dev";
+        private String baseUrl = "https://otto-flags.savvagent.com";
         private boolean enableRealtime = true;
         private long cacheTtl = 60000L;
         private boolean enableTelemetry = true;

@@ -67,7 +67,7 @@ client.close();
 ```java
 FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
     .applicationId("your-app-id")
-    .baseUrl("https://flags-api.otto-flags.dev") // optional
+    .baseUrl("https://otto-flags.savvagent.com") // optional
     .enableRealtime(true) // default: true
     .cacheTtl(60000L) // default: 60 seconds
     .enableTelemetry(true) // default: true
@@ -317,6 +317,6 @@ MIT
 
 ## Support
 
-- Documentation: https://flags-docs.otto-flags.dev
+- Documentation: https://github.com/savvagent/otto-flags#readme
 - Issues: https://github.com/savvagent/otto-flags/issues
 - Email: support@otto-flags.dev

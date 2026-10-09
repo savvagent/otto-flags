@@ -276,7 +276,7 @@ async fn test_track_event() {
 #[test]
 fn test_config_creation() {
     let config = Config {
-        api_url: "https://beta.otto-flags.dev".to_string(),
+        api_url: "https://otto-flags.savvagent.com".to_string(),
         sdk_key: "test-key".to_string(),
         environment: "production".to_string(),
         enable_websocket: true,
@@ -284,7 +284,7 @@ fn test_config_creation() {
         timeout: 30,
     };
 
-    assert_eq!(config.api_url, "https://beta.otto-flags.dev");
+    assert_eq!(config.api_url, "https://otto-flags.savvagent.com");
     assert_eq!(config.sdk_key, "test-key");
     assert_eq!(config.environment, "production");
     assert!(config.enable_websocket);
