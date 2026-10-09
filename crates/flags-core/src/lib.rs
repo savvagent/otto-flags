@@ -1,40 +1,32 @@
-//! `flags-core` — otto-flags' own domain crate: flag apps, feature flags, and
-//! evaluation ingestion, scoped by the shared `org_id` and built on
-//! `otto_tenant::{Db, Tx}` for row-level-security-enforced tenant isolation.
+//! `flags-core` — otto-flags' domain: flag apps and their SDK keys, flags and
+//! their version history, the evaluation engine, telemetry, and the plumbing a
+//! resource server of the otto platform needs (usage metering, lifecycle
+//! events, change notifications).
 //!
-//! This is otto-flags' *own* Postgres database, physically separate from
-//! otto-platform's identity/auth/billing database — see
-//! `docs/specs/2026-09-15-otto-flags-design.md` §3. `otto_tenant::Db` and
-//! `Tx` are reused unmodified from otto-platform (same crate, same isolation
-//! proof); only the migrations and the query methods here are otto-flags'
-//! own. Because `Db`/`Tx` are defined in a crate this one depends on rather
-//! than owns, their query methods are added as **extension traits**
-//! ([`apps::AppsExt`], [`flags::FlagsExt`], [`evaluations::EvaluationsExt`])
-//! rather than inherent `impl` blocks — the same shape `otto-core` uses on
-//! top of `otto-tenant`. Import the trait alongside `Tx` to call its methods:
+//! This is otto-flags' own database, separate from the platform's. Tenant
+//! isolation comes from `otto_tenant::{Db, Tx}`: every tenant query is a
+//! method on a [`otto_tenant::Tx`], which cannot exist without an org, and runs
+//! under row-level security. Query methods are extension traits
+//! ([`apps::AppsExt`], [`flags::FlagsExt`]) because `Tx` is defined in
+//! otto-tenant. Request paths open their transactions with
+//! [`platform_events::begin_live`], never `Db::begin` directly, so a deleted
+//! org or removed member is refused.
 //!
-//! ```no_run
-//! use flags_core::apps::AppsExt;
-//! use otto_tenant::{Db, ids::OrgId};
-//!
-//! # async fn example(db: &Db, org: OrgId) -> flags_core::error::Result<()> {
-//! let mut tx = db.begin(org).await?;
-//! let app = tx.create_app("my-app", &["production".to_string()]).await?;
-//! tx.commit().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Migrations live in `migrations/` and are **not** run by
-//! `otto_tenant::Db::migrate()` — that method's `sqlx::migrate!("./migrations")`
-//! is fixed at compile time to otto-tenant's own migrations directory. A
-//! binary embedding this crate's schema (see `flags-server`) runs
-//! `sqlx::migrate!` pointed at this crate's `migrations/` directory directly.
+//! No SQL lives outside this crate.
 
 pub mod apps;
+pub mod audit;
 pub mod error;
-pub mod evaluations;
+pub mod eval;
 pub mod flags;
 pub mod ids;
+pub mod keys;
+pub mod migrate;
+pub mod notify;
+pub mod platform_events;
+pub mod scopes;
+pub mod telemetry;
+pub mod usage;
 
 pub use error::{Error, Result};
+pub use migrate::{migrate, MIGRATOR};

@@ -7,6 +7,8 @@ exclude = [
 ]
 members = [
   "crates/flags-core",
+  "crates/flags-mcp",
+  "crates/flags-api",
   "crates/flags-server",
 ]
 
@@ -18,17 +20,28 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 flags-core = { path = "crates/flags-core" }
+flags-mcp = { path = "crates/flags-mcp" }
+flags-api = { path = "crates/flags-api" }
 
-# Pinned to a specific otto-platform commit rather than a branch, per
-# docs/specs/2026-09-15-otto-flags-design.md §9. Bumping the pin is a
-# deliberate, reviewable edit to this line, not an implicit "whatever main
-# happens to be."
-otto-tenant = { git = "https://github.com/savvagent/otto-platform", rev = "80b17eb9d9161b818c2649e530c9733f989534df" }
+# otto-flags is a resource server of the otto platform: identity, auth, orgs,
+# teams, plans, and billing live there. This workspace links only the
+# tenant-isolation substrate (`otto-tenant`: pinned transactions, RLS proof, the
+# audit-trail pattern) and the resource-server client (`otto-resource`:
+# introspection, usage shipping, member lookups, webhook verification). One rev
+# for both, bumped deliberately rather than tracking a branch.
+otto-tenant = { git = "https://github.com/savvagent/otto-platform", rev = "a5d169f058ff086590832a183c7d10f50ad27545" }
+otto-resource = { git = "https://github.com/savvagent/otto-platform", rev = "a5d169f058ff086590832a183c7d10f50ad27545" }
 
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid", "macros", "migrate", "json",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+http = "1"
+rmcp = { version = "=2.0.0", features = ["server", "macros", "transport-streamable-http-server", "schemars"] }
 schemars = { version = "1.1", features = ["chrono04", "uuid1"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -38,6 +51,13 @@ thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+futures = "0.3"
+url = "2"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+# Loads .env for local runs. Never overrides a variable already set, so a
+# deployment's real environment always wins over a file that got shipped.
 dotenvy = "0.15"
 
 [profile.release]

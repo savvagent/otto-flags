@@ -14,7 +14,9 @@ use uuid::Uuid;
 macro_rules! uuid_id {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, sqlx::Type,
+        )]
         #[serde(transparent)]
         #[sqlx(transparent)]
         pub struct $name(pub Uuid);
@@ -82,13 +84,8 @@ macro_rules! uuid_id {
 
 uuid_id!(
     FlagAppId,
-    "An application registered for flag management — the seam between \
-     MCP-driven management and SDK-driven evaluation. Holds the SDK/server \
-     keys and environment list a running app authenticates with."
+    "An application registered for flag management: the seam between \
+     MCP-driven management and SDK-driven evaluation. Holds the SDK keys and \
+     environment list a running app evaluates with."
 );
-uuid_id!(FlagId, "A feature flag, scoped to one FlagApp.");
-uuid_id!(
-    EvaluationId,
-    "One recorded flag evaluation, the raw evidence rollups and risk \
-     assessment are computed from."
-);
+uuid_id!(FlagId, "A feature flag, scoped to one flag app.");

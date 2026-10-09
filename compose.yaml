@@ -1,0 +1,22 @@
+# Local Postgres for development and `#[sqlx::test]` integration tests.
+# Host port 15434 is deliberately non-standard so it cannot clash with a system
+# Postgres or with otto-factory's container (15433).
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: flags
+      POSTGRES_PASSWORD: flags
+      POSTGRES_DB: otto_flags
+    ports:
+      - "15434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flags -d otto_flags"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - flags-pg:/var/lib/postgresql/data
+
+volumes:
+  flags-pg:
