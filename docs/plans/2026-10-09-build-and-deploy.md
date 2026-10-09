@@ -48,7 +48,7 @@ surface running apps use to evaluate them.
    `lte`, `exists`). Otherwise the percentage rollout, bucketed deterministically by
    SHA-256 of `flag key + identifier` (user_id → anonymous_id → session_id). Variations are
    weighted, bucketed independently. Segments are deferred.
-8. **Scopes:** `flags:read`, `flags:write`, `apps:admin`. Defaults `flags:read,flags:write`.
+8. **Scopes:** `flags:read`, `flags:write`, `apps:admin`. Default `flags:read` (read-only, as in otto-factory: a client that wants to write asks, and the person sees it on the consent screen).
    App creation and key rotation also require the caller to be an org owner/admin *now*
    (fresh member lookup at the platform, the lesson from otto-factory#200).
 9. **Metering:** MCP writes are billable, reads and dry-run evaluation are free. The SDK

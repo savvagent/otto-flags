@@ -355,7 +355,14 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         "{}",
         h.assessment
     );
-    assert_eq!(h.top_errors[0].last_message.chars().count(), 2_000);
+    // Shown shortened (it is untrusted text headed for an agent); stored at
+    // the 2,000-character cap.
+    assert_eq!(h.top_errors[0].last_message.chars().count(), 301);
+    let stored: i32 = sqlx::query_scalar("SELECT max(length(error_message)) FROM flag_errors")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(stored, 2_000);
     tx.commit().await.unwrap();
 }
 

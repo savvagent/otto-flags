@@ -1,0 +1,65 @@
+# otto-flags on Fly.io, org "savvagent". See docs/deploy/fly.md.
+#
+# A resource server of the otto platform (https://otto.savvagent.com): identity,
+# OAuth, orgs, and billing live there; this app holds only flags.
+#
+# Database: `otto_flags` on `otto-db`, the unmanaged Fly Postgres shared with
+# otto-platform and otto-factory (shared for cost; split before real
+# customers, since each app's attach role is a superuser on the whole
+# instance). Isolation rests on `otto_tenant::Db::begin` issuing
+# `SET LOCAL ROLE otto_app`; flags-server proves that at boot.
+#
+# Secrets (`fly secrets set`, never here):
+#   DATABASE_URL                    from `fly postgres attach`
+#   FLAGS_INTROSPECTION_SECRET      otto_rs_...    from `resource rotate-secret`
+#   FLAGS_PLATFORM_WEBHOOK_SECRET   otto_whsec_... from `resource set-webhook`
+
+app = "otto-flags"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  FLAGS_BIND = "0.0.0.0:8080"
+  FLAGS_PUBLIC_URL = "https://otto-flags.savvagent.com"
+  # The token audience: exactly the resource_uri registered at the platform.
+  FLAGS_RESOURCE_URI = "https://otto-flags.savvagent.com/mcp"
+  FLAGS_PLATFORM_URL = "https://otto.savvagent.com"
+  # The fly.dev name still answers (health checks, debugging); /mcp has to be
+  # told to accept it as a Host.
+  FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev"
+  # Small: otto-db is a shared 512 MB instance.
+  FLAGS_DB_MAX_CONNECTIONS = "5"
+  FLAGS_LOG_FORMAT = "json"
+  RUST_LOG = "info,flags_server=info,flags_mcp=info,flags_api=info"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_start_machines = true
+  # Suspend when idle and resume on the next request: cheapest, and resuming a
+  # suspended machine is fast enough for an SDK that caches and falls back to
+  # defaults. Raise min_machines_running to 1 once real traffic depends on it.
+  auto_stop_machines = "suspend"
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    # SDK streams are long-lived connections; leave headroom for them.
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    # Readiness, not liveness: whether to route traffic here.
+    path = "/readyz"
+    method = "GET"
+    interval = "15s"
+    timeout = "5s"
+    # Migrations run at startup under an advisory lock.
+    grace_period = "30s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

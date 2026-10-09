@@ -5,9 +5,12 @@
 //! `flag.deleted` (archived) carrying the flag's new state. A subscriber that
 //! falls behind skips what it missed (the SDKs also poll), and the stream ends
 //! when the key stops resolving, so a rotated or deleted key cannot keep
-//! listening.
+//! listening. The key is re-checked every [`REVALIDATE`] whatever the traffic,
+//! not only when the stream is idle: a busy app would otherwise never reach the
+//! check.
 
 use std::convert::Infallible;
+use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -21,6 +24,9 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::error::ApiResult;
 use crate::sdk::Sdk;
 use crate::AppState;
+
+/// How often a live stream re-checks that its key still resolves.
+const REVALIDATE: Duration = Duration::from_secs(30);
 
 pub async fn stream(
     State(state): State<AppState>,
@@ -40,19 +46,21 @@ pub async fn stream(
     let rx = state.listener.subscribe();
     let heartbeat = state.heartbeat;
     let changes = stream::unfold(
-        (rx, state, sdk_for_stream),
-        move |(mut rx, state, sdk)| async move {
+        (rx, state, sdk_for_stream, Instant::now()),
+        move |(mut rx, state, sdk, mut checked)| async move {
             loop {
+                // Whatever the traffic: a busy stream never goes quiet, so a
+                // check that ran only when idle would never run at all.
+                if checked.elapsed() >= REVALIDATE {
+                    if !still_valid(&state, &sdk).await {
+                        return None;
+                    }
+                    checked = Instant::now();
+                }
                 let change: FlagChange = match tokio::time::timeout(heartbeat, rx.recv()).await {
                     Err(_) => {
-                        // Quiet period: confirm the key still opens this app, then
-                        // send a heartbeat. A key that stopped resolving ends the
-                        // stream.
-                        if !still_valid(&state, &sdk).await {
-                            return None;
-                        }
                         let ev = Event::default().event("heartbeat").data("ping");
-                        return Some((Ok(ev), (rx, state, sdk)));
+                        return Some((Ok(ev), (rx, state, sdk, checked)));
                     }
                     Ok(Err(RecvError::Lagged(n))) => {
                         tracing::debug!(skipped = n, "flag stream subscriber fell behind");
@@ -65,7 +73,7 @@ pub async fn stream(
                     continue;
                 }
                 match notification(&state, &sdk, &change).await {
-                    Some(ev) => return Some((Ok(ev), (rx, state, sdk))),
+                    Some(ev) => return Some((Ok(ev), (rx, state, sdk, checked))),
                     None => continue,
                 }
             }

@@ -1,107 +1,120 @@
 name: CI
 
+# The server: crates/ (flags-core, flags-mcp, flags-api, flags-server).
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
+  rust:
     runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Build
-        run: pnpm build
-
-      - name: Test
-        run: pnpm test
-
-  e2e:
-    name: E2E Tests (${{ matrix.app }})
-    runs-on: ubuntu-latest
-    needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        app:
-          - react-app
-          - nextjs-app
-          - angular-app
-          - vue-app
-          - svelte-app
-          - sveltekit-app
-          - astro-app
-          - remix-app
-          - solid-app
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 9
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Install Playwright browsers
-        run: cd examples && npx playwright install --with-deps chromium
-
-      - name: Run E2E tests for ${{ matrix.app }}
-        run: cd examples && pnpm test:e2e:${{ matrix.app }}
+    timeout-minutes: 30
+    services:
+      # `#[sqlx::test]` runs against a real Postgres, no mocks. A superuser, as
+      # in compose.yaml, so the baseline migration can create and grant otto_app.
+      postgres:
+        image: postgres:16
         env:
-          OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
-          OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
-          VITE_OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
-          VITE_OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
-          NEXT_PUBLIC_OTTO_FLAGS_API_URL: https://flags-api-beta.otto-flags.dev
-          NEXT_PUBLIC_OTTO_FLAGS_SDK_KEY: ${{ secrets.OTTO_FLAGS_SDK_KEY }}
+          POSTGRES_USER: flags
+          POSTGRES_PASSWORD: flags
+          POSTGRES_DB: otto_flags
+        ports:
+          - 15434:5432
+        options: >-
+          --health-cmd "pg_isready -U flags -d otto_flags"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://flags:flags@localhost:15434/otto_flags
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          name: playwright-report-${{ matrix.app }}
-          path: examples/playwright-report/
-          retention-days: 30
+          components: rustfmt, clippy
 
-      - name: Upload test screenshots
-        if: failure()
-        uses: actions/upload-artifact@v4
+      - uses: Swatinem/rust-cache@v2
+
+      # The baseline creates otto_app itself and tolerates losing the race, but
+      # many test databases migrate in parallel against one cluster-scoped role;
+      # creating it first takes the race out.
+      - name: Pre-create the otto_app role
+        run: psql "$DATABASE_URL" -c "CREATE ROLE otto_app NOLOGIN;"
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+  # Migrations are append-only. sqlx stores each applied migration's checksum
+  # and refuses to start against a database whose files no longer match, so
+  # editing even a comment in an applied migration takes down the next deploy.
+  migrations-append-only:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: test-screenshots-${{ matrix.app }}
-          path: examples/test-results/
-          retention-days: 7
+          fetch-depth: 0
+      - name: Refuse changes to existing migrations
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          changed=$(git diff --name-status --diff-filter=MDR "origin/${BASE_REF}...HEAD" -- 'crates/*/migrations/')
+          if [ -n "$changed" ]; then
+            echo "::error::existing migrations were modified, deleted, or renamed; add a new migration instead"
+            echo "$changed"
+            exit 1
+          fi
+
+  # Proves the deploy artifact builds; `cargo test` can pass while the image
+  # does not.
+  docker-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Every green push to main deploys. flyctl builds remotely on Fly's builder,
+  # the same path as a hand-run `fly deploy`. FLY_API_TOKEN is a deploy token
+  # scoped to this one app (`fly tokens create deploy -a otto-flags`).
+  deploy:
+    runs-on: ubuntu-latest
+    needs: [rust, docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only -a otto-flags
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

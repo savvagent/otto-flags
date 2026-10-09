@@ -1,6 +1,10 @@
 # otto-flags design: MCP-only feature flags on the otto platform
 
-**Status:** Brainstorm, pre-implementation. No server/SDK code exists yet in this repo.
+**Status:** Historical. v1 was built and deployed on 2026-10-09; where this document and
+the code disagree, the code and [the v1 plan](../plans/2026-10-09-build-and-deploy.md) win.
+In particular: otto-platform is public (AGPL), not closed (§7); services talk to it as OAuth
+resource servers through the `otto-resource` crate rather than validating token claims
+themselves (§3); and the shared `otto-tenant` crate is a direct dependency (§9).
 **Supersedes:** savvagent-flags (`~/dev/savvagent-flags`). No production users exist there,
 so this is a successor design, not a migration — nothing needs to move at the data layer.
 **License:** otto-flags is open source (server + SDKs). The shared otto-platform

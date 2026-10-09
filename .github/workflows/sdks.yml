@@ -1,0 +1,50 @@
+name: SDKs
+
+# The JS/TS SDKs in packages/ and their example apps. Runs only when they
+# change; the server has its own workflow (ci.yml).
+on:
+  push:
+    branches: [main]
+    paths: ['packages/**', 'examples/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']
+  pull_request:
+    branches: [main]
+    paths: ['packages/**', 'examples/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test
+
+  # The example apps' Playwright suites (formerly an `e2e` job here) ran against
+  # the retired savvagent-flags beta API. They come back once the examples are
+  # pointed at an otto-flags deployment with a test app and key.

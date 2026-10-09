@@ -1,8 +1,7 @@
 # otto-flags: vision and scope
 
-**Status:** pre-implementation. The MCP server and its domain code do not exist yet in
-this repo (see `docs/specs/2026-09-15-otto-flags-design.md` for the architecture and
-current build status). This document is the standing statement of *why* and *what*;
+**Status:** v1 is built and deployed (see `docs/plans/2026-10-09-build-and-deploy.md`
+for what it includes and what was deferred). This document is the standing statement of *why* and *what*;
 it should stay accurate as implementation proceeds even as the design doc's specifics
 change.
 

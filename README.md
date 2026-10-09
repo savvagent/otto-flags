@@ -7,24 +7,45 @@ assess risk) is an MCP tool surface an agent calls; flag *evaluation* inside a r
 production app stays SDK/REST, because a prod request can't do an LLM tool-call round
 trip.
 
-## Status
+## Using it
 
-The MCP server that does flag management — the primary interface this project exists
-to build — **does not exist yet.** It's designed but not scaffolded; see
-[docs/specs/2026-09-15-otto-flags-design.md](./docs/specs/2026-09-15-otto-flags-design.md)
-for the architecture and current build status.
+**Agents** connect an MCP client to `https://otto-flags.savvagent.com/mcp`. There is
+nothing to install: the client is sent to the otto platform to sign in (one account
+covers every otto service), then calls tools such as `create_flag`,
+`set_flag_environment`, `flag_health`, and `rollback_flag`. Call `whoami` first.
 
-What *is* in this repo today is the other half: the client/framework/mobile/server SDKs
-and example apps for the flag-**evaluation** side (`isEnabled()` at runtime), plus a
-base MCP SDK and observability-integration MCP clients (Sentry, Datadog, …) that the
-future flags MCP server will use to correlate flags with incidents. These are listed
-below.
+**Running apps** evaluate flags through the SDKs below, pointed at
+`https://otto-flags.savvagent.com` with the app's key: the public client key (`sdk_…`)
+in browsers and mobile apps, the secret server key (`srv_…`) on servers. An agent
+creates the app and its keys with `create_app`. The REST contract is
+[docs/SDK-DEVELOPER-GUIDE.md](./docs/SDK-DEVELOPER-GUIDE.md).
+
+## The server
+
+A Rust workspace under `crates/`, and a resource server of the otto platform, which
+owns identity, OAuth, orgs, and billing:
+
+| Crate | What |
+|---|---|
+| `flags-core` | Schema, flags and their version history, the evaluation engine, telemetry |
+| `flags-mcp` | The MCP tools, behind the platform's OAuth |
+| `flags-api` | The SDK REST API and the platform's webhooks |
+| `flags-server` | The binary: config, router, background tasks |
+
+```bash
+podman compose up -d                     # Postgres on :15434
+cp .env.example .env                     # then fill in the platform settings
+DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace
+cargo run -p flags-server
+```
+
+Deployment: [docs/deploy/fly.md](./docs/deploy/fly.md). How v1 was planned and what was
+deferred: [docs/plans/2026-10-09-build-and-deploy.md](./docs/plans/2026-10-09-build-and-deploy.md).
 
 ## Packages
 
-The packages below are the evaluation-side SDKs and supporting MCP client
-integrations — not the agent-facing flags-management MCP server described in
-[VISION.md](./VISION.md), which is still to be built.
+The evaluation-side SDKs, the example apps, and the observability MCP clients
+(Sentry, Datadog, …) that future incident-correlation tools will use.
 
 ### Client SDKs
 
