@@ -76,9 +76,19 @@ paid capability (risk scoring, rollout velocity) will reuse.
    (§4).
 4. **Client-key error reports are untrusted input.** `POST /api/telemetry/errors` accepts the
    public `sdk_…` key (`crates/flags-api/src/telemetry.rs:119-139`), and `flag_errors` does not
-   record which kind of key reported a row. `flag_health` already labels this text as untrusted
-   for reading (`telemetry.rs:211-215`); for *acting*, the source must be recorded and filtered
-   (§3, §6).
+   record which kind of key reported a row; neither does `flag_eval_hourly`, and the evaluations
+   endpoint accepts the public key too. `flag_health` already labels reported text as untrusted
+   for reading (`telemetry.rs:211-215`); for *acting*, the source of both errors and evaluations
+   must be recorded and filtered (§3, §6), or forged client-key evaluations could push a sample
+   past its minimums or open the "off has no errors" branch.
+6. **Errors often carry no environment.** Evaluations without one default to `"production"`
+   (`crates/flags-api/src/telemetry.rs:105-106`), but errors are stored with a NULL environment
+   (`telemetry.rs:76-84, 122-131`), and the node-server SDK sends none
+   (`packages/node-server/src/telemetry.ts:120-128`). `flag_health` counts NULL-environment errors
+   in every environment (`flags-core/src/telemetry.rs:279, 292`). The checker instead treats a
+   NULL environment as `"production"`, mirroring the evaluation default: counting NULL everywhere
+   would let staging errors trip a production policy, and ignoring NULL would mean a default
+   server-SDK setup never trips.
 5. **Version changes need an actor that is not a user.** `ChangeMeta.actor` is a `UserId`
    (`flags.rs:129-133`) and `record_version` writes it (`flags.rs:565-571`), but
    `flag_versions.actor_user_id` is nullable (`0001_baseline.sql:146`). A system change records
@@ -90,13 +100,13 @@ paid capability (risk scoring, rollout velocity) will reuse.
 - otto-platform contract (built under otto-platform#30, consumed here): `plans.features` and
   `UsageStatus::features` / `feature_enabled`.
 - Migration `0002_auto_rollback.sql`: `rollback_policies`, `rollback_events`,
-  `flag_errors.reporter`.
+  `flag_errors.reporter`, `flag_eval_hourly.server_count`.
 - `flags-core`: a pure decision rule shared with `flag_health`'s assessment; policy and event
   queries; the entitlement check; the system-actor change path; the checker.
 - `flags-mcp`: `set_rollback_policy`, `remove_rollback_policy`, `list_rollback_policies`,
   `propose_rollback`, `rollback_events`.
-- `flags-api`: record the reporter key kind on error telemetry; notify the checker after a
-  telemetry commit.
+- `flags-api`: record the reporter key kind on error and evaluation telemetry; notify the
+  checker after a telemetry commit.
 - `flags-server`: spawn the checker; a periodic pass while awake as a backstop.
 - Org-deleted purge of the new tables.
 
@@ -146,8 +156,11 @@ impl Entitlements {
 }
 ```
 
-It shares the `PlatformClient` already held by `usage::Meter`. It is **never** called on the SDK
-request path (Invariant 6): only from MCP tools and the background checker.
+It shares the `PlatformClient` already held by `usage::Meter`, but none of the meter's behaviour:
+it ignores `FLAGS_ENFORCE_QUOTAS` (`Meter::enforce`) and has no fail-open window
+(`Meter::status_for`). A timeout or platform error is `Unknown`, which every caller treats as not
+entitled (fail closed). It is **never** called on the SDK request path (Invariant 6): only from
+MCP tools and the background checker.
 
 ## 3. Data model + migration
 
@@ -161,6 +174,14 @@ changes (Rule 6).
 -- treated as client.
 ALTER TABLE flag_errors ADD COLUMN reporter text
   CHECK (reporter IN ('client', 'server'));
+
+-- How many of a bucket's evaluations a server key reported (count stays the
+-- total). A column rather than a primary-key change, so the release still
+-- running during a rolling deploy keeps working: its INSERT ... ON CONFLICT
+-- leaves server_count at 0 (counted as client), and the new release adds
+-- EXCLUDED.server_count in the same upsert.
+ALTER TABLE flag_eval_hourly ADD COLUMN server_count bigint NOT NULL DEFAULT 0
+  CHECK (server_count >= 0);
 
 CREATE TYPE rollback_mode AS ENUM ('enforce', 'observe');
 
@@ -225,6 +246,13 @@ ALTER TABLE rollback_policies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rollback_policies FORCE ROW LEVEL SECURITY;
 CREATE POLICY rollback_policies_tenant_isolation ON rollback_policies
   USING (org_id = current_org()) WITH CHECK (org_id = current_org());
+-- The checker's backstop finds due policies across every org, unpinned, then
+-- pins per org (begin_live) to act. Policies are permissive and OR together, so
+-- this adds exactly one thing: an unpinned SELECT. A pinned transaction still
+-- sees only its own org's policies, and nothing unpinned can write them. Same
+-- shape as the baseline's unpinned retention policies (0001_baseline.sql:312-320).
+CREATE POLICY rollback_policies_checker ON rollback_policies
+  FOR SELECT USING (current_org() IS NULL);
 
 ALTER TABLE rollback_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rollback_events FORCE ROW LEVEL SECURITY;
@@ -247,13 +275,17 @@ END $$;
 ```
 
 **Rolling-deploy compatibility.** Every change is additive. During the rollout the old release
-inserts into `flag_errors` without `reporter` (gets NULL, treated as client), and never touches
+inserts into `flag_errors` without `reporter` (gets NULL, treated as client), upserts
+`flag_eval_hourly` without touching `server_count` (stays 0, treated as client), and never touches
 the new tables. The new release boots, migrates under the advisory lock, and serves.
 
 **Bounded growth (Invariant 15).** At most one policy per (flag, environment). Events: at most one
 `rolled_back` per trip, and suppressed outcomes are deduplicated: a policy records
 `not_entitled`, `entitlement_unknown`, or `would_roll_back` at most once per hour
-(checked against `rollback_events` for that policy). Events are swept after 90 days.
+(checked against `rollback_events` for that policy). Events older than 90 days are deleted by
+`telemetry::sweep` (`crates/flags-core/src/telemetry.rs:389`), which `sweep_loop` already runs
+hourly (`crates/flags-server/src/main.rs:101`); the `rollback_events_retention` policy allows
+exactly that unpinned delete.
 
 **Org deletion.** `platform_events::apply` purges children before parents by explicit table list
 (`crates/flags-core/src/platform_events.rs:191-199`). Add `rollback_events` and
@@ -277,20 +309,31 @@ of:
 With the defaults this is exactly `telemetry::assess`'s "Consider rolling back" condition
 (`crates/flags-core/src/telemetry.rs:353-380`: 100 evaluations, 10 errors, 2x). `assess` is
 refactored to call `decide` with default thresholds, so the advice an agent reads from
-`flag_health` and the automatic action cannot disagree. One divergence is deliberate:
-`assess` treats "off rate 0" as rollback-worthy without requiring off evaluations, which reads as
-"no comparison available". `decide` requires `evals_off > 0` for that branch, because acting on no
-baseline is riskier than advising on it; with no off traffic the absolute `max_error_rate` is the
-only trigger. `assess` keeps its wording; its tests are kept and pin the shared cases.
+`flag_health` and the automatic action cannot disagree. `assess`'s rates are already `None` with
+no evaluations on a side (`telemetry.rs:311-313`), so with the defaults and no `max_error_rate`
+the two match exactly. `assess` keeps its wording; its tests are kept and pin the shared cases.
+
+With no off traffic (a flag at 100%), only `max_error_rate` can trip a policy. That is allowed
+(off traffic can appear later), but `set_rollback_policy` returns a `warning` saying so whenever
+`max_error_rate` is unset, and `propose_rollback` reports `can_trip: false` with the reason.
 
 ### Sample
 
 One query per flag, both sides aligned to the same start,
 `since = date_trunc('hour', now()) - (window_hours - 1) hours`, so `window_hours = 1` means "this
-hour so far". `flag_health` uses an hour-truncated start for evaluations but an exact start for
-errors (`telemetry.rs:250-263, 285-290`); the checker aligns both to the truncated start so the
-rate's numerator and denominator cover the same span. Errors count only
-`reporter = 'server'` unless `include_client_reports` (NULL counts as client).
+hour so far". This deliberately differs from `flag_health`, which looks back `window_hours` from
+now with an hour-truncated start for evaluations and an exact start for errors
+(`telemetry.rs:250-263, 285-290`); the checker aligns both sides to the truncated start so the
+rate's numerator and denominator cover the same span. The thresholds are shared with
+`assess`; the window is not.
+
+- **Source.** Unless the policy sets `include_client_reports`: evaluations are summed from
+  `server_count`, errors from `reporter = 'server'` rows (NULL counts as client). With it,
+  evaluations use `count` and errors use every row. So a default policy is judged on
+  server-reported telemetry only: a client key can supply neither the errors nor the evaluations
+  it is judged on.
+- **Environment.** Evaluations match `environment = $env`. Errors match `environment = $env`, or
+  `environment IS NULL` when `$env = 'production'` (premise 6).
 
 ### When it runs
 
@@ -348,7 +391,7 @@ domain call → commit).
 | Tool | Scope | Billable | Plan-gated | Does |
 |---|---|---|---|---|
 | `set_rollback_policy` | `flags:write` | yes | yes | Create or replace the policy for (app, flag, environment); omitted thresholds take the defaults. |
-| `remove_rollback_policy` | `flags:write` | yes | no | Delete it (events cascade). Allowed without the feature so a downgraded org can clean up. |
+| `remove_rollback_policy` | `flags:write` | no | no | Delete it (events cascade). Free and not plan-gated, so a downgraded or over-quota org can always clean up. |
 | `list_rollback_policies` | `flags:read` | no | no | Policies for an app, or one flag; includes armed/tripped state. |
 | `propose_rollback` | `flags:read` | no | no | Dry run: the current sample, the thresholds, and what `decide` says, for one policy or for ad-hoc thresholds on a flag and environment. Changes nothing. |
 | `rollback_events` | `flags:read` | no | no | Recent events for a flag or app, newest first, at most 200. |
@@ -359,8 +402,12 @@ a new `Error::FeatureNotInPlan { feature, plan, upgrade_url }` (code `feature_no
 retriable), modelled on `QuotaExceeded` (`crates/flags-core/src/error.rs:50-57`). `Unknown` →
 the existing retriable platform-unavailable error; creating a policy fails closed.
 
-`usage::BILLABLE` gains `set_rollback_policy` and `remove_rollback_policy`; the existing test
-`every_named_tool_is_routed_and_metered_consistently` covers the rest.
+`usage::BILLABLE` gains `set_rollback_policy` only; the existing test
+`every_named_tool_is_routed_and_metered_consistently` covers the routing.
+
+`Error::FeatureNotInPlan` needs its arms in `Error::code()` / `retriable()`
+(`crates/flags-core/src/error.rs`) and a case in `flags-mcp`'s
+`every_error_carries_a_code_and_a_retriable_flag` test (`crates/flags-mcp/src/error.rs`).
 
 Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback_events` and
 `propose_rollback` contain only numbers, ids, and enum values, no reported text.
@@ -374,7 +421,7 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
 - The SDK path gains no platform call (Invariant 6): the telemetry handlers only send an
   in-process hint.
 - The SDK REST contract is unchanged (Invariant 7): error telemetry already identifies the key;
-  `reporter` is derived server-side from `KeyKind`, not from a request field.
+  `reporter` and `server_count` are derived server-side from the key's `KeyKind`, never from a request field.
 - Client keys see nothing new (Invariant 5).
 - Bucketing untouched (Invariant 13).
 
@@ -384,8 +431,11 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
   minimums; ratio trip; zero-off-errors trip; no off traffic without and with `max_error_rate`);
   `assess` and `decide` agree on every case `assess`'s tests already cover.
 - **DB (`crates/flags-core/tests/db.rs`, `#[sqlx::test]`):** policy CRUD is org-isolated; the
-  tenant-isolation test covers the new tables; client-reported errors do not trip a default
-  policy and do trip one with `include_client_reports`; a trip writes one `auto_rollback` version
+  tenant-isolation test covers the new tables; the unpinned backstop query sees due policies
+  of every org while a pinned transaction sees only its own; client-reported errors or
+  evaluations do not trip a default policy, and do trip one with `include_client_reports`;
+  server-key evaluation batches increment `server_count`; NULL-environment errors count toward a
+  `production` policy and not a `staging` one; a trip writes one `auto_rollback` version
   with a NULL actor, sets `tripped_at`, inserts one `rolled_back` event, and touches only that
   environment; a tripped policy does not act again; turning the environment back on re-arms it;
   observe mode writes `would_roll_back` once per hour and never changes the flag; `org.deleted`
@@ -394,8 +444,12 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
   `features`. An org without `auto_rollback` gets `feature_not_in_plan` from
   `set_rollback_policy`; with it, the agent sets a policy, an app reports server-key errors over
   the SDK API, and within the debounce the flag is off in that environment, an SSE subscriber
-  received the change, and `rollback_events` shows the trip. A `usage-status` body without
-  `features` (older platform) is treated as not entitled.
+  received the change, and `rollback_events` shows the trip. The SDK reports errors without an
+  `environment` (as node-server does), to exercise the production default. A `usage-status` body
+  without `features` (older platform) is treated as not entitled, and an unreachable platform
+  as not entitled.
+- **MCP:** `set_rollback_policy` without `max_error_rate` returns the no-off-traffic warning;
+  `remove_rollback_policy` succeeds for an org whose plan lacks the feature.
 
 ## Assumptions
 
@@ -404,10 +458,12 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
    may want team included; it is one seeded value in the platform migration.
 2. **The automatic action is "disable this environment".** It is the narrowest reversible
    change (premise 2), and the v1 plan already names the kill switch as a rollback form.
-3. **Defaults mirror `flag_health`'s advice** (100 evaluations, 10 errors, 2x, 1 hour), so
-   enabling a policy with no tuning automates exactly what agents are already told.
-4. **Server-key error reports only, by default** (premise 4). Browser-only apps must opt in with
-   `include_client_reports`, accepting that their public key can be used to trip it.
+3. **Thresholds mirror `flag_health`'s advice** (100 evaluations, 10 errors, 2x), so enabling a
+   policy with no tuning automates what agents are already told. The window differs (§4 Sample).
+4. **Server-key telemetry only, by default** (premise 4), for errors and evaluations alike.
+   Browser-only apps must opt in with `include_client_reports`, accepting that their public key
+   can be used to trip it.
+9. **A NULL error environment means production** (premise 6), mirroring evaluations.
 5. **Entitlement is checked at trip time, not only at creation,** so a downgrade stops
    automation within the 60 s cache, and a policy left behind is inert rather than deleted.
 6. **Fail closed on an unknown entitlement.** If the platform cannot answer, no rollback happens
@@ -450,9 +506,8 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
   worse (reading every rule); rotation is the remedy.
 - **Platform release ordering:** otto-flags must not merge until otto-platform 0.5.0 is released
   and deployed; otherwise every check is `Denied` (missing `features` deserializes empty).
-- Open: should `set_rollback_policy` refuse `enforce` mode on an environment that currently has
-  no off traffic and no `max_error_rate`, since it can never trip? Leaning yes, with a clear
-  message.
+- **A policy without `max_error_rate` on a flag at 100%** cannot trip. Resolved as a warning
+  rather than a refusal (§4 Decision rule), since off traffic may come back.
 
 ## Out-of-band
 
