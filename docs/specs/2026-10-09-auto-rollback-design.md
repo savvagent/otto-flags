@@ -132,7 +132,7 @@ Built in otto-platform; this section fixes the contract otto-flags relies on.
   | Plan | `features` |
   |---|---|
   | free | `{}` |
-  | team | `{}` |
+  | team | `{"auto_rollback": true}` |
   | business | `{"auto_rollback": true}` |
   | enterprise | `{"auto_rollback": true}` |
 
@@ -463,9 +463,9 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
 
 ## Assumptions
 
-1. **Business and enterprise get `auto_rollback`; free and team do not.** The design doc §4
-   lists auto-rollback among capabilities higher tiers unlock; team is the entry paid tier. Rob
-   may want team included; it is one seeded value in the platform migration.
+1. **Every paid plan gets `auto_rollback` (team, business, enterprise); free does not.**
+   Decided by Rob on 2026-10-09. It is a seeded value in the platform migration, so it can move
+   between plans later without a deploy of either service.
 2. **The automatic action is "disable this environment".** It is the narrowest reversible
    change (premise 2), and the v1 plan already names the kill switch as a rollback form.
 3. **Thresholds mirror `flag_health`'s advice** (100 evaluations, 10 errors, 2x), so enabling a
@@ -475,7 +475,7 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
    can be used to trip it.
 5. **Entitlement is checked at trip time, not only at creation,** so a downgrade stops
    automation within the 60 s cache, and a policy left behind is inert rather than deleted.
-6. **Fail closed on an unknown entitlement.** If the platform cannot answer, no rollback happens
+6. **Fail closed on an unknown entitlement** (confirmed by Rob on 2026-10-09). If the platform cannot answer, no rollback happens
    and `entitlement_unknown` is recorded. Paying for a capability and having it silently not
    work is bad; an unentitled org getting it is worse for the pattern this establishes. See
    Risks.
