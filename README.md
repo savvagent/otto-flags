@@ -423,7 +423,7 @@ pnpm --filter @otto-flags/sdk test:watch
 
 Two licenses, by directory:
 
-- **The server** (`crates/`) is [AGPL-3.0-or-later](./LICENSE). Running a modified
+- **The server** (`crates/`) is [AGPL-3.0-or-later](./LICENSE) (see [NOTICE](./NOTICE)). Running a modified
   version as a network service obliges you to offer its source to its users.
 - **The SDKs and examples** (`packages/`, `examples/`) are [MIT](./packages/typescript/LICENSE).
   Embedding an SDK in your application puts no AGPL obligations on it.
