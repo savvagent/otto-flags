@@ -111,6 +111,14 @@ back.
 9. **Thresholds have one Rust definition** (`Thresholds::default()`); `set_policy` always
    writes every column explicitly. The migration's column defaults mirror it, and a test pins
    that they agree.
+10. **`rollback_events` gets an unpinned `SELECT` policy beside its retention `DELETE` policy**
+   (`rollback_events_retention_read … FOR SELECT USING (current_org() IS NULL)`). Postgres
+   also applies SELECT policies to a `DELETE` whose `WHERE` reads columns, so a DELETE-only
+   policy lets an `otto_app` sweep (`… WHERE created_at < …`) delete nothing — verified on
+   local Postgres 16 (`DELETE 0` with the `WHERE`, `DELETE 1` without). Production's pool role
+   bypasses RLS, which hides this today; the new table should not depend on that. The
+   baseline's `flag_errors` / `flag_eval_hourly` / `platform_events` retention policies have
+   the same gap — [#12](https://github.com/savvagent/otto-flags/issues/12), not widened here (see Known Plan Gaps).
 
 ## File Structure
 
@@ -160,8 +168,9 @@ docs last.
 
 **Files:** `docs/plans/2026-10-10-auto-rollback.md` (this file), `docs/specs/2026-10-09-auto-rollback-design.md`.
 
-- [ ] Set the spec's status line to `**Status:** Approved (spec critique, 2 rounds), 2026-10-09. Planned: [the plan](../plans/2026-10-10-auto-rollback.md).`
-- [ ] Commit: `docs: plan auto-rollback` — body: the plan's task order and the nine plan-level decisions in one paragraph; `Refs #11`.
+- [x] Set the spec's status line to `… Planned: [the plan](../plans/2026-10-10-auto-rollback.md).`
+- [x] Commit the draft (`docs: draft the auto-rollback plan`) and, after critique, the approved
+      version (`docs: approve the auto-rollback plan`). Implementers start at Task 1.
 
 ### Task 1: Pin otto-platform 0.5.0
 
@@ -175,9 +184,12 @@ docs last.
       `usage_status` mock lacks `features`.
 - [ ] Add `features: Default::default(),` to that literal (Task 13 replaces the mock).
 - [ ] Run the three gates. All existing tests pass.
-- [ ] Confirm the diff between the old and new rev touches only `otto-resource/src/types.rs`
-      (`gh api repos/savvagent/otto-platform/compare/a5d169f…fa1ae08 --jq '.files[].filename'`)
-      and say so in the commit body.
+- [ ] Confirm the **library API** diff is only `otto-resource/src/types.rs`:
+      `gh api repos/savvagent/otto-platform/compare/a5d169f058ff086590832a183c7d10f50ad27545...fa1ae08c8d5760c1df9752281a078192032e7d24 --jq '.files[].filename' | grep -E '^crates/otto-(resource|tenant)/src/'`
+      prints only `crates/otto-resource/src/types.rs`. The compare touches other files too
+      (platform server, billing, web, and otto-tenant's `migrations/0016_plan_features.sql`);
+      that migration is the platform's own and is never applied to `otto_flags`
+      (`flags_core::migrate` runs only `flags_core::MIGRATOR`). Say both in the commit body.
 - [ ] Commit: `build: pin otto-platform 0.5.0 for plan features` — why: auto-rollback reads
       `UsageStatus::features`; 0.5.0 is released and deployed; the only API change is the
       additive `features` field. `Refs #11`.
@@ -192,14 +204,29 @@ docs last.
       create an app + flag in org A (existing helpers), then with raw SQL in a `db.begin(a)`
       transaction `INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) … RETURNING id`
       and one `rollback_events` row (`outcome 'would_roll_back'`, `observed '{}'`). Assert:
-      org B (`db.begin(b)`) sees 0 rows in both tables; an unpinned
-      `SELECT count(*) FROM rollback_policies` on `db.pool()` sees 1; inserting in org B a
-      `rollback_policies` row naming org A's `flag_id` fails (composite FK); an
+      org B (`db.begin(b)`) sees 0 rows in both tables; inserting in org B a
+      `rollback_policies` row with **org B's own app** (create one) and org A's `flag_id`
+      fails (composite flag FK — using B's app makes sure it is the flag FK that fails); an
       `outcome 'bogus'` insert fails (CHECK); `flag_errors.reporter = 'browser'` fails (CHECK).
       (The column-defaults test needs `Thresholds`, so it lands in Task 4.)
+      **Unpinned policies must be tested as `otto_app`:** the test pool is a superuser, which
+      bypasses RLS, so a plain `db.pool()` query proves nothing. Add a helper in `db.rs`,
+      `async fn as_app_unpinned(pool) -> sqlx::Transaction<Postgres>` (`pool.begin()` then
+      `SET LOCAL ROLE otto_app`, no org setting, so `current_org()` is NULL). In it:
+      `SELECT count(*) FROM rollback_policies` sees 1 (the `rollback_policies_checker` policy);
+      `UPDATE rollback_policies SET mode = 'observe'` affects 0 rows and an `INSERT` fails;
+      the sweep's real statement
+      `DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => 0)` affects
+      1 row (needs both `rollback_events_retention` and `rollback_events_retention_read`,
+      decision 10); an unpinned `INSERT INTO rollback_events` fails.
+      Extend `tenant_isolation_is_enforced_on_every_tenant_table` to assert `report.tables`
+      contains `rollback_policies` and `rollback_events`, each with RLS enabled and forced
+      (the report's per-table fields; `summary()` prints counts only).
 - [ ] Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db auto_rollback_tables_are_tenant_isolated` → fails (relation does not exist).
 - [ ] Write `0002_auto_rollback.sql` exactly as spec §3, plus:
   - `outcome text NOT NULL CHECK (outcome IN ('rolled_back', 'would_roll_back', 'not_entitled', 'entitlement_unknown'))` (decision 2);
+  - `CREATE POLICY rollback_events_retention_read ON rollback_events FOR SELECT USING (current_org() IS NULL);`
+    with a comment saying why (decision 10);
   - a leading comment block: what the migration adds, that `flag_versions.change` gains the
     value `auto_rollback` (the baseline's comment listing change values cannot be edited), and
     the rolling-deploy compatibility paragraph from spec §3 in two sentences.
@@ -207,10 +234,7 @@ docs last.
     `rollback_policies_checker` (`FOR SELECT USING (current_org() IS NULL)`),
     `rollback_events_retention` (`FOR DELETE USING (current_org() IS NULL)`), and the guarded
     `GRANT` block (tables + `rollback_events_id_seq`).
-- [ ] Run the new test → passes. Run
-      `… cargo test -p flags-core --test db tenant_isolation_is_enforced_on_every_tenant_table` → passes
-      and its summary lists `rollback_policies` and `rollback_events` (print it with
-      `-- --nocapture` once and check).
+- [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- auto_rollback_tables tenant_isolation` → both pass.
 - [ ] Run the three gates and the append-only check (prints nothing).
 - [ ] Commit: `feat: add the auto-rollback schema` — why: policies and events per flag and
       environment, tenant-isolated with composite FKs; the reporter columns let the checker
@@ -280,7 +304,8 @@ can return them.
 - [ ] Run `cargo test -p flags-core --lib rollback` → fails (module missing).
 - [ ] Implement `decide` exactly as spec §4 "Decision rule". Refactor `telemetry::assess` to
       build a `Sample` from its `Counts` and match on `decide(&sample, &Thresholds::default())`
-      for its two "Consider rolling back" branches; keep its "No evaluations", "too few", "No
+      for its two "Consider rolling back" branches (make `assess` `pub(crate)` so the
+      agreement test in `rollback.rs` can call it); keep its "No evaluations", "too few", "No
       sign", and "Not enough data" wording and its existing tests unchanged.
 - [ ] Add `policy_column_defaults_match_the_rust_thresholds` to `db.rs`: insert a policy with
       only the required columns (raw SQL, pinned) and compare its threshold columns with
@@ -329,7 +354,7 @@ Policy ids stay plain `Uuid` (no new newtype): nothing else takes one, and an `i
     in org B is empty; `remove_policy` returns `true` then `false`; one audit row per set and
     per remove (`audit_events` action names).
   - `list_policies_reports_tripped_and_missing_environments`: set `tripped_at` by raw SQL →
-    `Tripped`; remove the env from the app with `update_app` → `EnvironmentMissing`.
+    `Tripped`; remove the env from the app with `AppsExt::set_app_environments` → `EnvironmentMissing`.
   - `a_default_policy_is_judged_on_server_reports_only`: record client-key evaluations and
     errors that would trip, `sample` with defaults → all zeros; same with
     `include_client_reports = true` → counts the client rows; server-key rows always count.
@@ -341,7 +366,7 @@ Policy ids stay plain `Uuid` (no new newtype): nothing else takes one, and an `i
   - `armed_lists_only_flags_with_an_untripped_policy`.
   - `rollback_events_are_newest_first_and_capped`: insert events by raw SQL; `limit` clamps to
     1..=200.
-- [ ] Run `… cargo test -p flags-core --test db rollback` → compile failure.
+- [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db` → compile failure.
 - [ ] Implement. `set_policy` is `INSERT … ON CONFLICT (flag_id, environment) DO UPDATE SET
       mode, thresholds…, updated_at = now()` writing every threshold column explicitly
       (decision 9), then `self.audit(Entry::new(action::ROLLBACK_POLICY_SET).target("flag",
@@ -351,7 +376,7 @@ Policy ids stay plain `Uuid` (no new newtype): nothing else takes one, and an `i
       filters from spec §4 "Sample". Every statement names `org_id = $1` as well as relying on
       RLS, like the existing modules. Add `ROLLBACK_POLICY_SET = "flags.rollback_policy.set"`
       and `ROLLBACK_POLICY_REMOVED = "flags.rollback_policy.removed"` to `audit::action`.
-- [ ] Run the db tests, then the three gates.
+- [ ] Run the full `--test db` (same command) → green, then the three gates.
 - [ ] Commit: `feat: store rollback policies and read their samples` — why: one policy per
       flag and environment; samples count server reports unless the policy opts in, and treat
       an unnamed error environment as production. `Refs #11`.
@@ -431,8 +456,10 @@ EntitlementUnavailable { feature: String }                                // "pl
       this was refused. Upgrade at {upgrade_url}"`; `EntitlementUnavailable` → `"the otto
       platform could not confirm that this organization's plan includes {feature}; nothing was
       changed. Retry shortly."`. `is_internal()` is false for both (their text is ours, never
-      the platform's). In `flags-mcp/src/error.rs`, `FeatureNotInPlan` joins the
-      `INVALID_REQUEST` arm; `EntitlementUnavailable` maps to `ErrorCode::INTERNAL_ERROR`.
+      the platform's). In `flags-mcp/src/error.rs::from_core`'s non-internal branch,
+      `FeatureNotInPlan` joins the `INVALID_REQUEST` arm and `EntitlementUnavailable` gets its
+      **own** arm mapping to `ErrorCode::INTERNAL_ERROR` (without it, a non-internal error
+      falls through to `INVALID_PARAMS`, which would tell the agent its arguments were wrong).
       `Entitlements` never reads `Meter::enforce` and has no fail-open window (spec §2).
       Module doc: never called on the SDK path (Invariant 6).
 - [ ] Run the tests, then the three gates.
@@ -480,12 +507,13 @@ outcomes are deduplicated per (policy, outcome) within an hour (decision 6). `ob
   - `an_already_disabled_environment_is_marked_tripped_without_a_version`.
   - `archived_flags_and_missing_environments_are_skipped`.
   - `due_policies_sees_every_org_unpinned`: policies in two orgs, both due; after
-    `check_flag` on one, only the other is due; tripped policies are never due.
+    `check_flag` on one, only the other is due; tripped policies are never due. (Its
+    RLS behavior as `otto_app` is proven in Task 2; this test covers the query logic.)
   - `a_deleted_org_is_not_checked`: tombstone the org via `platform_events::apply`
     (`org.deleted`) → `check_flag` returns `access_revoked` (the caller drops it).
-- [ ] Run `… cargo test -p flags-core --test db -- policy tripp entitle due_policies` → fails.
+- [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db` → fails (compile).
 - [ ] Implement.
-- [ ] Run the db tests, then the three gates.
+- [ ] Run the full `--test db` → green, then the three gates.
 - [ ] Commit: `feat: turn a flag off when its rollback policy trips` — why: the automatic
       action is the per-environment kill switch, written as an ordinary version so history,
       SSE, and rollback_flag all see it; the platform is asked between transactions so no
@@ -543,8 +571,9 @@ impl Schedule { fn hint(&mut self, key: (OrgId, FlagId), now: Instant);  fn next
       policy and an event first, then assert both tables are empty for the org and the
       `Applied` detail names `rollback_policies` and `rollback_events`. Add
       `old_rollback_events_are_swept`: an event with `created_at = now() - 91 days` (raw SQL)
-      is deleted by `telemetry::sweep`, a 1-day-old one is kept.
-- [ ] Run `… cargo test -p flags-core --test db -- org_deleted old_rollback_events` → fails.
+      is deleted by `telemetry::sweep`, a 1-day-old one is kept. (The sweep runs on the
+      superuser test pool; that `otto_app` may do this unpinned delete is proven in Task 2.)
+- [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- org_deleted old_rollback_events` → fails.
 - [ ] Implement: add `"rollback_events", "rollback_policies"` at the front of the purge list
       (children before parents, before `flag_errors`); `sweep` adds
       `DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => $1)` with
@@ -639,13 +668,20 @@ pub fn spawn_checker(db: Db, platform: Arc<PlatformClient>, config: &Config, che
       `set_rollback_policy` errors with `data.code == "feature_not_in_plan"` and the message
       names the upgrade URL; `legacy` org → same; `unavailable` org →
       `platform_unavailable`, `retriable: true`; in each case `list_rollback_policies` is empty.
-      An entitled org then sets one and, after being moved out of `entitled` (fresh org, to
-      avoid the 60 s cache), `remove_rollback_policy` still succeeds for a non-entitled org
-      whose policy was inserted while entitled — use two orgs if the cache gets in the way.
+      Then, for the not-entitled org, create a policy directly through flags-core on `s.db`
+      (`begin_live` + `RollbackExt::set_policy`, commit) — standing in for one created before a
+      downgrade, without fighting the 60 s `usage_status` cache — and assert
+      `remove_rollback_policy` over MCP succeeds (`removed: true`).
+- [ ] `set_rollback_policy_warns_when_only_max_error_rate_could_trip` (spec §7, MCP): an
+      entitled org's policy without `maxErrorRate` returns a `warning` mentioning
+      `max_error_rate`; with it, `warning` is null.
 - [ ] `a_policy_turns_a_failing_flag_off_and_tells_the_stream`: entitled org; create app +
       flag; enable production and staging; `set_rollback_policy` with `minEvaluations: 20,
       minErrors: 5`; subscribe to the listener; post server-key evaluations (20 on, 20 off) and
-      6 errors with `flag_enabled: true` and **no** `environment`; poll `get_flag` (≤ 5 s,
+      6 errors with `flag_enabled: true` and **no** `environment`. `Listener::spawn` starts
+      `LISTEN` asynchronously, so before posting telemetry wait (≤ 5 s) until the
+      subscription has received the `set_flag_environment` change — otherwise the
+      auto-rollback notification can be lost to a startup race. Then poll `get_flag` (≤ 5 s,
       50 ms steps) until production is off; assert staging still on, the `FlagChange` arrived
       on the subscription, `flag_history`'s newest entry is `auto_rollback` with a null actor,
       and `rollback_events` shows one `rolled_back` with that version. Then post the same with
@@ -666,8 +702,9 @@ pub fn spawn_checker(db: Db, platform: Arc<PlatformClient>, config: &Config, che
       image-rollback-after-`0002` caveat (roll forward), and the SELECT-only diagnostics
       `SELECT outcome, count(*) FROM rollback_events GROUP BY 1;` and
       `SELECT count(*) FILTER (WHERE tripped_at IS NULL), count(*) FROM rollback_policies;`.
-- [ ] `README.md`: name `set_rollback_policy` / `propose_rollback` / `rollback_events` in
-      "Using it".
+- [ ] `README.md`: name all five tools (`set_rollback_policy`, `remove_rollback_policy`,
+      `list_rollback_policies`, `propose_rollback`, `rollback_events`) in "Using it", as the
+      spec's Out-of-band section says.
 - [ ] `docs/SDK-DEVELOPER-GUIDE.md`, telemetry section: one paragraph — telemetry reported
       with the server key drives auto-rollback; client-key reports count only for policies that
       opt in. No wire change.
@@ -689,11 +726,22 @@ pub fn spawn_checker(db: Db, platform: Arc<PlatformClient>, config: &Config, che
 - **otto-platform pin:** both crates → `fa1ae08` (Task 1). Platform 0.5.0 is already deployed
   (2026-10-10), so the merge is deploy-safe: entitlement answers carry `features` from the
   first request.
-- **Migration `0002`:** runs at boot. Confirm `applying migrations` and the isolation summary
-  naming `rollback_policies` / `rollback_events` in the boot logs. Additive, so the old
+- **Migration `0002`:** runs at boot. Confirm `applying migrations` in the boot logs and that the isolation
+  summary's tenant-table count is 2 higher than the previous release's (the summary prints
+  counts, not names; the per-table proof is Task 2's test). Additive, so the old
   machine keeps serving during the rollout; rolling **back** the image after it applies is not
   possible (spec Risks) — roll forward.
 - **No new Fly secret or env var, no new scope, no platform re-registration, no SDK package
   change, no changeset, no recurring cost.**
 - **Production check:** `/readyz`; `tools/list` over `/mcp` shows the five new tools; the two
   SELECTs from Task 14 return without error.
+
+## Known Plan Gaps
+
+- **Baseline retention policies are DELETE-only** (`0001_baseline.sql`: `flag_errors_retention`,
+  `flag_eval_hourly_retention`, `platform_events_retention`). Under `otto_app` their sweeps'
+  `WHERE` clauses make them delete nothing; production works only because its pool role
+  bypasses RLS. Fixing them is a new migration outside this issue's scope — tracked as
+  [#12](https://github.com/savvagent/otto-flags/issues/12). This plan does not repeat the gap for
+  `rollback_events` (decision 10).
+
