@@ -1,6 +1,6 @@
 # Auto-rollback, gated by the plan — Design
 
-**Status:** Approved (spec critique, 2 rounds), 2026-10-09. Not yet planned.
+**Status:** Approved (spec critique, 2 rounds), 2026-10-09. Planned: [the plan](../plans/2026-10-10-auto-rollback.md).
 **Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11). Depends on
 [savvagent/otto-platform#30](https://github.com/savvagent/otto-platform/issues/30).
 **Builds on:** [the product design](2026-09-15-otto-flags-design.md) §4, §5, §10 step 4, and
