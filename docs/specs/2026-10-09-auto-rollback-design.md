@@ -1,6 +1,6 @@
 # Auto-rollback, gated by the plan — Design
 
-**Status:** Draft, 2026-10-09.
+**Status:** Approved (spec critique, 2 rounds), 2026-10-09. Not yet planned.
 **Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11). Depends on
 [savvagent/otto-platform#30](https://github.com/savvagent/otto-platform/issues/30).
 **Builds on:** [the product design](2026-09-15-otto-flags-design.md) §4, §5, §10 step 4, and
@@ -81,6 +81,13 @@ paid capability (risk scoring, rollout velocity) will reuse.
    for reading (`telemetry.rs:211-215`); for *acting*, the source of both errors and evaluations
    must be recorded and filtered (§3, §6), or forged client-key evaluations could push a sample
    past its minimums or open the "off has no errors" branch.
+5. **Version changes need an actor that is not a user.** `ChangeMeta.actor` is a `UserId`
+   (`flags.rs:129-133`) and `record_version` writes it (`flags.rs:565-571`), but
+   `flag_versions.actor_user_id` is nullable (`0001_baseline.sql:146`). A system change records
+   `NULL` there and names the policy in `reason` and in `rollback_events`. `ChangeMeta.actor`
+   becomes `Option<UserId>` and `record_version` takes it as such; the MCP tools in
+   `crates/flags-mcp/src/tools/flags.rs` pass `Some(caller.user_id)`, and only the checker passes
+   `None`.
 6. **Errors often carry no environment.** Evaluations without one default to `"production"`
    (`crates/flags-api/src/telemetry.rs:105-106`), but errors are stored with a NULL environment
    (`telemetry.rs:76-84, 122-131`), and the node-server SDK sends none
@@ -89,10 +96,6 @@ paid capability (risk scoring, rollout velocity) will reuse.
    NULL environment as `"production"`, mirroring the evaluation default: counting NULL everywhere
    would let staging errors trip a production policy, and ignoring NULL would mean a default
    server-SDK setup never trips.
-5. **Version changes need an actor that is not a user.** `ChangeMeta.actor` is a `UserId`
-   (`flags.rs:129-133`) and `record_version` writes it (`flags.rs:565-571`), but
-   `flag_versions.actor_user_id` is nullable (`0001_baseline.sql:146`). A system change records
-   `NULL` there and names the policy in `reason` and in `rollback_events`.
 
 ## Scope
 
@@ -303,7 +306,7 @@ of:
 1. `evals_on >= min_evaluations` and `errors_on >= min_errors`, and
 2. any of
    - `rate_on > max_error_rate` (if set), or
-   - `errors_off > 0` and `rate_on > rate_off * max_error_ratio`, or
+   - `evals_off > 0`, `errors_off > 0`, and `rate_on > rate_off * max_error_ratio`, or
    - `evals_off > 0` and `errors_off == 0` (on is erroring, off is not).
 
 With the defaults this is exactly `telemetry::assess`'s "Consider rolling back" condition
@@ -342,6 +345,10 @@ rate's numerator and denominator cover the same span. The thresholds are shared 
   checker. The send never blocks the SDK request and never touches the platform; a full channel
   drops the hint (the backstop picks it up) and increments a counter logged once a minute.
 - **Debounce.** The checker coalesces hints per flag and checks a flag at most once per 30 s.
+  A hint for a flag checked less than 30 s ago is deferred to the end of that interval (trailing
+  edge), never dropped, so the batch that crossed a threshold is always checked within 30 s.
+- **Plumbing.** `telemetry::record_evaluations` and `record_errors` return the ids of the flags
+  they touched alongside the `Receipt`, so the handler can send the hint without a second query.
 - **Backstop.** While the process is awake, every 5 minutes it checks every armed policy whose
   `last_checked_at` is older than 5 minutes, at most 200 per pass, oldest first. This covers
   dropped hints and policies created after their telemetry arrived.
@@ -370,7 +377,8 @@ For one flag, in this order:
    - `Denied`: insert `not_entitled` (deduplicated).
    - `Unknown` (platform unreachable or timed out): insert `entitlement_unknown`
      (deduplicated); do not act. See Risks.
-6. Commit.
+6. Update `last_checked_at` (every outcome, so suppressed policies are not re-picked on every
+   backstop pass), and commit.
 
 Auto-rollback writes are **not metered**: no user called a tool, and the platform's usage events
 name a user. (Policy management through MCP is.)
@@ -399,8 +407,10 @@ domain call → commit).
 Plan gating in `set_rollback_policy` calls `Entitlements::check` before the transaction opens
 (as `Flags::tx` warms the meter first, `crates/flags-mcp/src/server.rs:101-108`). `Denied` →
 a new `Error::FeatureNotInPlan { feature, plan, upgrade_url }` (code `feature_not_in_plan`, not
-retriable), modelled on `QuotaExceeded` (`crates/flags-core/src/error.rs:50-57`). `Unknown` →
-the existing retriable platform-unavailable error; creating a policy fails closed.
+retriable), modelled on `QuotaExceeded` (`crates/flags-core/src/error.rs:50-57`). `Unknown` → a
+new `Error::EntitlementUnavailable` (code `platform_unavailable`, retriable), since a timeout is not
+an `otto_resource::Error` and cannot reuse `Error::Platform`; creating a policy fails closed.
+`Entitlements` is built with the same `upgrade_url` `usage::Meter` holds (`usage.rs:58`).
 
 `usage::BILLABLE` gains `set_rollback_policy` only; the existing test
 `every_named_tool_is_routed_and_metered_consistently` covers the routing.
@@ -463,7 +473,6 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
 4. **Server-key telemetry only, by default** (premise 4), for errors and evaluations alike.
    Browser-only apps must opt in with `include_client_reports`, accepting that their public key
    can be used to trip it.
-9. **A NULL error environment means production** (premise 6), mirroring evaluations.
 5. **Entitlement is checked at trip time, not only at creation,** so a downgrade stops
    automation within the 60 s cache, and a policy left behind is inert rather than deleted.
 6. **Fail closed on an unknown entitlement.** If the platform cannot answer, no rollback happens
@@ -473,6 +482,8 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
 7. **Reuse `usage-status` rather than a new platform endpoint,** keeping one cached call.
 8. **No new scope.** Policies are flag configuration; `flags:write` already covers changing a
    flag's environment, which is what a policy does.
+
+9. **A NULL error environment means production** (premise 6), mirroring evaluations.
 
 ## Error handling & edge cases
 
@@ -506,6 +517,11 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
   worse (reading every rule); rotation is the remedy.
 - **Platform release ordering:** otto-flags must not merge until otto-platform 0.5.0 is released
   and deployed; otherwise every check is `Denied` (missing `features` deserializes empty).
+- **Image rollback after `0002` fails at boot.** `MIGRATOR` uses sqlx's default
+  `ignore_missing = false` and migrations run at startup, so the previous image refuses a
+  database that has `0002` applied (`VersionMissing`). Recovery is roll-forward (fix and
+  redeploy), not `fly deploy` of the old image. This is true of every future migration too; making
+  the migrator tolerate unknown newer migrations is a separate decision, not taken here.
 - **A policy without `max_error_rate` on a flag at 100%** cannot trip. Resolved as a warning
   rather than a refusal (§4 Decision rule), since off traffic may come back.
 
