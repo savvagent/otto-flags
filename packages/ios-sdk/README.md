@@ -354,7 +354,7 @@ See the [iOS example app](../../examples/ios-app) for a complete implementation.
 
 - [GitHub Issues](https://github.com/savvagent/otto-flags/issues)
 - [Documentation](https://github.com/savvagent/otto-flags#readme)
-- [Email](mailto:support@otto-flags.dev)
+- [Email](mailto:support@savvagent.com)
 
 ## License
 

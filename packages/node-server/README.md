@@ -283,4 +283,4 @@ MIT
 
 - Documentation: https://github.com/savvagent/otto-flags#readme
 - Issues: https://github.com/savvagent/otto-flags/issues
-- Email: support@otto-flags.dev
+- Email: support@savvagent.com

@@ -2,7 +2,7 @@
 name = "otto-flags"
 version = "0.1.0"
 edition = "2021"
-authors = ["Otto Flags Team <support@otto-flags.dev>"]
+authors = ["Otto Flags Team <support@savvagent.com>"]
 description = "Rust Server SDK for Otto Flags feature flags with AI-powered error detection"
 license = "MIT"
 repository = "https://github.com/savvagent/otto-flags"

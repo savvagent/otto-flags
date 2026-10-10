@@ -489,4 +489,4 @@ MIT
 
 - Documentation: https://github.com/savvagent/otto-flags#readme
 - Issues: https://github.com/yourusername/ottoFlags/issues
-- Email: support@otto-flags.dev
+- Email: support@savvagent.com

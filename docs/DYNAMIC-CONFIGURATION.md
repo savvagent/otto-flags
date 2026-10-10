@@ -1226,6 +1226,6 @@ if (user.projectCount >= limits.maxProjects) {
 
 **Questions or feedback?**
 - GitHub Issues: https://github.com/savvagent/ottoFlags/issues
-- Email: support@otto-flags.dev
+- Email: support@savvagent.com
 
 **Last Updated:** November 2024
