@@ -1,0 +1,16 @@
+otto-flags
+Copyright (C) 2026 Savvagent, LLC
+
+The server -- everything under crates/, and the repository's build, deploy, and
+documentation files -- is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
+any later version. The full license text is in LICENSE.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+The SDKs under packages/ and the example applications under examples/ are
+licensed separately under the MIT License; see the LICENSE file in each of
+those directories.
