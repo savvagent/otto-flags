@@ -2,6 +2,7 @@
 
 **Spec:** [`docs/specs/2026-10-09-auto-rollback-design.md`](../specs/2026-10-09-auto-rollback-design.md)
 (approved, 2 critique rounds).
+**Plan status:** Approved (plan critique, 2 rounds), 2026-10-10. Not yet implemented.
 **Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11). Platform side done:
 savvagent/otto-platform#30 → PR #31, released as **0.5.0 at `fa1ae08c8d5760c1df9752281a078192032e7d24`**
 (tag `v0.5.0`), deployed, migration 0016 verified in production on 2026-10-10.
@@ -219,6 +220,13 @@ docs last.
       `DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => 0)` affects
       1 row (needs both `rollback_events_retention` and `rollback_events_retention_read`,
       decision 10); an unpinned `INSERT INTO rollback_events` fails.
+      **Sequencing (Postgres aborts a transaction on its first error):** commit the arranging
+      inserts first; run org B's visibility checks next; then the succeeding `otto_app`
+      assertions (SELECT, UPDATE, DELETE) in one transaction that is **rolled back** after
+      asserting `rows_affected() == 1`; then each expected failure (composite-FK insert,
+      `'bogus'` outcome, `'browser'` reporter, both unpinned INSERTs) in its **own** fresh
+      transaction (`db.begin(b)` or `as_app_unpinned(db.pool())`), `.unwrap_err()`, dropped.
+      Pass `db.pool()` to the helper (`db(pool)` consumes the `PgPool`).
       Extend `tenant_isolation_is_enforced_on_every_tenant_table` to assert `report.tables`
       contains `rollback_policies` and `rollback_events`, each with RLS enabled and forced
       (the report's per-table fields; `summary()` prints counts only).
