@@ -151,5 +151,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Claude Code worktrees (see .claude/skills/otto-flags-development)
+# Claude Code worktrees (see the Worktree section of CLAUDE.md)
 .claude/worktrees/
