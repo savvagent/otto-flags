@@ -433,7 +433,9 @@ pub struct Observation {
 #[serde(rename_all = "camelCase")]
 pub struct Event {
     pub id: i64,
-    pub policy_id: Uuid,
+    /// The policy that recorded it; `None` once that policy was removed (the
+    /// event is kept).
+    pub policy_id: Option<Uuid>,
     pub flag_id: FlagId,
     pub flag_key: String,
     pub environment: String,
@@ -472,7 +474,8 @@ pub trait RollbackExt {
         actor: UserId,
     ) -> impl Future<Output = Result<PolicyView>> + Send;
 
-    /// Delete a policy; whether there was one.
+    /// Delete a policy; whether there was one. Its events are kept, with
+    /// `policy_id` cleared.
     fn remove_policy(
         &mut self,
         flag: &FeatureFlag,

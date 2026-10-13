@@ -3305,3 +3305,32 @@ async fn propose_says_a_policy_that_cannot_act_would_not_trip(pool: PgPool) {
     assert!(p.note.contains("no longer has"), "{}", p.note);
     tx.rollback().await.unwrap();
 }
+
+/// Removing a policy keeps what it did: its events stay, listed for the
+/// flag, with no policy id (#28).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn removing_a_policy_keeps_its_events(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+
+    let mut tx = db.begin(org).await.unwrap();
+    let before = tx.rollback_events(&app, Some(&flag), 10).await.unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].policy_id, Some(policy));
+    assert!(tx.remove_policy(&flag, "production", actor).await.unwrap());
+    let after = tx.rollback_events(&app, Some(&flag), 10).await.unwrap();
+    assert_eq!(after.len(), 1, "the event outlives its policy");
+    assert_eq!(after[0].policy_id, None);
+    assert_eq!(after[0].outcome, RollbackOutcome::RolledBack);
+    assert_eq!(after[0].flag_version, before[0].flag_version);
+    assert_eq!(tx.rollback_events(&app, None, 10).await.unwrap().len(), 1);
+    tx.commit().await.unwrap();
+}

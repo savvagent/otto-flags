@@ -86,7 +86,8 @@ CREATE INDEX rollback_policies_due_idx ON rollback_policies (last_checked_at NUL
 CREATE TABLE rollback_events (
   id            bigserial   PRIMARY KEY,
   org_id        uuid        NOT NULL,
-  policy_id     uuid        NOT NULL,
+  -- NULL once the policy is removed: its history is kept (#28).
+  policy_id     uuid,
   flag_id       uuid        NOT NULL,
   environment   text        NOT NULL,
   -- rolled_back | would_roll_back (observe mode) | not_entitled | entitlement_unknown
@@ -99,13 +100,17 @@ CREATE TABLE rollback_events (
   -- (nothing to turn off, so no version).
   flag_version  integer,
   created_at    timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (org_id, policy_id) REFERENCES rollback_policies (org_id, id) ON DELETE CASCADE,
+  -- Removing a policy keeps its events and clears only policy_id (a column
+  -- list on SET NULL needs Postgres 15; production runs 16). org_id stays,
+  -- so the row keeps its tenant; the org purge deletes events explicitly.
+  FOREIGN KEY (org_id, policy_id) REFERENCES rollback_policies (org_id, id)
+    ON DELETE SET NULL (policy_id),
   FOREIGN KEY (org_id, flag_id)   REFERENCES feature_flags (org_id, id)     ON DELETE CASCADE
 );
 
 CREATE INDEX rollback_events_flag_idx ON rollback_events (flag_id, created_at DESC);
--- The policy FK cascade and the checker's once-per-hour dedup lookup both filter
--- by policy; leading with org_id keeps the org purge indexed too.
+-- The policy FK's SET NULL and the checker's once-per-hour dedup lookup both
+-- filter by policy; leading with org_id keeps the org purge indexed too.
 CREATE INDEX rollback_events_policy_idx ON rollback_events (org_id, policy_id, created_at DESC);
 CREATE INDEX rollback_events_created_idx ON rollback_events (created_at);
 

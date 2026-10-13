@@ -213,9 +213,9 @@ impl Flags {
 
     #[tool(
         name = "remove_rollback_policy",
-        description = "Delete a flag's auto-rollback policy for one environment, and its \
-                       events (its history is deleted too). Free and never plan-gated, so an org \
-                       that downgraded can always clean up."
+        description = "Delete a flag's auto-rollback policy for one environment. Its history is \
+                       kept: its rollback_events stay listed for the flag, with policyId null. \
+                       Free and never plan-gated, so an org that downgraded can always clean up."
     )]
     pub async fn remove_rollback_policy(
         &self,
@@ -461,6 +461,14 @@ mod tests {
             ],
         );
         assert!(!description("rollback_events").contains("failure"));
+    }
+
+    #[test]
+    fn remove_rollback_policy_says_its_history_is_kept() {
+        says(
+            "remove_rollback_policy",
+            &["Its history is kept", "policyId null"],
+        );
     }
 
     #[test]
