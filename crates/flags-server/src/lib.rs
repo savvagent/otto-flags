@@ -71,8 +71,8 @@ pub fn router(
 }
 
 /// Start the rollback checker. Returns the [`Hints`] for the SDK API and the
-/// task to await on shutdown. Entitlement checks use the same upgrade URL as
-/// the MCP surface.
+/// task to await on shutdown. Entitlement checks use [`Config::upgrade_url`],
+/// as the MCP surface does.
 pub fn spawn_checker(
     db: Db,
     platform: Arc<PlatformClient>,
@@ -80,10 +80,9 @@ pub fn spawn_checker(
     checker: CheckerConfig,
     shutdown: watch::Receiver<bool>,
 ) -> (Hints, JoinHandle<()>) {
-    let upgrade_url = mcp_config(platform.clone(), config).upgrade_url;
     Checker::spawn(
         db,
-        Entitlements::new(platform, upgrade_url),
+        Entitlements::new(platform, config.upgrade_url()),
         checker,
         shutdown,
     )
@@ -140,6 +139,7 @@ fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Conf
     mcp.allowed_hosts = config.allowed_hosts();
     mcp.allowed_origins = config.allowed_origins.clone();
     mcp.enforce_quotas = config.enforce_quotas;
+    mcp.upgrade_url = config.upgrade_url();
     mcp
 }
 
@@ -228,6 +228,20 @@ mod tests {
         assert!(challenge.contains(
             "resource_metadata=\"https://flags.example.com/.well-known/oauth-protected-resource\""
         ));
+    }
+
+    #[test]
+    fn the_checker_and_the_mcp_surface_share_one_upgrade_url() {
+        let config = Config::for_test();
+        assert_eq!(
+            config.upgrade_url(),
+            "https://platform.example.com/settings/billing"
+        );
+        let platform = platform_client(&config).unwrap();
+        assert_eq!(
+            mcp_config(platform, &config).upgrade_url,
+            config.upgrade_url()
+        );
     }
 
     #[tokio::test]
