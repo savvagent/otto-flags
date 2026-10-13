@@ -57,7 +57,7 @@ only makes sense once Task 1 holds.
 
 Model: sonnet
 
-- [ ] **Write the failing tests** in `crates/flags-core/tests/db.rs` (after the existing
+- [x] **Write the failing tests** in `crates/flags-core/tests/db.rs` (after the existing
   `tenant_isolation_is_enforced_on_every_tenant_table` test). Add
   `use sqlx::migrate::MigrateError;` to the imports.
 
@@ -107,10 +107,10 @@ Model: sonnet
   `r"..."` with a single backslash is equivalent.) Assert `rows_affected() == 1` on the UPDATE so
   the test proves version 1 was actually tampered with.
 
-- [ ] **Run, see the first fail** with `VersionMissing` and the second pass:
+- [x] **Run, see the first fail** with `VersionMissing` and the second pass:
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1c1ca6c4-ca67-4c3f-8a81-2816918f1768/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- a_release_boots a_tampered_known`
 
-- [ ] **Implement** in `crates/flags-core/src/migrate.rs`, replacing the `MIGRATOR` line:
+- [x] **Implement** in `crates/flags-core/src/migrate.rs`, replacing the `MIGRATOR` line:
 
   ```rust
   /// Every migration in `./migrations`, embedded at compile time. Tests use it
@@ -138,10 +138,10 @@ Model: sonnet
   use a const block (`{ let mut m = sqlx::migrate!("./migrations"); m.ignore_missing = true; m }`)
   and record it.
 
-- [ ] **Run, see both pass** (same command), run `cargo fmt --all`, then the full gates: test,
+- [x] **Run, see both pass** (same command), run `cargo fmt --all`, then the full gates: test,
   lint, format, extra, and `podman build -t otto-flags:check .` (all in Global Constraints).
 
-- [ ] **Commit:**
+- [x] **Commit:**
   ```
   fix(core): let a rolled-back release boot against newer migrations
 
@@ -156,23 +156,41 @@ Model: sonnet
 
 Model: haiku
 
-- [ ] `CLAUDE.md` Ship > verify: after "A machine failing `/readyz` rolls back: merged, not live."
+- [x] `CLAUDE.md` Ship > verify: after "A machine failing `/readyz` rolls back: merged, not live."
   append: "The rolled-back release boots against the newer schema because `MIGRATOR` ignores
   migration versions it does not know (`crates/flags-core/src/migrate.rs`)."
-- [ ] `CLAUDE.md` Out-of-band > Migrations: after "the deploy rolls back." append: "The previous
+- [x] `CLAUDE.md` Out-of-band > Migrations: after "the deploy rolls back." append: "The previous
   release then boots against the migrated database: `MIGRATOR` ignores unknown versions
   (`crates/flags-core/src/migrate.rs`)."
-- [ ] `CLAUDE.md` Invariants: a new bullet directly after **Append-only migrations**:
+- [x] `CLAUDE.md` Invariants: a new bullet directly after **Append-only migrations**:
   "- **Migrations must be compatible with the previous release during rollout AND after a
   rollback:** the previous release runs against the newer schema (`ignore_missing`)."
-- [ ] Gates: format and the migrations extra check (docs-only; no code changed).
-- [ ] **Commit:** `docs: say a rolled-back release tolerates newer migrations` with a why-body,
+- [x] Gates: format and the migrations extra check (docs-only; no code changed).
+- [x] **Commit:** `docs: say a rolled-back release tolerates newer migrations` with a why-body,
   ending `Refs #26`. No attribution.
 
 ### Task 3: record as shipped (orchestrator, after the PR exists)
 
 Model: haiku
 
-- [ ] Final commit in the PR before merge: the spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)`
+- [x] Final commit in the PR before merge: the spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)`
   and this plan's boxes are ticked (`docs: record the rollback-safe migrator as shipped`,
   `Refs #26`). Re-run the merge gate on the new head.
+
+## Amended in review
+
+The code and text quoted in Tasks 1 and 2 are what the tasks started from; review (PR #31) changed
+them before merge, and the committed files are authoritative:
+
+- `migrate.rs`: the doc comment also states the cost (sqlx no longer notices a deleted or renamed
+  migration) and points to the rollback invariant; a unit test `versions_are_contiguous_from_one`
+  asserts embedded versions run 1..=N (it catches a gap or a duplicate number; only CI catches
+  deleting the newest file).
+- `tests/db.rs`: the rollback test also asserts the unknown row survives; a third test,
+  `a_failed_unknown_migration_still_refuses_to_boot`, asserts `Dirty`.
+- `CLAUDE.md`: the append-only bullet's rationale is corrected and forbids reusing a version
+  number; the rollback invariant replaces the duplicate "compatible during rollout" sentence and
+  covers the previous release's writes as well as its reads ("Additive only: …"); the Out-of-band
+  sentence reads "whatever newer migrations were applied".
+- `.github/workflows/ci.yml`: the `migrations-append-only` comment names the job as the guard
+  against deletes and renames.

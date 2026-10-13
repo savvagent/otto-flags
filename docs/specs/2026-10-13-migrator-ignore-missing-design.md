@@ -1,6 +1,6 @@
 # Rollback-safe migrator: tolerate migrations a release does not know
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#31)
 **Issue:** #26
 
 ## 1. Brief
