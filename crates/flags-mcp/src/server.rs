@@ -57,7 +57,11 @@ kill switch for one environment.
 
 Auto-rollback is on paid plans: set_rollback_policy arms it for a flag in one \
 environment, propose_rollback shows what it would do right now without changing \
-anything, and rollback_events shows what it has done.
+anything, list_rollback_policies shows the policies and whether each is armed, \
+rollback_events shows what they have done, and remove_rollback_policy deletes one. \
+By default only telemetry sent with the app's server key counts. An environment \
+auto-rollback turned off stays off until someone turns it back on, which also \
+re-arms its policy.
 
 evaluate_flag answers what a given user would get, and why, without touching \
 anything. Use it to check targeting before turning a flag on.
@@ -225,6 +229,22 @@ mod tests {
             assert!(
                 INSTRUCTIONS.contains(tool),
                 "instructions should mention {tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_instructions_cover_auto_rollback() {
+        for phrase in [
+            "remove_rollback_policy",
+            "list_rollback_policies",
+            "rollback_events",
+            "server key",
+            "stays off until someone turns it back on",
+        ] {
+            assert!(
+                INSTRUCTIONS.contains(phrase),
+                "instructions should mention {phrase}"
             );
         }
     }

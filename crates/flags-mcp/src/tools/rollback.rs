@@ -25,33 +25,46 @@ const NO_RATE_WARNING: &str = "Without maxErrorRate this policy cannot trip whil
                                too little off traffic (for example at 100% rollout).";
 
 /// The six threshold fields, shared by `set_rollback_policy` and
-/// `propose_rollback`.
+/// `propose_rollback`. An omitted field takes its default when setting a
+/// policy; propose_rollback keeps the stored value (the default only when
+/// there is no policy). Each field's doc says so, since only field docs reach
+/// the flattened schema.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThresholdArgs {
-    /// Evaluations with the flag on needed before judging. At least 1;
-    /// default 100.
+    /// Evaluations needed before judging: with the flag on before anything
+    /// trips, and with it off before the on and off rates are compared. At
+    /// least 1; default 100 when setting a policy, while
+    /// propose_rollback keeps the stored value.
     #[serde(default)]
     pub min_evaluations: Option<i64>,
-    /// Errors with the flag on needed before judging. At least 1; default 10.
+    /// Errors with the flag on needed before judging. At least 1; default 10
+    /// when setting a policy (propose_rollback keeps the stored value).
     #[serde(default)]
     pub min_errors: Option<i64>,
     /// Trip when the error rate with the flag on exceeds the rate with it off
-    /// by more than this factor. Greater than 1.0; default 2.0.
+    /// by more than this factor. Greater than 1.0; default 2.0 when setting a
+    /// policy (propose_rollback keeps the stored value).
     #[serde(default)]
     pub max_error_ratio: Option<f64>,
     /// Trip when the error rate with the flag on exceeds this absolute rate
-    /// (errors per evaluation). Above 0 and at most 1; default none. The only
-    /// trigger that works when the flag has no off traffic, as at 100%.
+    /// (errors per evaluation). Above 0 and at most 1; default none when
+    /// setting a policy (propose_rollback keeps the stored value, and cannot
+    /// clear it). The only trigger that works when the flag has too little
+    /// off traffic, as at 100%.
     #[serde(default)]
     pub max_error_rate: Option<f64>,
-    /// How far back to look, in hours. 1 to 24; default 1.
+    /// How far back to look, in hours: the current hour so far plus this
+    /// many minus one before it. 1 to 24; default 1 when setting a policy
+    /// (propose_rollback keeps the stored value).
     #[serde(default)]
     pub window_hours: Option<i32>,
     /// Count errors and evaluations reported by public client keys too.
-    /// Default false (server keys only). Client keys are public, so anyone
-    /// holding one can forge reports; turning this on lets forged reports
-    /// trip, or hold back, the rollback.
+    /// Default false (server keys only) when setting a policy
+    /// (propose_rollback keeps the stored value). Client keys are public, so
+    /// anyone holding one can forge reports; turning this on lets forged
+    /// reports trip, or hold back, the rollback, so setting it needs an
+    /// owner or admin.
     #[serde(default)]
     pub include_client_reports: Option<bool>,
 }
@@ -146,11 +159,14 @@ impl Flags {
         name = "set_rollback_policy",
         description = "Arm auto-rollback for a flag in one environment, or replace its policy. \
                        Replaces the whole policy: any threshold you omit takes its default, not \
-                       the stored value. To preview, call propose_rollback with every threshold \
-                       you intend to set. When the error rate with the flag on crosses the thresholds, the \
-                       environment is switched off (mode enforce) or the event is only recorded \
-                       (mode observe). Needs a plan with \
-                       auto-rollback; billed as a change."
+                       the stored value. Omitting mode resets it to enforce. To preview, call \
+                       propose_rollback with every threshold you intend to set. When the error \
+                       rate with the flag on crosses the thresholds, the environment is switched \
+                       off (mode enforce) or the event is only recorded (mode observe). Setting a \
+                       policy does not re-arm a tripped one (turn the environment back on to \
+                       re-arm). By default only telemetry reported with the server key counts \
+                       (includeClientReports opts in, needs an owner or admin). Needs a plan \
+                       with auto-rollback; billed as a change."
     )]
     pub async fn set_rollback_policy(
         &self,
@@ -198,8 +214,8 @@ impl Flags {
     #[tool(
         name = "remove_rollback_policy",
         description = "Delete a flag's auto-rollback policy for one environment, and its \
-                       events (its history is deleted too). Free and never plan-gated, so an org that downgraded can always \
-                       clean up."
+                       events (its history is deleted too). Free and never plan-gated, so an org \
+                       that downgraded can always clean up."
     )]
     pub async fn remove_rollback_policy(
         &self,
@@ -224,7 +240,10 @@ impl Flags {
     #[tool(
         name = "list_rollback_policies",
         description = "The auto-rollback policies in an app, or on one flag: mode, thresholds, \
-                       and whether each is armed, tripped, or has lost its environment. Free."
+                       and whether each is armed, tripped, or has lost its environment. tripped \
+                       means an enforcing policy turned the environment off; observe, \
+                       not-entitled and unknown-entitlement trips leave it armed and show only \
+                       in rollback_events. Free."
     )]
     pub async fn list_rollback_policies(
         &self,
@@ -254,7 +273,10 @@ impl Flags {
         description = "Dry run: the error counts auto-rollback would judge right now for a flag \
                        in an environment, the thresholds, and what it would decide. Starts from \
                        the stored policy (or the defaults when there is none) and overrides the \
-                       fields you pass; it cannot clear a stored maxErrorRate. Changes nothing. Free."
+                       fields you pass; it cannot clear a stored maxErrorRate. It judges the \
+                       numbers only; it ignores the policy's mode and the plan, but reports \
+                       canAct false for an archived flag or an environment the app no longer \
+                       has. Changes nothing. Free."
     )]
     pub async fn propose_rollback(
         &self,
@@ -282,9 +304,13 @@ impl Flags {
 
     #[tool(
         name = "rollback_events",
-        description = "What auto-rollback did, newest first: each trip, observation, or failure \
-                       with the numbers it judged. For one flag or the whole app, at most 200. \
-                       Events hold numbers only, no reported text. Free."
+        description = "What auto-rollback did, newest first, with the numbers it judged. \
+                       Outcomes: rolled_back (an enforcing policy turned the environment off), \
+                       would_roll_back (observe mode), not_entitled (the plan lacks \
+                       auto-rollback), entitlement_unknown (the platform could not say; nothing \
+                       changed). The last three are recorded at most once per hour per policy. \
+                       Kept 90 days. For one flag or the whole app, at most 200. Events hold \
+                       numbers only, no reported text. Free."
     )]
     pub async fn rollback_events(
         &self,
@@ -362,6 +388,83 @@ mod tests {
             }
             assert!(text.contains("default 100"), "docs lost: {text}");
             assert!(text.contains("forge"), "docs lost: {text}");
+            // Which base an omitted field takes differs between the tools.
+            assert!(text.contains("when setting a policy"), "docs lost: {text}");
+            assert!(
+                text.contains("propose_rollback keeps the stored value"),
+                "docs lost: {text}"
+            );
+            assert!(text.contains("owner or admin"), "docs lost: {text}");
         }
+    }
+
+    fn description(name: &str) -> String {
+        crate::tools::router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.description)
+            .unwrap_or_else(|| panic!("no description for {name}"))
+            .to_string()
+    }
+
+    fn says(name: &str, phrases: &[&str]) {
+        let text = description(name);
+        for phrase in phrases {
+            assert!(
+                text.contains(phrase),
+                "{name} does not say {phrase:?}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_rollback_policy_says_what_a_set_resets_and_what_counts() {
+        says(
+            "set_rollback_policy",
+            &[
+                "Omitting mode resets it to enforce.",
+                "Setting a policy does not re-arm a tripped one (turn the environment back on \
+                 to re-arm).",
+                "By default only telemetry reported with the server key counts \
+                 (includeClientReports opts in, needs an owner or admin).",
+            ],
+        );
+    }
+
+    #[test]
+    fn list_rollback_policies_says_what_tripped_means() {
+        says(
+            "list_rollback_policies",
+            &[
+                "tripped means an enforcing policy turned the environment off; observe, \
+               not-entitled and unknown-entitlement trips leave it armed and show only in \
+               rollback_events.",
+            ],
+        );
+    }
+
+    #[test]
+    fn rollback_events_names_its_outcomes_and_retention() {
+        says(
+            "rollback_events",
+            &[
+                "rolled_back",
+                "would_roll_back",
+                "not_entitled",
+                "entitlement_unknown",
+                "at most once per hour per policy",
+                "90 days",
+            ],
+        );
+        assert!(!description("rollback_events").contains("failure"));
+    }
+
+    #[test]
+    fn propose_rollback_says_it_judges_numbers_only() {
+        says(
+            "propose_rollback",
+            &["judges the numbers only; it ignores the policy's mode and the plan"],
+        );
     }
 }
