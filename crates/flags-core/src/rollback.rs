@@ -1,7 +1,7 @@
 //! Auto-rollback: a per-flag, per-environment policy that turns a flag off
 //! when the errors reported behind it say it is hurting the application.
 //!
-//! This part is pure: the thresholds a policy carries and [`decide`], the one
+//! The decision is pure: the thresholds a policy carries and [`decide`], the one
 //! definition of "this flag is misbehaving". `flag_health`'s advice
 //! ([`crate::telemetry`]'s `assess`) calls the same function with the default
 //! thresholds, so what an agent is told and what the checker does cannot
@@ -1219,9 +1219,26 @@ impl Checker {
     ) -> (Hints, JoinHandle<()>) {
         let (hints, rx) = Hints::channel(config.channel_capacity.max(1));
         let dropped = hints.dropped.clone();
-        let task = tokio::spawn(run(db, entitlements, config, rx, dropped, shutdown));
+        let task = tokio::spawn(async move {
+            match run(db, entitlements, config, rx, dropped, shutdown).await {
+                Exit::Requested => tracing::info!("auto-rollback checker stopped on shutdown"),
+                Exit::SenderDropped => tracing::warn!(
+                    "auto-rollback checker stopped: its shutdown sender was dropped without a \
+                     shutdown, so no flag will be rolled back automatically until restart"
+                ),
+            }
+        });
         (hints, task)
     }
+}
+
+/// Why the checker loop returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Exit {
+    /// Shutdown was signalled.
+    Requested,
+    /// The shutdown sender was dropped without signalling.
+    SenderDropped,
 }
 
 async fn run<E: EntitlementSource>(
@@ -1231,7 +1248,7 @@ async fn run<E: EntitlementSource>(
     mut rx: mpsc::Receiver<Hint>,
     dropped: Arc<AtomicU64>,
     mut shutdown: watch::Receiver<bool>,
-) {
+) -> Exit {
     let mut schedule = Schedule::new(config.debounce);
     // The first backstop tick is immediate: a pass on start-up catches up on
     // hints a restart lost. `interval` panics on a zero period.
@@ -1244,7 +1261,7 @@ async fn run<E: EntitlementSource>(
 
     loop {
         if *shutdown.borrow() {
-            return;
+            return Exit::Requested;
         }
         for key in schedule.take_due(Instant::now()) {
             let ok = check_one(&db, &entitlements, key).await;
@@ -1255,15 +1272,18 @@ async fn run<E: EntitlementSource>(
                 schedule.failed(key, now);
             }
             if *shutdown.borrow() {
-                return;
+                return Exit::Requested;
             }
         }
         let wake = schedule.next_due();
 
         tokio::select! {
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return;
+                if changed.is_err() {
+                    return Exit::SenderDropped;
+                }
+                if *shutdown.borrow() {
+                    return Exit::Requested;
                 }
             }
             hint = rx.recv(), if hints_open => match hint {
@@ -1321,7 +1341,7 @@ async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): 
                 if outcome == Outcome::RolledBack {
                     tracing::info!(%org, %flag, %policy, "auto-rollback turned a flag's environment off");
                 } else {
-                    tracing::debug!(%org, %flag, %policy, outcome = outcome.as_str(), "auto-rollback policy tripped");
+                    tracing::debug!(%org, %flag, %policy, outcome = outcome.as_str(), "auto-rollback trip recorded, not acted on");
                 }
             }
             true
@@ -1338,6 +1358,17 @@ async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): 
             false
         }
     }
+}
+
+/// What stands in for "never" when `at + d` would overflow.
+const FAR_FUTURE: Duration = Duration::from_secs(30 * 365 * 24 * 3600);
+
+/// `at + d`, saturating at a far-future instant instead of panicking, so a
+/// huge debounce cannot crash the checker.
+fn later(at: Instant, d: Duration) -> Instant {
+    at.checked_add(d)
+        .or_else(|| at.checked_add(FAR_FUTURE))
+        .unwrap_or(at)
 }
 
 /// When each hinted flag is due. Pure: every method takes `now`, so it is
@@ -1369,7 +1400,7 @@ impl Schedule {
     pub(crate) fn hint(&mut self, key: Key, now: Instant) {
         let mut due = now;
         if let Some(&at) = self.last_checked.get(&key) {
-            due = due.max(at + self.debounce);
+            due = due.max(later(at, self.debounce));
         }
         if let Some(&until) = self.cooldown.get(&key) {
             due = due.max(until);
@@ -1410,14 +1441,14 @@ impl Schedule {
     /// for [`FAILURE_COOLDOWN`].
     pub(crate) fn failed(&mut self, key: Key, now: Instant) {
         self.last_checked.insert(key, now);
-        self.cooldown.insert(key, now + FAILURE_COOLDOWN);
+        self.cooldown.insert(key, later(now, FAILURE_COOLDOWN));
     }
 
     /// Forget checks older than the debounce and expired cooldowns, so the
     /// maps hold only flags that still affect scheduling.
     pub(crate) fn prune(&mut self, now: Instant) {
         let debounce = self.debounce;
-        self.last_checked.retain(|_, at| *at + debounce > now);
+        self.last_checked.retain(|_, at| later(*at, debounce) > now);
         self.cooldown.retain(|_, until| *until > now);
     }
 }
@@ -1545,6 +1576,20 @@ mod tests {
         s.prune(t0 + FAILURE_COOLDOWN);
         assert!(!s.cooldown.contains_key(&old));
         assert!(s.cooldown.contains_key(&recent));
+    }
+
+    #[test]
+    fn a_huge_debounce_saturates_instead_of_panicking() {
+        let mut s = Schedule::new(Duration::MAX);
+        let t0 = Instant::now();
+        let k = key();
+        s.checked(k, t0);
+        s.hint(k, t0 + secs(1));
+        let due = s.next_due().unwrap();
+        assert!(due >= t0 + FAR_FUTURE, "deferred far into the future");
+        assert!(s.take_due(t0 + secs(3600)).is_empty());
+        s.prune(t0 + secs(3600));
+        assert!(s.last_checked.contains_key(&k));
     }
 
     // ---------------------------------------------------------- hints

@@ -1964,6 +1964,19 @@ async fn the_checker_acts_on_a_hint(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_checker_ends_when_its_shutdown_sender_is_dropped(pool: PgPool) {
+    let db = db(pool).await;
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let (_hints, task) =
+        Checker::spawn(db, Entitlement::Granted, CheckerConfig::default(), shutdown);
+    drop(stop);
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the checker ends once its shutdown sender is gone")
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn the_checker_backstop_finds_unhinted_flags(pool: PgPool) {
     run_checker_until_tripped(pool, CheckerConfig::default(), false).await;
 }
