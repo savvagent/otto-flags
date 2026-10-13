@@ -1917,6 +1917,57 @@ async fn a_deleted_org_is_not_checked(pool: PgPool) {
     assert_eq!(err.code(), "access_revoked");
 }
 
+// ---- the checker loop
+
+use flags_core::rollback::{Checker, CheckerConfig};
+
+/// Spawn a checker, optionally hint the flag, and wait for the policy to trip;
+/// then stop the checker and wait for it to return.
+async fn run_checker_until_tripped(pool: PgPool, config: CheckerConfig, hint: bool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let (hints, task) = Checker::spawn(db.clone(), Entitlement::Granted, config, shutdown);
+    if hint {
+        hints.send(org, vec![flag.id]);
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !checker_state(&db, org, &app).await.tripped {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the checker did not act"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let state = checker_state(&db, org, &app).await;
+    assert!(!state.production, "production must be off");
+
+    stop.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the checker stops on shutdown")
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_checker_acts_on_a_hint(pool: PgPool) {
+    // A zero backstop limit lists nothing, so only the hint can drive it.
+    let config = CheckerConfig {
+        backstop_limit: 0,
+        ..CheckerConfig::default()
+    };
+    run_checker_until_tripped(pool, config, true).await;
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_checker_backstop_finds_unhinted_flags(pool: PgPool) {
+    run_checker_until_tripped(pool, CheckerConfig::default(), false).await;
+}
+
 // ---- the checker's re-check under the flag lock
 
 use std::sync::atomic::{AtomicUsize, Ordering};

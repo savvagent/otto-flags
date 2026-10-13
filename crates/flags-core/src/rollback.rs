@@ -6,9 +6,49 @@
 //! ([`crate::telemetry`]'s `assess`) calls the same function with the default
 //! thresholds, so what an agent is told and what the checker does cannot
 //! disagree.
+//!
+//! ## When the checker runs
+//!
+//! The Fly machine suspends when idle, and a suspended process runs no
+//! timers, so a timer alone would check nothing while the app is quiet and
+//! then everything at once on wake. What wakes the machine is SDK telemetry,
+//! so telemetry drives the checks: after its transaction commits, a telemetry
+//! handler sends the org and its armed flags to the [`Checker`] through
+//! [`Hints::send`]. The send never blocks and never touches the platform; a
+//! full channel drops the hint and counts it (logged once a minute).
+//!
+//! Hints are debounced per flag: a flag is checked at most once per
+//! [`CheckerConfig::debounce`] (30 s). A hint for a flag checked more recently
+//! than that is deferred to the end of the interval (the trailing edge), never
+//! dropped, so the batch that crossed a threshold is checked within 30 s.
+//!
+//! While the process is awake, a backstop pass every
+//! [`CheckerConfig::backstop_every`] (5 min) asks [`due_policies`] for
+//! policies not checked that long and hints each one through the same
+//! debounce. It covers dropped hints and policies created after their
+//! telemetry arrived.
+//!
+//! A flag whose check fails (an org deleted but not yet purged, a stored
+//! environment the patch refuses) never advances `last_checked_at`, so the
+//! backstop would keep returning it. After a failure the flag is left alone
+//! for [`FAILURE_COOLDOWN`]; a successful check clears that. If at least
+//! `backstop_limit` policies fail persistently they can still fill the
+//! backstop's slots; that is accepted, since hints still reach every other
+//! flag.
+//!
+//! Flags are checked one at a time, and [`check_flag`] holds at most one
+//! pooled connection at a time, so the checker never holds more than one of
+//! the pool's connections.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
 
 use chrono::{DateTime, Utc};
 use otto_tenant::ids::{OrgId, UserId};
@@ -1073,6 +1113,315 @@ async fn insert_event(
     Ok(())
 }
 
+// ------------------------------------------------------------- the loop
+
+/// How long a flag whose check failed is left alone, by hints and the
+/// backstop alike.
+pub const FAILURE_COOLDOWN: Duration = Duration::from_secs(3600);
+
+/// How often a non-zero count of dropped hints is logged.
+const DROPPED_REPORT_EVERY: Duration = Duration::from_secs(60);
+
+type Key = (OrgId, FlagId);
+
+/// One org's flags that just received telemetry and have an armed policy.
+#[derive(Debug)]
+struct Hint {
+    org: OrgId,
+    flags: Vec<FlagId>,
+}
+
+/// The sending side of the checker's hint channel. Cheap to clone; held by the
+/// SDK API's telemetry handlers.
+#[derive(Debug, Clone)]
+pub struct Hints {
+    tx: mpsc::Sender<Hint>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl Hints {
+    fn channel(capacity: usize) -> (Self, mpsc::Receiver<Hint>) {
+        let (tx, rx) = mpsc::channel(capacity);
+        let hints = Self {
+            tx,
+            dropped: Arc::new(AtomicU64::new(0)),
+        };
+        (hints, rx)
+    }
+
+    /// Tell the checker these flags of `org` just received telemetry.
+    /// Synchronous and never blocks: a full channel drops the hint (the
+    /// backstop picks the flags up) and counts it; a stopped checker ignores
+    /// it. An empty `flags` sends nothing.
+    ///
+    /// ```
+    /// use flags_core::ids::FlagId;
+    /// use flags_core::rollback::Hints;
+    /// use otto_tenant::ids::OrgId;
+    /// Hints::detached().send(OrgId::new(), vec![FlagId::new()]); // a no-op
+    /// ```
+    pub fn send(&self, org: OrgId, flags: Vec<FlagId>) {
+        if flags.is_empty() {
+            return;
+        }
+        match self.tx.try_send(Hint { org, flags }) {
+            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Hints that go nowhere: for tests, and for routers built without a
+    /// checker.
+    pub fn detached() -> Self {
+        Self::channel(1).0
+    }
+}
+
+/// The checker's timing. [`Default`] is what production runs.
+#[derive(Debug, Clone)]
+pub struct CheckerConfig {
+    /// The least time between two checks of one flag.
+    pub debounce: Duration,
+    /// How often, while awake, policies not checked for this long are hinted.
+    /// Raised to 1 s if smaller.
+    pub backstop_every: Duration,
+    /// The most policies one backstop pass reads.
+    pub backstop_limit: i64,
+    /// Hints that can wait before new ones are dropped.
+    pub channel_capacity: usize,
+}
+
+impl Default for CheckerConfig {
+    fn default() -> Self {
+        Self {
+            debounce: Duration::from_secs(30),
+            backstop_every: Duration::from_secs(300),
+            backstop_limit: 200,
+            channel_capacity: 1024,
+        }
+    }
+}
+
+/// The background task that runs [`check_flag`] for hinted and due flags.
+pub struct Checker;
+
+impl Checker {
+    /// Start the checker. Returns the [`Hints`] to hand to the SDK API, and
+    /// the task to await on shutdown (it returns once `shutdown` changes or
+    /// its sender is dropped, after the check in progress, if any).
+    pub fn spawn<E: EntitlementSource + 'static>(
+        db: Db,
+        entitlements: E,
+        config: CheckerConfig,
+        shutdown: watch::Receiver<bool>,
+    ) -> (Hints, JoinHandle<()>) {
+        let (hints, rx) = Hints::channel(config.channel_capacity.max(1));
+        let dropped = hints.dropped.clone();
+        let task = tokio::spawn(run(db, entitlements, config, rx, dropped, shutdown));
+        (hints, task)
+    }
+}
+
+async fn run<E: EntitlementSource>(
+    db: Db,
+    entitlements: E,
+    config: CheckerConfig,
+    mut rx: mpsc::Receiver<Hint>,
+    dropped: Arc<AtomicU64>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut schedule = Schedule::new(config.debounce);
+    // The first backstop tick is immediate: a pass on start-up catches up on
+    // hints a restart lost. `interval` panics on a zero period.
+    let backstop_every = config.backstop_every.max(Duration::from_secs(1));
+    let mut backstop = tokio::time::interval(backstop_every);
+    backstop.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut housekeeping = tokio::time::interval(DROPPED_REPORT_EVERY);
+    housekeeping.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut hints_open = true;
+
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        for key in schedule.take_due(Instant::now()) {
+            let ok = check_one(&db, &entitlements, key).await;
+            let now = Instant::now();
+            if ok {
+                schedule.checked(key, now);
+            } else {
+                schedule.failed(key, now);
+            }
+            if *shutdown.borrow() {
+                return;
+            }
+        }
+        let wake = schedule.next_due();
+
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+            hint = rx.recv(), if hints_open => match hint {
+                Some(Hint { org, flags }) => {
+                    let now = Instant::now();
+                    for flag in flags {
+                        schedule.hint((org, flag), now);
+                    }
+                }
+                // Every sender is gone; the backstop still runs.
+                None => hints_open = false,
+            },
+            () = sleep_until(wake) => {}
+            _ = backstop.tick() => {
+                match due_policies(&db, backstop_every, config.backstop_limit).await {
+                    Ok(due) => {
+                        let now = Instant::now();
+                        for key in due {
+                            schedule.hint(key, now);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(code = e.code(), "auto-rollback backstop could not list due policies");
+                        tracing::debug!(error = %e, "auto-rollback backstop failure");
+                    }
+                }
+            }
+            _ = housekeeping.tick() => {
+                let n = dropped.swap(0, Ordering::Relaxed);
+                if n > 0 {
+                    tracing::warn!(
+                        dropped = n,
+                        "auto-rollback hints dropped on a full channel; the backstop will check those flags"
+                    );
+                }
+                schedule.prune(Instant::now());
+            }
+        }
+    }
+}
+
+/// Sleep until `due`, or forever with nothing scheduled.
+async fn sleep_until(due: Option<Instant>) {
+    match due {
+        Some(due) => tokio::time::sleep_until(due.into()).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Check one flag and log what happened; whether the check succeeded.
+async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): Key) -> bool {
+    match check_flag(db, entitlements, org, flag).await {
+        Ok(report) => {
+            for (policy, outcome) in report.outcomes {
+                if outcome == Outcome::RolledBack {
+                    tracing::info!(%org, %flag, %policy, "auto-rollback turned a flag's environment off");
+                } else {
+                    tracing::debug!(%org, %flag, %policy, outcome = outcome.as_str(), "auto-rollback policy tripped");
+                }
+            }
+            true
+        }
+        // A deleted org, not yet purged: expected, and nothing to do.
+        Err(Error::AccessRevoked) => {
+            tracing::debug!(%org, %flag, "auto-rollback skipped a flag of a deleted org");
+            false
+        }
+        Err(e) => {
+            // The code only: database text never reaches a log above debug.
+            tracing::warn!(%org, %flag, code = e.code(), "auto-rollback check failed");
+            tracing::debug!(%org, %flag, error = %e, "auto-rollback check failure");
+            false
+        }
+    }
+}
+
+/// When each hinted flag is due. Pure: every method takes `now`, so it is
+/// tested with synthetic instants.
+#[derive(Debug)]
+pub(crate) struct Schedule {
+    debounce: Duration,
+    /// Hinted flags and when each is due.
+    pending: HashMap<Key, Instant>,
+    /// When each flag was last checked, kept for one debounce interval.
+    last_checked: HashMap<Key, Instant>,
+    /// Flags whose last check failed, and until when they are left alone.
+    cooldown: HashMap<Key, Instant>,
+}
+
+impl Schedule {
+    pub(crate) fn new(debounce: Duration) -> Self {
+        Self {
+            debounce,
+            pending: HashMap::new(),
+            last_checked: HashMap::new(),
+            cooldown: HashMap::new(),
+        }
+    }
+
+    /// Schedule `key`: now, or at the end of its debounce interval or
+    /// cooldown, whichever is later. An already pending key keeps its
+    /// earliest due time.
+    pub(crate) fn hint(&mut self, key: Key, now: Instant) {
+        let mut due = now;
+        if let Some(&at) = self.last_checked.get(&key) {
+            due = due.max(at + self.debounce);
+        }
+        if let Some(&until) = self.cooldown.get(&key) {
+            due = due.max(until);
+        }
+        self.pending
+            .entry(key)
+            .and_modify(|d| *d = (*d).min(due))
+            .or_insert(due);
+    }
+
+    /// The earliest due time, if anything is pending.
+    pub(crate) fn next_due(&self) -> Option<Instant> {
+        self.pending.values().min().copied()
+    }
+
+    /// Remove and return the keys due by `now`, earliest first.
+    pub(crate) fn take_due(&mut self, now: Instant) -> Vec<Key> {
+        let mut due: Vec<(Instant, Key)> = self
+            .pending
+            .iter()
+            .filter(|(_, &at)| at <= now)
+            .map(|(&k, &at)| (at, k))
+            .collect();
+        due.sort_by_key(|(at, _)| *at);
+        for (_, k) in &due {
+            self.pending.remove(k);
+        }
+        due.into_iter().map(|(_, k)| k).collect()
+    }
+
+    /// `key` was checked successfully at `now`.
+    pub(crate) fn checked(&mut self, key: Key, now: Instant) {
+        self.last_checked.insert(key, now);
+        self.cooldown.remove(&key);
+    }
+
+    /// `key`'s check failed at `now`: it counts as checked, and is left alone
+    /// for [`FAILURE_COOLDOWN`].
+    pub(crate) fn failed(&mut self, key: Key, now: Instant) {
+        self.last_checked.insert(key, now);
+        self.cooldown.insert(key, now + FAILURE_COOLDOWN);
+    }
+
+    /// Forget checks older than the debounce and expired cooldowns, so the
+    /// maps hold only flags that still affect scheduling.
+    pub(crate) fn prune(&mut self, now: Instant) {
+        let debounce = self.debounce;
+        self.last_checked.retain(|_, at| *at + debounce > now);
+        self.cooldown.retain(|_, until| *until > now);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1089,6 +1438,142 @@ mod tests {
 
     fn d(sample: &Sample) -> Decision {
         decide(sample, &Thresholds::default())
+    }
+
+    // ------------------------------------------------------- schedule
+
+    const DEBOUNCE: Duration = Duration::from_secs(30);
+
+    fn key() -> (OrgId, FlagId) {
+        (OrgId::new(), FlagId::new())
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
+
+    #[test]
+    fn a_first_hint_is_due_now() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        assert_eq!(s.next_due(), None);
+        s.hint(k, t0);
+        assert_eq!(s.next_due(), Some(t0));
+        assert_eq!(s.take_due(t0), vec![k]);
+        assert_eq!(s.next_due(), None);
+        assert!(s.take_due(t0 + secs(60)).is_empty());
+    }
+
+    #[test]
+    fn a_hint_soon_after_a_check_waits_for_the_trailing_edge() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        s.checked(k, t0);
+        s.hint(k, t0 + secs(10));
+        assert_eq!(s.next_due(), Some(t0 + secs(30)));
+        assert!(s.take_due(t0 + secs(29)).is_empty(), "too early");
+        // Deferred, never dropped: still there at the end of the interval.
+        assert_eq!(s.take_due(t0 + secs(30)), vec![k]);
+    }
+
+    #[test]
+    fn many_hints_for_a_pending_flag_stay_one_entry_at_the_earliest_time() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        let other = key();
+        s.checked(k, t0);
+        s.hint(k, t0 + secs(5));
+        for n in 6..20 {
+            s.hint(k, t0 + secs(n));
+        }
+        s.hint(other, t0 + secs(40));
+        assert_eq!(s.pending.len(), 2);
+        assert_eq!(s.next_due(), Some(t0 + secs(30)));
+        // Due order: the earliest first.
+        assert_eq!(s.take_due(t0 + secs(40)), vec![k, other]);
+    }
+
+    #[test]
+    fn prune_forgets_checks_older_than_the_debounce() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let (old, recent) = (key(), key());
+        s.checked(old, t0);
+        s.checked(recent, t0 + secs(20));
+        s.prune(t0 + secs(31));
+        assert!(!s.last_checked.contains_key(&old));
+        assert!(s.last_checked.contains_key(&recent));
+        // A hint for the pruned flag is due at once.
+        s.hint(old, t0 + secs(31));
+        assert_eq!(s.next_due(), Some(t0 + secs(31)));
+    }
+
+    #[test]
+    fn a_failed_check_cools_the_flag_down_for_an_hour() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        s.failed(k, t0);
+        // A hint (or a backstop pass) a minute later waits out the cooldown.
+        s.hint(k, t0 + secs(60));
+        assert_eq!(s.next_due(), Some(t0 + FAILURE_COOLDOWN));
+        assert!(s.take_due(t0 + FAILURE_COOLDOWN - secs(1)).is_empty());
+        assert_eq!(s.take_due(t0 + FAILURE_COOLDOWN), vec![k]);
+    }
+
+    #[test]
+    fn a_successful_check_clears_the_cooldown() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        s.failed(k, t0);
+        s.checked(k, t0 + secs(1));
+        s.hint(k, t0 + secs(60));
+        assert_eq!(s.next_due(), Some(t0 + secs(60)));
+    }
+
+    #[test]
+    fn prune_drops_expired_cooldowns_only() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let (old, recent) = (key(), key());
+        s.failed(old, t0);
+        s.failed(recent, t0 + secs(600));
+        s.prune(t0 + FAILURE_COOLDOWN);
+        assert!(!s.cooldown.contains_key(&old));
+        assert!(s.cooldown.contains_key(&recent));
+    }
+
+    // ---------------------------------------------------------- hints
+
+    #[test]
+    fn sending_on_a_full_channel_counts_a_drop_and_returns() {
+        let (hints, mut rx) = Hints::channel(1);
+        let org = OrgId::new();
+        hints.send(org, vec![FlagId::new()]);
+        hints.send(org, vec![FlagId::new()]);
+        hints.send(org, vec![FlagId::new()]);
+        assert_eq!(hints.dropped.load(Ordering::Relaxed), 2);
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn sending_on_a_detached_channel_does_nothing() {
+        let hints = Hints::detached();
+        hints.send(OrgId::new(), vec![FlagId::new()]);
+        assert_eq!(hints.dropped.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn an_empty_hint_is_not_sent() {
+        let (hints, mut rx) = Hints::channel(1);
+        hints.send(OrgId::new(), Vec::new());
+        assert!(rx.try_recv().is_err());
+        assert_eq!(hints.dropped.load(Ordering::Relaxed), 0);
     }
 
     #[test]
