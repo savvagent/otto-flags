@@ -128,6 +128,11 @@ back.
    `after_connect` runs `SET ROLE otto_app` makes every `db.pool()` statement unpinned and
    subject to RLS, so the test calls `telemetry::sweep` and `platform_events::sweep`
    themselves rather than copies of their SQL.
+12. **`Entitlements` remembers an `Unknown` answer per org for 10 s** (added during
+   implementation, after code review of Task 7). The platform client caches only successes, so
+   during an outage every check would wait out the 2 s timeout and log a warning. A cached
+   `Unknown` is still `Unknown` (fail closed); `Granted`/`Denied` are never cached here (the
+   client's 60 s success cache covers them). Logs carry a coarse reason, never platform text.
 
 ## File Structure
 
