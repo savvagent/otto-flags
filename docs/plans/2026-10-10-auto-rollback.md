@@ -133,6 +133,12 @@ back.
    during an outage every check would wait out the 2 s timeout and log a warning. A cached
    `Unknown` is still `Unknown` (fail closed); `Granted`/`Denied` are never cached here (the
    client's 60 s success cache covers them). Logs carry a coarse reason, never platform text.
+13. **A flag whose check fails waits an hour before the checker tries it again**
+   (`FAILURE_COOLDOWN`, added after code review of Task 8). A check that always fails (a
+   tombstoned org not yet purged, an environment the patch rejects) never advances
+   `last_checked_at`, so without this it would head every backstop pass. Hints during the
+   cooldown are deferred to its end, not dropped; a successful check clears it. Residual: at
+   least `backstop_limit` persistently failing policies could still fill the backstop's slots.
 
 ## File Structure
 
