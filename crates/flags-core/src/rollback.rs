@@ -7,13 +7,25 @@
 //! thresholds, so what an agent is told and what the checker does cannot
 //! disagree.
 
-use serde::Serialize;
+use std::future::Future;
 
+use chrono::{DateTime, Utc};
+use otto_tenant::ids::{OrgId, UserId};
+use otto_tenant::Tx;
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use uuid::Uuid;
+
+use crate::apps::FlagApp;
+use crate::audit::action;
 use crate::error::{Error, Result};
+use crate::flags::FeatureFlag;
+use crate::ids::{FlagAppId, FlagId};
+use otto_tenant::audit::Entry;
 
 /// When a policy trips. The defaults are the column defaults of
 /// `rollback_policies` (a test pins that) and are what `flag_health` judges by.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Thresholds {
     /// Evaluations with the flag on needed before judging (>= 1).
@@ -179,6 +191,446 @@ pub fn decide(sample: &Sample, t: &Thresholds) -> Decision {
 /// ```
 pub fn can_trip(sample: &Sample, t: &Thresholds) -> bool {
     sample.evals_off > 0 || t.max_error_rate.is_some()
+}
+
+/// What a policy does when it trips.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "rollback_mode", rename_all = "lowercase")]
+pub enum Mode {
+    /// Turn the environment off.
+    Enforce,
+    /// Record what would have happened and change nothing.
+    Observe,
+}
+
+/// A rollback policy for one flag in one environment.
+#[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Policy {
+    pub id: Uuid,
+    pub org_id: OrgId,
+    pub app_id: FlagAppId,
+    pub flag_id: FlagId,
+    pub environment: String,
+    pub mode: Mode,
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub thresholds: Thresholds,
+    /// Set when the policy tripped; cleared when the environment is turned
+    /// back on. A tripped policy does not act again.
+    pub tripped_at: Option<DateTime<Utc>>,
+    pub last_checked_at: Option<DateTime<Utc>>,
+    pub created_by: Option<UserId>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PolicyState {
+    /// Watching.
+    Armed,
+    /// Acted (or would have); waiting for the environment to be turned back on.
+    Tripped,
+    /// The app no longer has this policy's environment; the policy cannot act.
+    EnvironmentMissing,
+}
+
+/// A policy with the flag's key and where it stands.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyView {
+    #[serde(flatten)]
+    pub policy: Policy,
+    pub flag_key: String,
+    pub state: PolicyState,
+}
+
+impl PolicyView {
+    fn new(policy: Policy, flag_key: String, app_environments: &[String]) -> Self {
+        // A missing environment wins over tripped: it says why the policy
+        // cannot do anything, which a tripped flag no longer needs to know.
+        let state = if !app_environments.contains(&policy.environment) {
+            PolicyState::EnvironmentMissing
+        } else if policy.tripped_at.is_some() {
+            PolicyState::Tripped
+        } else {
+            PolicyState::Armed
+        };
+        Self {
+            policy,
+            flag_key,
+            state,
+        }
+    }
+}
+
+/// What the checker did, or would have done, or could not do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Outcome {
+    RolledBack,
+    WouldRollBack,
+    NotEntitled,
+    EntitlementUnknown,
+}
+
+impl Outcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::RolledBack => "rolled_back",
+            Outcome::WouldRollBack => "would_roll_back",
+            Outcome::NotEntitled => "not_entitled",
+            Outcome::EntitlementUnknown => "entitlement_unknown",
+        }
+    }
+}
+
+impl TryFrom<String> for Outcome {
+    type Error = String;
+
+    fn try_from(s: String) -> std::result::Result<Self, String> {
+        Ok(match s.as_str() {
+            "rolled_back" => Outcome::RolledBack,
+            "would_roll_back" => Outcome::WouldRollBack,
+            "not_entitled" => Outcome::NotEntitled,
+            "entitlement_unknown" => Outcome::EntitlementUnknown,
+            other => return Err(format!("unknown rollback outcome {other:?}")),
+        })
+    }
+}
+
+/// The numbers a decision was made on; stored as an event's `observed`.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Observation {
+    pub window_start: DateTime<Utc>,
+    pub sample: Sample,
+    pub rate_on: Option<f64>,
+    pub rate_off: Option<f64>,
+    pub thresholds: Thresholds,
+    pub decision: Decision,
+}
+
+/// One row of what policies did. Carries only numbers, ids, and enums: no
+/// SDK-reported text.
+#[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Event {
+    pub id: i64,
+    pub policy_id: Uuid,
+    pub flag_id: FlagId,
+    pub flag_key: String,
+    pub environment: String,
+    #[sqlx(try_from = "String")]
+    pub outcome: Outcome,
+    pub observed: serde_json::Value,
+    pub flag_version: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(FromRow)]
+struct PolicyRow {
+    #[sqlx(flatten)]
+    policy: Policy,
+    flag_key: String,
+}
+
+const POLICY_COLS: &str = "p.id, p.org_id, p.app_id, p.flag_id, p.environment, p.mode, \
+     p.min_evaluations, p.min_errors, p.max_error_ratio, p.max_error_rate, p.window_hours, \
+     p.include_client_reports, p.tripped_at, p.last_checked_at, p.created_by, p.created_at, \
+     p.updated_at";
+
+const MAX_EVENTS: i64 = 200;
+
+pub trait RollbackExt {
+    /// Create the policy for `flag` in `environment`, or replace its mode and
+    /// thresholds in place (id, creator, and `tripped_at` are kept: armed or
+    /// tripped follows the environment's switch, not the thresholds).
+    fn set_policy(
+        &mut self,
+        app: &FlagApp,
+        flag: &FeatureFlag,
+        environment: &str,
+        mode: Mode,
+        t: Thresholds,
+        actor: UserId,
+    ) -> impl Future<Output = Result<PolicyView>> + Send;
+
+    /// Delete a policy; whether there was one.
+    fn remove_policy(
+        &mut self,
+        app: &FlagApp,
+        flag: &FeatureFlag,
+        environment: &str,
+        actor: UserId,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
+    /// The app's policies (or one flag's), in one query.
+    fn list_policies(
+        &mut self,
+        app: &FlagApp,
+        flag: Option<&FeatureFlag>,
+    ) -> impl Future<Output = Result<Vec<PolicyView>>> + Send;
+
+    fn find_policy(
+        &mut self,
+        flag: FlagId,
+        environment: &str,
+    ) -> impl Future<Output = Result<Option<Policy>>> + Send;
+
+    /// Newest first; `limit` is clamped to 1..=200.
+    fn rollback_events(
+        &mut self,
+        app: &FlagApp,
+        flag: Option<&FeatureFlag>,
+        limit: i64,
+    ) -> impl Future<Output = Result<Vec<Event>>> + Send;
+
+    /// The counts a policy with thresholds `t` judges: this hour so far plus
+    /// the `window_hours - 1` before it. Returns the window's start.
+    ///
+    /// Unless `include_client_reports`, only server-key reports count
+    /// (evaluations by `server_count`, errors with `reporter = 'server'`).
+    /// Errors with no environment count toward `production`. Errors are
+    /// windowed on `occurred_at`, as `flag_health` does.
+    fn sample(
+        &mut self,
+        flag: FlagId,
+        environment: &str,
+        t: &Thresholds,
+    ) -> impl Future<Output = Result<(DateTime<Utc>, Sample)>> + Send;
+}
+
+impl RollbackExt for Tx<'_> {
+    async fn set_policy(
+        &mut self,
+        app: &FlagApp,
+        flag: &FeatureFlag,
+        environment: &str,
+        mode: Mode,
+        t: Thresholds,
+        actor: UserId,
+    ) -> Result<PolicyView> {
+        if !app.environments.iter().any(|e| e == environment) {
+            return Err(Error::Invalid(format!(
+                "app '{}' has no environment '{environment}'; its environments are: {}",
+                app.name,
+                app.environments.join(", ")
+            )));
+        }
+        t.validate()?;
+        let org = self.org();
+        let policy: Policy = sqlx::query_as(&format!(
+            "INSERT INTO rollback_policies AS p \
+               (org_id, app_id, flag_id, environment, mode, min_evaluations, min_errors, \
+                max_error_ratio, max_error_rate, window_hours, include_client_reports, created_by) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) \
+             ON CONFLICT (flag_id, environment) DO UPDATE SET \
+               mode = EXCLUDED.mode, \
+               min_evaluations = EXCLUDED.min_evaluations, \
+               min_errors = EXCLUDED.min_errors, \
+               max_error_ratio = EXCLUDED.max_error_ratio, \
+               max_error_rate = EXCLUDED.max_error_rate, \
+               window_hours = EXCLUDED.window_hours, \
+               include_client_reports = EXCLUDED.include_client_reports, \
+               updated_at = now() \
+             RETURNING {POLICY_COLS}"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(flag.id)
+        .bind(environment)
+        .bind(mode)
+        .bind(t.min_evaluations)
+        .bind(t.min_errors)
+        .bind(t.max_error_ratio)
+        .bind(t.max_error_rate)
+        .bind(t.window_hours)
+        .bind(t.include_client_reports)
+        .bind(actor)
+        .fetch_one(self.conn())
+        .await?;
+        self.audit(
+            Entry::new(action::ROLLBACK_POLICY_SET)
+                .actor(actor)
+                .target("flag", flag.id.to_string())
+                .detail(serde_json::json!({
+                    "flag": flag.key,
+                    "environment": environment,
+                    "mode": mode,
+                    "thresholds": t,
+                })),
+        )
+        .await?;
+        Ok(PolicyView::new(policy, flag.key.clone(), &app.environments))
+    }
+
+    async fn remove_policy(
+        &mut self,
+        _app: &FlagApp,
+        flag: &FeatureFlag,
+        environment: &str,
+        actor: UserId,
+    ) -> Result<bool> {
+        let org = self.org();
+        let removed: Option<Uuid> = sqlx::query_scalar(
+            "DELETE FROM rollback_policies WHERE org_id = $1 AND flag_id = $2 AND environment = $3 \
+             RETURNING id",
+        )
+        .bind(org)
+        .bind(flag.id)
+        .bind(environment)
+        .fetch_optional(self.conn())
+        .await?;
+        if removed.is_none() {
+            return Ok(false);
+        }
+        self.audit(
+            Entry::new(action::ROLLBACK_POLICY_REMOVED)
+                .actor(actor)
+                .target("flag", flag.id.to_string())
+                .detail(serde_json::json!({"flag": flag.key, "environment": environment})),
+        )
+        .await?;
+        Ok(true)
+    }
+
+    async fn list_policies(
+        &mut self,
+        app: &FlagApp,
+        flag: Option<&FeatureFlag>,
+    ) -> Result<Vec<PolicyView>> {
+        let org = self.org();
+        let rows: Vec<PolicyRow> = sqlx::query_as(&format!(
+            "SELECT {POLICY_COLS}, f.key AS flag_key \
+             FROM rollback_policies p \
+             JOIN feature_flags f ON f.org_id = p.org_id AND f.id = p.flag_id \
+             WHERE p.org_id = $1 AND p.app_id = $2 AND ($3::uuid IS NULL OR p.flag_id = $3) \
+             ORDER BY f.key, p.environment"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(flag.map(|f| f.id))
+        .fetch_all(self.conn())
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PolicyView::new(r.policy, r.flag_key, &app.environments))
+            .collect())
+    }
+
+    async fn find_policy(&mut self, flag: FlagId, environment: &str) -> Result<Option<Policy>> {
+        let org = self.org();
+        Ok(sqlx::query_as(&format!(
+            "SELECT {POLICY_COLS} FROM rollback_policies p \
+             WHERE p.org_id = $1 AND p.flag_id = $2 AND p.environment = $3"
+        ))
+        .bind(org)
+        .bind(flag)
+        .bind(environment)
+        .fetch_optional(self.conn())
+        .await?)
+    }
+
+    async fn rollback_events(
+        &mut self,
+        app: &FlagApp,
+        flag: Option<&FeatureFlag>,
+        limit: i64,
+    ) -> Result<Vec<Event>> {
+        let org = self.org();
+        Ok(sqlx::query_as(
+            "SELECT e.id, e.policy_id, e.flag_id, f.key AS flag_key, e.environment, e.outcome, \
+                    e.observed, e.flag_version, e.created_at \
+             FROM rollback_events e \
+             JOIN feature_flags f ON f.org_id = e.org_id AND f.id = e.flag_id \
+             WHERE e.org_id = $1 AND f.app_id = $2 AND ($3::uuid IS NULL OR e.flag_id = $3) \
+             ORDER BY e.created_at DESC, e.id DESC \
+             LIMIT $4",
+        )
+        .bind(org)
+        .bind(app.id)
+        .bind(flag.map(|f| f.id))
+        .bind(limit.clamp(1, MAX_EVENTS))
+        .fetch_all(self.conn())
+        .await?)
+    }
+
+    async fn sample(
+        &mut self,
+        flag: FlagId,
+        environment: &str,
+        t: &Thresholds,
+    ) -> Result<(DateTime<Utc>, Sample)> {
+        let org = self.org();
+        // The window start is computed once, in SQL, and reused by the second
+        // query so both sides cover the same span.
+        let (since, evals_on, evals_off): (DateTime<Utc>, i64, i64) = sqlx::query_as(
+            "SELECT w.since, \
+                    coalesce(sum(CASE WHEN $5 THEN e.count ELSE e.server_count END) \
+                             FILTER (WHERE e.enabled), 0)::bigint, \
+                    coalesce(sum(CASE WHEN $5 THEN e.count ELSE e.server_count END) \
+                             FILTER (WHERE NOT e.enabled), 0)::bigint \
+             FROM (SELECT date_trunc('hour', now()) - make_interval(hours => $4 - 1) AS since) w \
+             LEFT JOIN flag_eval_hourly e \
+               ON e.org_id = $1 AND e.flag_id = $2 AND e.environment = $3 AND e.hour >= w.since \
+             GROUP BY w.since",
+        )
+        .bind(org)
+        .bind(flag)
+        .bind(environment)
+        .bind(t.window_hours)
+        .bind(t.include_client_reports)
+        .fetch_one(self.conn())
+        .await?;
+
+        let (errors_on, errors_off): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE flag_enabled)::bigint, \
+                    count(*) FILTER (WHERE NOT flag_enabled)::bigint \
+             FROM flag_errors \
+             WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $4 \
+               AND (environment = $3 OR ($3 = 'production' AND environment IS NULL)) \
+               AND ($5 OR reporter = 'server')",
+        )
+        .bind(org)
+        .bind(flag)
+        .bind(environment)
+        .bind(since)
+        .bind(t.include_client_reports)
+        .fetch_one(self.conn())
+        .await?;
+
+        Ok((
+            since,
+            Sample {
+                evals_on,
+                evals_off,
+                errors_on,
+                errors_off,
+            },
+        ))
+    }
+}
+
+/// Of `flags`, those with an armed (untripped) policy, deduplicated. One
+/// indexed SELECT, for use inside the telemetry transaction.
+pub async fn armed(tx: &mut Tx<'_>, flags: &[FlagId]) -> Result<Vec<FlagId>> {
+    if flags.is_empty() {
+        return Ok(Vec::new());
+    }
+    let org = tx.org();
+    Ok(sqlx::query_scalar(
+        "SELECT DISTINCT flag_id FROM rollback_policies \
+         WHERE org_id = $1 AND flag_id = ANY($2) AND tripped_at IS NULL",
+    )
+    .bind(org)
+    .bind(flags)
+    .fetch_all(tx.conn())
+    .await?)
 }
 
 #[cfg(test)]

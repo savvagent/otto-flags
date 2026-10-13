@@ -8,7 +8,7 @@ use flags_core::eval::{Context, Operator, Rule};
 use flags_core::flags::{ChangeMeta, EnvPatch, FlagPatch, FlagsExt, NewFlag};
 use flags_core::keys::KeyKind;
 use flags_core::platform_events::{self, begin_live, Outcome};
-use flags_core::rollback::Thresholds;
+use flags_core::rollback::{self, Mode, PolicyState, RollbackExt, Thresholds};
 use flags_core::telemetry::{self, ErrorEvent, EvalEvent};
 use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
@@ -793,4 +793,506 @@ async fn policy_column_defaults_match_the_rust_thresholds(pool: PgPool) {
         include_client_reports: row.5,
     };
     assert_eq!(from_columns, Thresholds::default());
+}
+
+// ---- auto-rollback policies, events, samples
+
+/// An org with one app (`production`, `staging`) and one flag `f`.
+async fn policy_fixture(
+    db: &Db,
+    org: OrgId,
+    actor: UserId,
+) -> (flags_core::apps::FlagApp, flags_core::flags::FeatureFlag) {
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into(), "staging".into()], actor)
+        .await
+        .unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    (app, flag)
+}
+
+async fn audit_actions(tx: &mut otto_tenant::Tx<'_>) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT action FROM audit_events WHERE action LIKE 'flags.rollback_policy.%' ORDER BY id",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rollback_policies_are_org_isolated_and_replaced_in_place(pool: PgPool) {
+    let db = db(pool).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    let other_actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, a, actor).await;
+
+    let mut tx = db.begin(a).await.unwrap();
+    let err = tx
+        .set_policy(
+            &app,
+            &flag,
+            "qa",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("production") && msg.contains("staging"),
+        "{msg}"
+    );
+    let bad = Thresholds {
+        window_hours: 99,
+        ..Thresholds::default()
+    };
+    let err = tx
+        .set_policy(&app, &flag, "production", Mode::Enforce, bad, actor)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument");
+
+    let first = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.state, PolicyState::Armed);
+    assert_eq!(first.flag_key, "f");
+
+    // Tripped state survives a replacement (decision 4).
+    sqlx::query("UPDATE rollback_policies SET tripped_at = now()")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let t2 = Thresholds {
+        min_evaluations: 5,
+        min_errors: 2,
+        max_error_ratio: 3.0,
+        max_error_rate: Some(0.5),
+        window_hours: 6,
+        include_client_reports: true,
+    };
+    let second = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Observe,
+            t2.clone(),
+            other_actor,
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.policy.id, first.policy.id);
+    assert_eq!(second.policy.created_by, Some(actor));
+    assert_eq!(second.policy.mode, Mode::Observe);
+    assert_eq!(second.policy.thresholds, t2);
+    assert!(second.policy.tripped_at.is_some());
+    assert_eq!(second.state, PolicyState::Tripped);
+    assert_eq!(tx.list_policies(&app, None).await.unwrap().len(), 1);
+    assert_eq!(
+        tx.list_policies(&app, Some(&flag)).await.unwrap(),
+        vec![second.clone()]
+    );
+    assert_eq!(
+        tx.find_policy(flag.id, "production").await.unwrap(),
+        Some(second.policy.clone())
+    );
+    assert!(tx.find_policy(flag.id, "staging").await.unwrap().is_none());
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(b).await.unwrap();
+    assert!(tx.list_policies(&app, None).await.unwrap().is_empty());
+    assert!(tx
+        .find_policy(flag.id, "production")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!tx
+        .remove_policy(&app, &flag, "production", actor)
+        .await
+        .unwrap());
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(a).await.unwrap();
+    assert!(tx
+        .remove_policy(&app, &flag, "production", actor)
+        .await
+        .unwrap());
+    assert!(!tx
+        .remove_policy(&app, &flag, "production", actor)
+        .await
+        .unwrap());
+    assert_eq!(
+        audit_actions(&mut tx).await,
+        vec![
+            "flags.rollback_policy.set",
+            "flags.rollback_policy.set",
+            "flags.rollback_policy.removed"
+        ]
+    );
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn list_policies_reports_tripped_and_missing_environments(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+
+    let mut tx = db.begin(org).await.unwrap();
+    for env in ["production", "staging"] {
+        tx.set_policy(
+            &app,
+            &flag,
+            env,
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    }
+    sqlx::query("UPDATE rollback_policies SET tripped_at = now() WHERE environment = 'production'")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let states = |v: Vec<flags_core::rollback::PolicyView>| -> Vec<(String, PolicyState)> {
+        v.into_iter()
+            .map(|p| (p.policy.environment, p.state))
+            .collect()
+    };
+    assert_eq!(
+        states(tx.list_policies(&app, None).await.unwrap()),
+        vec![
+            ("production".into(), PolicyState::Tripped),
+            ("staging".into(), PolicyState::Armed)
+        ]
+    );
+
+    let app = tx
+        .set_app_environments(&app, &["production".into()], actor)
+        .await
+        .unwrap();
+    assert_eq!(
+        states(tx.list_policies(&app, None).await.unwrap()),
+        vec![
+            ("production".into(), PolicyState::Tripped),
+            ("staging".into(), PolicyState::EnvironmentMissing)
+        ]
+    );
+    tx.commit().await.unwrap();
+}
+
+fn eval_events(n: usize, enabled: bool) -> Vec<EvalEvent> {
+    (0..n)
+        .map(|_| EvalEvent {
+            flag_key: "f".into(),
+            enabled,
+            variation: None,
+            environment: "production".into(),
+            at: Utc::now(),
+        })
+        .collect()
+}
+
+fn error_events(n: usize, enabled: bool, environment: Option<&str>) -> Vec<ErrorEvent> {
+    (0..n)
+        .map(|_| ErrorEvent {
+            flag_key: "f".into(),
+            flag_enabled: enabled,
+            environment: environment.map(String::from),
+            error_type: "E".into(),
+            error_message: "m".into(),
+            stack_trace: None,
+            at: Utc::now(),
+        })
+        .collect()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_default_policy_is_judged_on_server_reports_only(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+
+    // Client-key reports that would trip, and nothing from a server key.
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, eval_events(200, true))
+        .await
+        .unwrap();
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, eval_events(200, false))
+        .await
+        .unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Client,
+        error_events(30, true, Some("production")),
+    )
+    .await
+    .unwrap();
+    // A row from before the reporter column existed counts as client.
+    sqlx::query(
+        "UPDATE flag_errors SET reporter = NULL WHERE id = (SELECT min(id) FROM flag_errors)",
+    )
+    .execute(tx.conn())
+    .await
+    .unwrap();
+
+    let defaults = Thresholds::default();
+    let (_, s) = tx.sample(flag.id, "production", &defaults).await.unwrap();
+    assert_eq!(s, rollback::Sample::default());
+
+    let with_client = Thresholds {
+        include_client_reports: true,
+        ..defaults.clone()
+    };
+    let (_, s) = tx
+        .sample(flag.id, "production", &with_client)
+        .await
+        .unwrap();
+    assert_eq!(
+        s,
+        rollback::Sample {
+            evals_on: 200,
+            evals_off: 200,
+            errors_on: 30,
+            errors_off: 0
+        }
+    );
+
+    // Server-key rows always count.
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(50, true))
+        .await
+        .unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(4, false, Some("production")),
+    )
+    .await
+    .unwrap();
+    let (_, s) = tx.sample(flag.id, "production", &defaults).await.unwrap();
+    assert_eq!(
+        s,
+        rollback::Sample {
+            evals_on: 50,
+            evals_off: 0,
+            errors_on: 0,
+            errors_off: 4
+        }
+    );
+    let (_, s) = tx
+        .sample(flag.id, "production", &with_client)
+        .await
+        .unwrap();
+    assert_eq!(
+        s,
+        rollback::Sample {
+            evals_on: 250,
+            evals_off: 200,
+            errors_on: 30,
+            errors_off: 4
+        }
+    );
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn null_environment_errors_count_for_production_only(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(3, true, None),
+    )
+    .await
+    .unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(2, true, Some("staging")),
+    )
+    .await
+    .unwrap();
+    let t = Thresholds::default();
+    let (_, prod) = tx.sample(flag.id, "production", &t).await.unwrap();
+    let (_, staging) = tx.sample(flag.id, "staging", &t).await.unwrap();
+    assert_eq!(prod.errors_on, 3);
+    assert_eq!(staging.errors_on, 2);
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_sample_window_starts_at_the_top_of_the_hour(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (_, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    sqlx::query(
+        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
+         VALUES ($1, $2, 'production', date_trunc('hour', now()) - interval '1 hour', true, 40, 40)",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+
+    let one = Thresholds::default();
+    let (start, s) = tx.sample(flag.id, "production", &one).await.unwrap();
+    assert_eq!(s.evals_on, 0);
+    let expected: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT date_trunc('hour', now())")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(start, expected);
+
+    let two = Thresholds {
+        window_hours: 2,
+        ..one
+    };
+    let (start2, s) = tx.sample(flag.id, "production", &two).await.unwrap();
+    assert_eq!(s.evals_on, 40);
+    assert_eq!(start2, expected - chrono::TimeDelta::hours(1));
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn armed_lists_only_flags_with_an_untripped_policy(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let other = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "g".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    let none = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "h".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    let t = Thresholds::default();
+    // f: one armed and one tripped policy (listed once); g: only tripped.
+    tx.set_policy(&app, &flag, "production", Mode::Enforce, t.clone(), actor)
+        .await
+        .unwrap();
+    tx.set_policy(&app, &flag, "staging", Mode::Enforce, t.clone(), actor)
+        .await
+        .unwrap();
+    tx.set_policy(&app, &other, "production", Mode::Enforce, t.clone(), actor)
+        .await
+        .unwrap();
+    tx.set_policy(&app, &flag, "production", Mode::Observe, t, actor)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE rollback_policies SET tripped_at = now() WHERE flag_id = $1")
+        .bind(other.id)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let got = rollback::armed(&mut tx, &[flag.id, other.id, none.id, flag.id])
+        .await
+        .unwrap();
+    assert_eq!(got, vec![flag.id]);
+    assert!(rollback::armed(&mut tx, &[]).await.unwrap().is_empty());
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rollback_events_are_newest_first_and_capped(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed, created_at) \
+         SELECT $1, $2, $3, 'production', \
+                (ARRAY['rolled_back','would_roll_back','not_entitled','entitlement_unknown'])[1 + g % 4], \
+                '{}'::jsonb, now() - make_interval(mins => 250 - g) \
+         FROM generate_series(1, 250) g",
+    )
+    .bind(org)
+    .bind(policy.policy.id)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+
+    let ten = tx.rollback_events(&app, Some(&flag), 10).await.unwrap();
+    assert_eq!(ten.len(), 10);
+    assert!(ten.windows(2).all(|w| w[0].created_at >= w[1].created_at));
+    assert_eq!(ten[0].flag_key, "f");
+    assert_eq!(ten[0].outcome, rollback::Outcome::NotEntitled); // g = 250 -> array index 1 + 250 % 4 = 3
+    assert_eq!(
+        tx.rollback_events(&app, None, 10_000).await.unwrap().len(),
+        200
+    );
+    assert_eq!(tx.rollback_events(&app, None, 0).await.unwrap().len(), 1);
+    assert_eq!(tx.rollback_events(&app, None, -5).await.unwrap().len(), 1);
+    tx.commit().await.unwrap();
 }
