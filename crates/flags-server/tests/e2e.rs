@@ -786,16 +786,20 @@ async fn org_with_flag(
     )
 }
 
-async fn enable(s: &Server, t: &str, key: &str, environment: &str) -> Value {
+async fn set_enabled(s: &Server, t: &str, key: &str, environment: &str, on: bool) -> Value {
     tool(
         &s.app,
         t,
         "set_flag_environment",
-        json!({"app": "web", "key": key, "environment": environment, "enabled": true,
+        json!({"app": "web", "key": key, "environment": environment, "enabled": on,
                "reason": "ship it"}),
     )
     .await
     .unwrap()
+}
+
+async fn enable(s: &Server, t: &str, key: &str, environment: &str) -> Value {
+    set_enabled(s, t, key, environment, true).await
 }
 
 async fn flag(s: &Server, t: &str, key: &str) -> Value {
@@ -962,9 +966,15 @@ async fn a_policy_turns_a_failing_flag_off_and_tells_the_stream(pool: PgPool) {
     enable(&s, &t, "risky", "production").await;
     // `Listener::spawn` starts LISTEN in the background: a notification sent
     // before it is listening is lost. Hear one of our own changes first, so
-    // the rollback's cannot be lost to that race.
+    // the rollback's cannot be lost to that race. Each attempt turns staging
+    // on (off again first after a miss), so every attempt is a real change
+    // and staging ends on. Each creates a version: the assertions below use
+    // versions read back from get_flag, never a count of attempts.
     let mut listening = false;
-    for _ in 0..10 {
+    for attempt in 0..10 {
+        if attempt > 0 {
+            set_enabled(&s, &t, "risky", "staging", false).await;
+        }
         let staged = enable(&s, &t, "risky", "staging").await;
         let version = staged["flag"]["version"].as_i64().unwrap();
         if heard(&mut changes, "risky", version, Duration::from_millis(500)).await {
@@ -1046,6 +1056,8 @@ async fn a_policy_turns_a_failing_flag_off_and_tells_the_stream(pool: PgPool) {
     .await
     .unwrap();
     report(&s, &client_key, "forged", 150, 150, 30).await;
+    // 1 s is ~20x the 50 ms debounce; the propose_rollback below shows these
+    // reports would have tripped had client reports counted.
     let tripped = eventually(Duration::from_secs(1), || async {
         !enabled_in(&flag(&s, &t, "forged").await, "production")
     })
