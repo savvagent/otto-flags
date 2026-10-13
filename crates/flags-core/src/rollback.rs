@@ -60,8 +60,10 @@
 //! and the whole check at most [`CheckerConfig::check_timeout`] (15 s), after
 //! which it is abandoned and retried. Within one check each policy acts inside
 //! its own savepoint, so a policy that fails changes nothing, is reported in
-//! [`CheckReport::failed`], and does not undo the others; the check is then
-//! judged by its worst failure.
+//! [`CheckReport::failed`], and does not undo the others. The flag cools
+//! down only when every policy the check handled failed non-transiently; if
+//! another policy acted or was judged, the flag is retried after the usual
+//! debounce.
 //!
 //! Flags are checked one at a time, and [`check_flag`] holds at most one
 //! pooled connection at a time, so the checker never holds more than one of
@@ -1669,13 +1671,20 @@ fn classify(e: &Error) -> Checked {
     }
 }
 
-/// A check that completed, judged by its worst policy: any permanent failure
-/// gives up, else any transient one retries.
+/// How a check that completed but had failing policies is scheduled. The
+/// cooldown is per flag, so it applies only when every policy the pass
+/// handled failed in a way retrying will not fix: one broken policy must not
+/// silence a flag's other policies for an hour. Any transient failure, or any
+/// other policy that acted or was judged, retries after the debounce. Each
+/// failure stays visible on its policy (`last_error_code`).
 fn classify_report(report: &CheckReport) -> Checked {
-    if report.failed.iter().any(|f| !f.transient) {
-        Checked::GiveUp
-    } else if report.failed.is_empty() {
+    if report.failed.is_empty() {
         Checked::Ok
+    } else if report.failed.iter().all(|f| !f.transient)
+        && report.outcomes.is_empty()
+        && report.failed.len() >= report.checked
+    {
+        Checked::GiveUp
     } else {
         Checked::Retry
     }
@@ -1971,14 +1980,43 @@ mod tests {
     }
 
     #[test]
-    fn a_report_is_judged_by_its_worst_policy() {
-        let mut report = CheckReport::default();
-        assert_eq!(classify_report(&report), Checked::Ok);
-        report.failed.push(failure(true));
-        assert_eq!(classify_report(&report), Checked::Retry);
-        report.failed.push(failure(false));
-        report.failed.push(failure(true));
-        assert_eq!(classify_report(&report), Checked::GiveUp);
+    fn a_flag_cools_down_only_when_every_policy_failed_for_good() {
+        let report = |checked, failed: Vec<PolicyFailure>, ok: usize| CheckReport {
+            checked,
+            outcomes: (0..ok)
+                .map(|_| (Uuid::new_v4(), Outcome::RolledBack))
+                .collect(),
+            failed,
+        };
+        assert_eq!(classify_report(&report(1, vec![], 1)), Checked::Ok);
+        // Its only policy failed for good: cool down.
+        assert_eq!(
+            classify_report(&report(1, vec![failure(false)], 0)),
+            Checked::GiveUp
+        );
+        assert_eq!(
+            classify_report(&report(2, vec![failure(false), failure(false)], 0)),
+            Checked::GiveUp
+        );
+        // A transient failure retries after the debounce.
+        assert_eq!(
+            classify_report(&report(1, vec![failure(true)], 0)),
+            Checked::Retry
+        );
+        assert_eq!(
+            classify_report(&report(2, vec![failure(false), failure(true)], 0)),
+            Checked::Retry
+        );
+        // Another policy acted: the flag is not cooled down for one failure.
+        assert_eq!(
+            classify_report(&report(2, vec![failure(false)], 1)),
+            Checked::Retry
+        );
+        // Another policy was judged healthy (checked, no outcome): same.
+        assert_eq!(
+            classify_report(&report(2, vec![failure(false)], 0)),
+            Checked::Retry
+        );
     }
 
     #[test]
