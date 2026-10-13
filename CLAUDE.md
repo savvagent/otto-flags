@@ -139,7 +139,8 @@ crate module docs.
   migrations and the next deploy refuses to boot. Migrations must be compatible with the previous
   release during rollout (additive first).
 - **Migrations must be compatible with the previous release during rollout AND after a rollback:**
-  the previous release runs against the newer schema (`ignore_missing`).
+  the previous release runs against the newer schema (`ignore_missing`), so no drop or rename of
+  anything it reads.
 - **Tenant isolation is RLS under `otto_app`, proven.** Tenant queries are extension-trait methods
   on `otto_tenant::Tx` in `flags-core`. Every new tenant table enables RLS, grants to `otto_app`,
   and is covered by `tenant_isolation_is_enforced_on_every_tenant_table`
