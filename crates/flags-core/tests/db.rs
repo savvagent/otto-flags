@@ -1096,12 +1096,35 @@ async fn policy_column_defaults_match_the_rust_thresholds(pool: PgPool) {
 
 // ---- auto-rollback policies, events, samples
 
-/// An org with one app (`production`, `staging`) and one flag `f`.
+/// How close to the next hour a test that records telemetry and then samples
+/// it may start. More than any such test takes to run.
+const HOUR_MARGIN_SECS: f64 = 15.0;
+
+/// A rollback sample starts at the top of the current hour (the database's
+/// clock), so telemetry recorded just before an hour turns and sampled just
+/// after it falls out of the window. Called before arranging such a test: if
+/// the database clock is within [`HOUR_MARGIN_SECS`] of the next hour, wait
+/// until that hour has begun.
+async fn clear_of_the_hour(db: &Db) {
+    let left: f64 = sqlx::query_scalar(
+        "SELECT extract(epoch FROM date_trunc('hour', now()) + interval '1 hour' - now())::float8",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    if left < HOUR_MARGIN_SECS {
+        tokio::time::sleep(std::time::Duration::from_secs_f64(left + 1.0)).await;
+    }
+}
+
+/// An org with one app (`production`, `staging`) and one flag `f`, clear of
+/// the top of the hour (see [`clear_of_the_hour`]).
 async fn policy_fixture(
     db: &Db,
     org: OrgId,
     actor: UserId,
 ) -> (flags_core::apps::FlagApp, flags_core::flags::FeatureFlag) {
+    clear_of_the_hour(db).await;
     let mut tx = db.begin(org).await.unwrap();
     let (app, _) = tx
         .create_app("web", &["production".into(), "staging".into()], actor)

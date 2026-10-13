@@ -755,15 +755,37 @@ async fn platform_webhooks_must_be_signed_and_org_deleted_revokes_everything(poo
 
 // ------------------------------------------------------------ auto-rollback
 
+/// How close to the next hour an auto-rollback test may start: more than any
+/// of them takes to run.
+const HOUR_MARGIN_SECS: f64 = 15.0;
+
+/// A rollback sample starts at the top of the current hour (the database's
+/// clock), so telemetry reported just before an hour turns and judged just
+/// after it falls out of the window. If the database clock is within
+/// [`HOUR_MARGIN_SECS`] of the next hour, wait until that hour has begun.
+async fn clear_of_the_hour(db: &Db) {
+    let left: f64 = sqlx::query_scalar(
+        "SELECT extract(epoch FROM date_trunc('hour', now()) + interval '1 hour' - now())::float8",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    if left < HOUR_MARGIN_SECS {
+        tokio::time::sleep(Duration::from_secs_f64(left + 1.0)).await;
+    }
+}
+
 /// An owner's token for a fresh org, with an app `web` (production and
-/// staging) holding flag `key`. Returns the token, the user, and the app's
-/// server and client keys.
+/// staging) holding flag `key`, clear of the top of the hour (see
+/// [`clear_of_the_hour`]). Returns the token, the user, and the app's server
+/// and client keys.
 async fn org_with_flag(
     s: &Server,
     platform: &Shared,
     org: Uuid,
     key: &str,
 ) -> (String, Uuid, String, String) {
+    clear_of_the_hour(&s.db).await;
     let user = Uuid::new_v4();
     let t = token(platform, org, user, Role::Owner, flags_core::scopes::KNOWN);
     let created = tool(
