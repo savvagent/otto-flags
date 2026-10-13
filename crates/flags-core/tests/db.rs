@@ -2990,6 +2990,64 @@ async fn one_policys_failure_does_not_undo_anothers_rollback(pool: PgPool) {
         after.events,
         vec![("rolled_back".to_string(), Some(before.version + 1))]
     );
+
+    // The failure is visible on the failing policy only, as a code.
+    let errors = |db: Db| async move {
+        let mut tx = db.begin(org).await.unwrap();
+        let app = tx.resolve_app("web").await.unwrap();
+        let views = tx.list_policies(&app, None).await.unwrap();
+        tx.rollback().await.unwrap();
+        views
+            .into_iter()
+            .map(|v| {
+                (
+                    v.policy.environment,
+                    v.policy.last_error_code,
+                    v.policy.last_error_at.is_some(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        errors(db.clone()).await,
+        vec![
+            (
+                "production".to_string(),
+                Some("invalid_argument".to_string()),
+                true
+            ),
+            ("staging".to_string(), None, false),
+        ]
+    );
+
+    // Repaired, the next check acts and clears it.
+    let mut tx = db.begin(org).await.unwrap();
+    sqlx::query(
+        "UPDATE feature_flags \
+         SET environments = jsonb_set(environments, '{production,rules}', '[]') \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.outcomes,
+        vec![(production, RollbackOutcome::RolledBack)]
+    );
+    assert!(report.failed.is_empty());
+    assert_eq!(
+        errors(db.clone()).await,
+        vec![
+            ("production".to_string(), None, false),
+            ("staging".to_string(), None, false),
+        ]
+    );
 }
 
 // ---- propose: the dry run

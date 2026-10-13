@@ -109,7 +109,9 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   at most 2 s for a flag's row lock, and is then retried).
 - **Outcomes** in `rollback_events`: `rolled_back`, `would_roll_back` (observe), `not_entitled`,
   `entitlement_unknown`. Suppressed outcomes are recorded at most once per hour per policy.
-  Events are kept 90 days.
+  Events are kept 90 days. A policy the checker could not act on (its patch failed) records no
+  event: it stays armed, shows `lastErrorCode` and `lastErrorAt` in `list_rollback_policies`
+  (`last_error_code` in the table), and is retried; its next successful check clears them.
 - **No new secret, env var, scope, or recurring cost.**
 - **Rolling the image back.** #31 (merged before this change) makes the migrator ignore applied
   migrations an image does not know, so an image built from #31 onward boots against the newer

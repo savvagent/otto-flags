@@ -62,6 +62,11 @@ CREATE TABLE rollback_policies (
   -- tripped policy does not act again, so a rollback cannot flap.
   tripped_at             timestamptz,
   last_checked_at        timestamptz,
+  -- Why this policy's last action failed: an error code (never database or
+  -- reported text) and when. Set when the checker could not act on it (the
+  -- policy stays armed and is retried); cleared by its next successful check.
+  last_error_code        text,
+  last_error_at          timestamptz,
   created_by             uuid,
   created_at             timestamptz   NOT NULL DEFAULT now(),
   updated_at             timestamptz   NOT NULL DEFAULT now(),

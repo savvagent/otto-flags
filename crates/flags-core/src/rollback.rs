@@ -324,6 +324,12 @@ pub struct Policy {
     /// the trip shows only in the events. A tripped policy does not act again.
     pub tripped_at: Option<DateTime<Utc>>,
     pub last_checked_at: Option<DateTime<Utc>>,
+    /// The error code ([`Error::code`], never its text) of this policy's
+    /// last failed action, if its last check failed. The policy stays armed
+    /// and is retried; its next successful check clears this.
+    pub last_error_code: Option<String>,
+    /// When `last_error_code` was recorded.
+    pub last_error_at: Option<DateTime<Utc>>,
     pub created_by: Option<UserId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -447,8 +453,8 @@ struct PolicyRow {
 
 const POLICY_COLS: &str = "p.id, p.org_id, p.app_id, p.flag_id, p.environment, p.mode, \
      p.min_evaluations, p.min_errors, p.max_error_ratio, p.max_error_rate, p.window_hours, \
-     p.include_client_reports, p.tripped_at, p.last_checked_at, p.created_by, p.created_at, \
-     p.updated_at";
+     p.include_client_reports, p.tripped_at, p.last_checked_at, p.last_error_code, \
+     p.last_error_at, p.created_by, p.created_at, p.updated_at";
 
 const MAX_EVENTS: i64 = 200;
 
@@ -1128,6 +1134,7 @@ pub async fn check_flag(
                 ] {
                     sqlx::query(statement).execute(tx.conn()).await?;
                 }
+                record_failure(&mut tx, policy.id, e.code()).await?;
                 // The flag as it was before this policy's undone patch.
                 current = before;
                 checked.retain(|id| *id != policy.id);
@@ -1300,7 +1307,8 @@ async fn armed_policy(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<Policy>> {
     .await?)
 }
 
-/// Advance `last_checked_at` in transaction 1, which holds no flag lock.
+/// Advance `last_checked_at` (and clear any recorded failure) in
+/// transaction 1, which holds no flag lock.
 /// Only armed rows nobody else holds are touched (`SKIP LOCKED`), so this
 /// never waits on a row lock and cannot close a lock cycle with a concurrent
 /// checker's transaction 2 or a re-arm, which take policy rows in a different
@@ -1311,7 +1319,8 @@ async fn mark_checked_unlocked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
     }
     let org = tx.org();
     sqlx::query(
-        "UPDATE rollback_policies SET last_checked_at = now() \
+        "UPDATE rollback_policies \
+         SET last_checked_at = now(), last_error_code = NULL, last_error_at = NULL \
          WHERE org_id = $1 AND id IN ( \
            SELECT id FROM rollback_policies \
            WHERE org_id = $1 AND id = ANY($2) AND tripped_at IS NULL \
@@ -1324,7 +1333,8 @@ async fn mark_checked_unlocked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
     Ok(())
 }
 
-/// Advance `last_checked_at` in transaction 2, under the flag's row lock.
+/// Advance `last_checked_at` (and clear any recorded failure) in
+/// transaction 2, under the flag's row lock.
 /// This one may wait: every writer that takes several of a flag's policy rows
 /// at once (re-arming, another checker's transaction 2) holds the same flag
 /// lock and so runs strictly before or after, and transaction 1 never waits,
@@ -1335,10 +1345,28 @@ async fn mark_checked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
     }
     let org = tx.org();
     sqlx::query(
-        "UPDATE rollback_policies SET last_checked_at = now() WHERE org_id = $1 AND id = ANY($2)",
+        "UPDATE rollback_policies \
+         SET last_checked_at = now(), last_error_code = NULL, last_error_at = NULL \
+         WHERE org_id = $1 AND id = ANY($2)",
     )
     .bind(org)
     .bind(ids)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Record on the policy that its action failed, by code only, in the check's
+/// own transaction (after its savepoint was rolled back).
+async fn record_failure(tx: &mut Tx<'_>, id: Uuid, code: &str) -> Result<()> {
+    let org = tx.org();
+    sqlx::query(
+        "UPDATE rollback_policies SET last_error_code = $3, last_error_at = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(id)
+    .bind(code)
     .execute(tx.conn())
     .await?;
     Ok(())
@@ -2173,6 +2201,8 @@ mod tests {
             thresholds: Thresholds::default(),
             tripped_at: None,
             last_checked_at: None,
+            last_error_code: None,
+            last_error_at: None,
             created_by: None,
             created_at: now,
             updated_at: now,
@@ -2198,6 +2228,8 @@ mod tests {
                 "id",
                 "includeClientReports",
                 "lastCheckedAt",
+                "lastErrorAt",
+                "lastErrorCode",
                 "maxErrorRate",
                 "maxErrorRatio",
                 "minErrors",

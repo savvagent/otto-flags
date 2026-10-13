@@ -243,7 +243,8 @@ impl Flags {
                        and whether each is armed, tripped, or has lost its environment. tripped \
                        means an enforcing policy turned the environment off; observe, \
                        not-entitled and unknown-entitlement trips leave it armed and show only \
-                       in rollback_events. Free."
+                       in rollback_events. A policy whose last check failed shows \
+                       lastErrorCode; it stays armed and is retried. Free."
     )]
     pub async fn list_rollback_policies(
         &self,
@@ -440,6 +441,8 @@ mod tests {
                 "tripped means an enforcing policy turned the environment off; observe, \
                not-entitled and unknown-entitlement trips leave it armed and show only in \
                rollback_events.",
+                "A policy whose last check failed shows lastErrorCode; it stays armed and is \
+                 retried.",
             ],
         );
     }
