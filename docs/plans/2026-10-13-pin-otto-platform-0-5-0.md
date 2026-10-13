@@ -12,10 +12,10 @@ no migration is added or modified.
 
 **Files:** `Cargo.toml`, `Cargo.lock`, `crates/flags-server/tests/e2e.rs`
 
-- [ ] Set both `rev` values to `fa1ae08c8d5760c1df9752281a078192032e7d24`.
-- [ ] `cargo update -p otto-tenant -p otto-resource`; confirm only those two packages changed.
-- [ ] `cargo build --workspace --all-targets`; see it fail on the `UsageStatus` literal in
+- [x] Set both `rev` values to `fa1ae08c8d5760c1df9752281a078192032e7d24`.
+- [x] `cargo update -p otto-tenant -p otto-resource`; confirm only those two packages changed.
+- [x] `cargo build --workspace --all-targets`; see it fail on the `UsageStatus` literal in
   `usage_status`.
-- [ ] Add `features: Default::default(),`; rebuild.
-- [ ] Run the gates.
-- [ ] Commit `build: pin otto-platform 0.5.0 for plan features`, body ending `Fixes #25`.
+- [x] Add `features: Default::default(),`; rebuild.
+- [x] Run the gates.
+- [x] Commit `build: pin otto-platform 0.5.0 for plan features`, body ending `Fixes #25`.

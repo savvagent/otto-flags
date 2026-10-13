@@ -1,6 +1,6 @@
 # Pin otto-platform 0.5.0
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#30)
 **Ticket:** savvagent/otto-flags#25
 
 ## Brief
