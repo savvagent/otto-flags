@@ -68,6 +68,7 @@ async fn usage_status(Path(org): Path<Uuid>) -> Json<UsageStatus> {
         total_count: 0,
         included_ops: 1000,
         hard_stop: false,
+        features: Default::default(),
     })
 }
 

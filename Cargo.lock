@@ -1301,8 +1301,8 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "otto-resource"
-version = "0.4.0"
-source = "git+https://github.com/savvagent/otto-platform?rev=a5d169f058ff086590832a183c7d10f50ad27545#a5d169f058ff086590832a183c7d10f50ad27545"
+version = "0.5.0"
+source = "git+https://github.com/savvagent/otto-platform?rev=fa1ae08c8d5760c1df9752281a078192032e7d24#fa1ae08c8d5760c1df9752281a078192032e7d24"
 dependencies = [
  "chrono",
  "hex",
@@ -1319,8 +1319,8 @@ dependencies = [
 
 [[package]]
 name = "otto-tenant"
-version = "0.4.0"
-source = "git+https://github.com/savvagent/otto-platform?rev=a5d169f058ff086590832a183c7d10f50ad27545#a5d169f058ff086590832a183c7d10f50ad27545"
+version = "0.5.0"
+source = "git+https://github.com/savvagent/otto-platform?rev=fa1ae08c8d5760c1df9752281a078192032e7d24#fa1ae08c8d5760c1df9752281a078192032e7d24"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
