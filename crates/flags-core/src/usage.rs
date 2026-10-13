@@ -40,6 +40,7 @@ pub const BILLABLE: &[&str] = &[
     "archive_flag",
     "restore_flag",
     "rollback_flag",
+    "set_rollback_policy",
 ];
 
 pub fn is_billable(tool: &str) -> bool {
@@ -166,7 +167,7 @@ impl Meter {
     }
 }
 
-fn plan_name(plan: &str) -> String {
+pub(crate) fn plan_name(plan: &str) -> String {
     let mut chars = plan.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

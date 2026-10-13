@@ -13,5 +13,7 @@ pub mod action {
     pub const APP_CREATED: &str = "flags.app.created";
     pub const APP_UPDATED: &str = "flags.app.updated";
     pub const APP_KEYS_ROTATED: &str = "flags.app.keys_rotated";
+    pub const ROLLBACK_POLICY_SET: &str = "flags.rollback_policy.set";
+    pub const ROLLBACK_POLICY_REMOVED: &str = "flags.rollback_policy.removed";
     pub const MEMBER_REMOVED: &str = "platform.member.removed";
 }

@@ -17,6 +17,7 @@
 
 use std::sync::Arc;
 
+use flags_core::entitlements::Entitlements;
 use flags_core::usage::Meter;
 use otto_resource::PlatformClient;
 use otto_tenant::{Db, Tx};
@@ -54,6 +55,15 @@ report.
 version in flag_history), and set_flag_environment with enabled=false is the \
 kill switch for one environment.
 
+Auto-rollback is on paid plans: set_rollback_policy arms it for a flag in one \
+environment, propose_rollback shows what it would do right now without changing \
+anything, list_rollback_policies shows the policies and whether each is armed, \
+rollback_events shows what they have done, and remove_rollback_policy deletes one. \
+By default only telemetry sent with the app's server key counts; counting the \
+public client key's reports too (includeClientReports) needs an owner or admin. An environment \
+auto-rollback turned off stays off until someone turns it back on, which also \
+re-arms its policy.
+
 evaluate_flag answers what a given user would get, and why, without touching \
 anything. Use it to check targeting before turning a flag on.
 
@@ -66,15 +76,22 @@ pub struct Flags {
     db: Db,
     platform: Arc<PlatformClient>,
     meter: Arc<Meter>,
+    entitlements: Entitlements,
     tool_router: ToolRouter<Self>,
 }
 
 impl Flags {
-    pub fn new(db: Db, platform: Arc<PlatformClient>, meter: Meter) -> Self {
+    pub fn new(
+        db: Db,
+        platform: Arc<PlatformClient>,
+        meter: Meter,
+        entitlements: Entitlements,
+    ) -> Self {
         Self {
             db,
             platform,
             meter: Arc::new(meter),
+            entitlements,
             tool_router: crate::tools::router(),
         }
     }
@@ -85,6 +102,10 @@ impl Flags {
 
     pub fn meter(&self) -> &Meter {
         &self.meter
+    }
+
+    pub fn entitlements(&self) -> &Entitlements {
+        &self.entitlements
     }
 
     pub fn db(&self) -> &Db {
@@ -118,13 +139,15 @@ impl Flags {
         self.meter.charge(tx, caller.user_id, tool).await.mcp()
     }
 
-    /// Refuse unless the caller is an owner or admin of the org *now*.
+    /// Refuse unless the caller is an owner or admin of the org *now*, with
+    /// `refusal` (what needs the role, and what to do instead) as the
+    /// `forbidden` error's message.
     ///
     /// The role on the principal is as of the last introspection, cached for up
     /// to a minute, so a just-demoted admin would still pass a check against
     /// it. This asks the platform (its own cache is seconds). Fails closed: a
     /// platform that cannot answer is an error, never "allowed".
-    pub async fn require_admin(&self, caller: &Principal) -> Result<(), ErrorData> {
+    pub async fn require_admin(&self, caller: &Principal, refusal: &str) -> Result<(), ErrorData> {
         let member = self
             .platform
             .member(caller.org_id.as_uuid(), caller.user_id.as_uuid())
@@ -134,10 +157,7 @@ impl Flags {
         if member.role.can_administer() {
             Ok(())
         } else {
-            Err(error::forbidden(
-                "managing apps and their SDK keys needs an owner or admin of this organization; \
-                 ask one to do it, or to change your role at the otto platform",
-            ))
+            Err(error::forbidden(refusal))
         }
     }
 }
@@ -204,10 +224,29 @@ mod tests {
             "flag_history",
             "evaluate_flag",
             "usage",
+            "set_rollback_policy",
+            "propose_rollback",
         ] {
             assert!(
                 INSTRUCTIONS.contains(tool),
                 "instructions should mention {tool}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_instructions_cover_auto_rollback() {
+        for phrase in [
+            "remove_rollback_policy",
+            "list_rollback_policies",
+            "rollback_events",
+            "server key",
+            "stays off until someone turns it back on",
+            "includeClientReports) needs an owner or admin",
+        ] {
+            assert!(
+                INSTRUCTIONS.contains(phrase),
+                "instructions should mention {phrase}"
             );
         }
     }

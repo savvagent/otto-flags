@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use axum::routing::{any_service, get};
 use axum::Router;
+use flags_core::entitlements::Entitlements;
 use flags_core::usage::Meter;
 use otto_resource::PlatformClient;
 use otto_tenant::Db;
@@ -104,8 +105,9 @@ pub fn router(db: Db, config: Config) -> Router {
         Meter::new(
             config.platform.clone(),
             config.enforce_quotas,
-            config.upgrade_url,
+            config.upgrade_url.clone(),
         ),
+        Entitlements::new(config.platform.clone(), config.upgrade_url),
     );
     let service = StreamableHttpService::new(
         move || Ok(flags.clone()),

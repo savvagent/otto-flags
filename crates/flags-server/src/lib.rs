@@ -9,6 +9,9 @@
 //!   everything else                   JSON 404
 //! ```
 //!
+//! The rollback checker is started separately by [`spawn_checker`] so `main`
+//! can stop it on shutdown; its [`Hints`] handle is passed to [`router`].
+//!
 //! Assembly is a library function so a test can build the whole router: axum
 //! panics on a route registered twice, and that is better found by a test than
 //! by a deploy.
@@ -21,10 +24,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
+use flags_core::entitlements::Entitlements;
 use flags_core::notify::Listener;
+use flags_core::rollback::{Checker, CheckerConfig, Hints};
 use http::{StatusCode, Uri};
 use otto_resource::{ClientConfig, PlatformClient};
 use otto_tenant::Db;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tower_http::trace::TraceLayer;
 
 pub use config::{Config, LogFormat};
@@ -44,12 +51,14 @@ pub fn router(
     db: Db,
     platform: Arc<PlatformClient>,
     listener: Listener,
+    hints: Hints,
     config: &Config,
 ) -> Router {
     let mcp = flags_mcp::router(db.clone(), mcp_config(platform, config));
     let api = flags_api::router(flags_api::AppState::new(
         db.clone(),
         listener,
+        hints,
         &config.platform_webhook_secret,
     ));
     health::router(db)
@@ -59,6 +68,65 @@ pub fn router(
         // Request spans without headers: including them would log every
         // bearer token and SDK key in clear.
         .layer(TraceLayer::new_for_http())
+}
+
+/// Start the rollback checker. Returns the [`Hints`] for the SDK API and the
+/// task to await on shutdown. Entitlement checks use [`Config::upgrade_url`],
+/// as the MCP surface does.
+pub fn spawn_checker(
+    db: Db,
+    platform: Arc<PlatformClient>,
+    config: &Config,
+    checker: CheckerConfig,
+    shutdown: watch::Receiver<bool>,
+) -> (Hints, JoinHandle<()>) {
+    Checker::spawn(
+        db,
+        Entitlements::new(platform, config.upgrade_url()),
+        checker,
+        shutdown,
+    )
+}
+
+/// How the rollback checker's task ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckerEnd {
+    /// After shutdown was requested: expected.
+    Shutdown,
+    /// Before shutdown was requested, without panicking.
+    Early,
+    /// It panicked.
+    Panicked,
+    /// It was aborted.
+    Cancelled,
+}
+
+/// Wait for the checker task to end and say how. Ending while the server is
+/// still serving is logged at `error`: from then on no flag is rolled back
+/// automatically, and nothing else would notice.
+pub async fn watch_checker(task: JoinHandle<()>, shutdown: watch::Receiver<bool>) -> CheckerEnd {
+    let ended = task.await;
+    let requested = *shutdown.borrow();
+    let end = match ended {
+        Ok(()) if requested => CheckerEnd::Shutdown,
+        Ok(()) => CheckerEnd::Early,
+        Err(e) if e.is_panic() => CheckerEnd::Panicked,
+        Err(_) => CheckerEnd::Cancelled,
+    };
+    match end {
+        CheckerEnd::Shutdown => {}
+        CheckerEnd::Cancelled if requested => {}
+        CheckerEnd::Early | CheckerEnd::Cancelled => tracing::error!(
+            ?end,
+            "the auto-rollback checker stopped while the server is running; no flag will be \
+             rolled back automatically until restart"
+        ),
+        CheckerEnd::Panicked => tracing::error!(
+            "the auto-rollback checker panicked; no flag will be rolled back automatically \
+             until restart"
+        ),
+    }
+    end
 }
 
 fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Config {
@@ -71,6 +139,7 @@ fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Conf
     mcp.allowed_hosts = config.allowed_hosts();
     mcp.allowed_origins = config.allowed_origins.clone();
     mcp.enforce_quotas = config.enforce_quotas;
+    mcp.upgrade_url = config.upgrade_url();
     mcp
 }
 
@@ -105,6 +174,7 @@ mod tests {
             Db::from_pool(pool),
             platform_client(&config).unwrap(),
             Listener::detached(),
+            Hints::detached(),
             &config,
         )
     }
@@ -158,6 +228,45 @@ mod tests {
         assert!(challenge.contains(
             "resource_metadata=\"https://flags.example.com/.well-known/oauth-protected-resource\""
         ));
+    }
+
+    #[test]
+    fn the_checker_and_the_mcp_surface_share_one_upgrade_url() {
+        let config = Config::for_test();
+        assert_eq!(
+            config.upgrade_url(),
+            "https://platform.example.com/settings/billing"
+        );
+        let platform = platform_client(&config).unwrap();
+        assert_eq!(
+            mcp_config(platform, &config).upgrade_url,
+            config.upgrade_url()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_ends_before_shutdown_is_reported() {
+        let (_stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(async {});
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Early);
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_panics_is_reported() {
+        let (_stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(async { panic!("boom") });
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Panicked);
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_ends_on_shutdown_is_not_an_error() {
+        let (stop, shutdown) = watch::channel(false);
+        let mut rx = shutdown.clone();
+        let task = tokio::spawn(async move {
+            let _ = rx.changed().await;
+        });
+        stop.send(true).unwrap();
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Shutdown);
     }
 
     #[tokio::test]

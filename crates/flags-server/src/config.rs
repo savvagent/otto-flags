@@ -94,6 +94,16 @@ impl Config {
         })
     }
 
+    /// Where an org upgrades its plan, named in plan-gate errors: the
+    /// platform's billing settings. The one source for the MCP surface and
+    /// the rollback checker.
+    pub fn upgrade_url(&self) -> String {
+        format!(
+            "{}/settings/billing",
+            self.platform_url.trim_end_matches('/')
+        )
+    }
+
     /// The public origin's host, plus any extras (e.g. the `*.fly.dev` name).
     pub fn allowed_hosts(&self) -> Vec<String> {
         let mut hosts: Vec<String> = url::Url::parse(&self.public_url)

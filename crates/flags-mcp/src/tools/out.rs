@@ -5,6 +5,7 @@
 use flags_core::apps::{FlagApp, IssuedKeys};
 use flags_core::eval::Evaluation;
 use flags_core::flags::{FeatureFlag, FlagVersion};
+use flags_core::rollback::{Event, PolicyView, Proposal};
 use flags_core::telemetry::Health;
 use flags_core::usage::Status;
 use otto_tenant::ids::{OrgId, UserId};
@@ -148,4 +149,42 @@ pub struct TokenOut {
 #[serde(rename_all = "camelCase")]
 pub struct UsageOut {
     pub usage: Status,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyOut {
+    pub policy: PolicyView,
+    /// Set when the policy has a blind spot worth knowing about.
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PoliciesOut {
+    pub app: String,
+    pub policies: Vec<PolicyView>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPolicyOut {
+    /// False when there was no such policy.
+    pub removed: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalOut {
+    pub key: String,
+    pub environment: String,
+    #[serde(flatten)]
+    pub proposal: Proposal,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsOut {
+    /// Newest first. Numbers and ids only.
+    pub events: Vec<Event>,
 }

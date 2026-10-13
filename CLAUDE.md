@@ -98,7 +98,7 @@ has no gate (see `sdks.yml`).
 ### Reviews
 - language reviewers: crates/** -> rust-pro, packages/rust-server/** -> rust-pro, examples/rust-server/** -> rust-pro, packages/go-server/** -> golang-pro, packages/python-server/** -> python-pro, packages/java-server/** -> java-pro, packages/ios-sdk/** -> ios-developer, packages/android-sdk/** -> mobile-developer, examples/go-server/** -> golang-pro, examples/python-server/** -> python-pro, examples/java-server/** -> java-pro, examples/ios-app/** -> ios-developer, examples/android-app/** -> mobile-developer, packages/** -> typescript-pro, examples/** -> typescript-pro
 - extra reviewers: database-optimizer when SQL, migrations, indexes, or rollups change
-- security focus: tenant isolation (RLS under `otto_app`, composite foreign keys, org or app ids trusted from the request); bearer-token audience, expiry, and scope checks; owner/admin checks on app creation and key rotation; SDK key resolution and what a public `sdk_` client key can reach; secret and key handling (hashing, logging, echoing, timing-safe compare); platform webhook signature verification and idempotency; untrusted input (SQL built from strings, unbounded bodies, SDK telemetry text reaching an agent, database error text in responses); cheap unauthenticated requests on a small shared database; persisted end-user context or PII
+- security focus: tenant isolation (RLS under `otto_app`, composite foreign keys, org or app ids trusted from the request); bearer-token audience, expiry, and scope checks; owner/admin checks on app creation, key rotation, and opting a rollback policy into client reports; SDK key resolution and what a public `sdk_` client key can reach; secret and key handling (hashing, logging, echoing, timing-safe compare); platform webhook signature verification and idempotency; untrusted input (SQL built from strings, unbounded bodies, SDK telemetry text reaching an agent, database error text in responses); cheap unauthenticated requests on a small shared database; persisted end-user context or PII
 - automated reviewer: none
 
 First match wins per file, so the per-language globs come before the `packages/**` and
@@ -151,6 +151,9 @@ crate module docs.
 - **Composite `(org_id, id)` foreign keys** between tenant tables (FK checks bypass RLS).
   `app_keys` and `deleted_orgs` are the deliberate pre-org exceptions.
 - **Request paths open transactions with `platform_events::begin_live`**, never `Db::begin`.
+  Unpinned cross-org access goes only through `flags_core::maintenance::begin` (background code:
+  sweeps, the rollback checker's due-policy scan), which sets the `app.maintenance` marker the
+  unpinned RLS policies require.
 - **No SQL outside `flags-core`**, and only runtime `sqlx::query`/`query_as`, never `query!`
   macros (the Docker build has no database).
 - **Client keys are public.** `sdk_` and `srv_` keys are stored as SHA-256 hashes; a client key
@@ -159,8 +162,8 @@ crate module docs.
 - **The SDK REST contract is stable** (`docs/SDK-DEVELOPER-GUIDE.md`); changes are additive.
   SDKs fall back to defaults and cached values and never throw into the host app on a flag lookup.
 - **MCP auth.** Token audience equals `FLAGS_RESOURCE_URI` exactly; every tool checks its scope
-  (`flags:read`, `flags:write`, `apps:admin`); app creation and key rotation do a fresh
-  owner/admin lookup at the platform. `flags_core::scopes::KNOWN`/`DEFAULT` match the platform
+  (`flags:read`, `flags:write`, `apps:admin`); app creation, key rotation, and setting a rollback
+  policy's `includeClientReports` do a fresh owner/admin lookup at the platform. `flags_core::scopes::KNOWN`/`DEFAULT` match the platform
   registration.
 - **Metering:** billable MCP writes record usage in the tool's own transaction into
   `usage_outbox`. Reads, dry-run evaluation, and SDK evaluation are not metered.

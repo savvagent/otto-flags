@@ -28,9 +28,12 @@ pub fn from_core(e: &Error) -> ErrorData {
     } else {
         let rpc = match e {
             // Well-formed calls the server declined: not argument errors.
-            Error::QuotaExceeded { .. } | Error::AccessRevoked | Error::VersionConflict { .. } => {
-                ErrorCode::INVALID_REQUEST
-            }
+            Error::QuotaExceeded { .. }
+            | Error::FeatureNotInPlan { .. }
+            | Error::AccessRevoked
+            | Error::VersionConflict { .. } => ErrorCode::INVALID_REQUEST,
+            // Ours to say, but the platform could not be asked: not the caller's fault.
+            Error::EntitlementUnavailable { .. } => ErrorCode::INTERNAL_ERROR,
             _ => ErrorCode::INVALID_PARAMS,
         };
         (rpc, e.to_string())
@@ -108,6 +111,14 @@ mod tests {
                 actual: 2,
             },
             Error::Db(sqlx_error()),
+            Error::FeatureNotInPlan {
+                feature: "auto_rollback".into(),
+                plan: "Free".into(),
+                upgrade_url: "https://example.test/upgrade".into(),
+            },
+            Error::EntitlementUnavailable {
+                feature: "auto_rollback".into(),
+            },
         ] {
             let data = from_core(&e).data.expect("data");
             assert_eq!(data["code"], e.code());
@@ -124,6 +135,24 @@ mod tests {
         assert!(from_core(&e).message.contains("web, api"));
         let db = from_core(&Error::Db(sqlx_error()));
         assert!(!db.message.contains("pool"), "{}", db.message);
+    }
+
+    #[test]
+    fn plan_gate_errors_tell_the_agent_what_to_do() {
+        let denied = from_core(&Error::FeatureNotInPlan {
+            feature: "auto_rollback".into(),
+            plan: "Free".into(),
+            upgrade_url: "https://example.test/upgrade".into(),
+        });
+        assert!(denied.message.contains("https://example.test/upgrade"));
+        assert!(denied.message.contains("Free"));
+        assert_eq!(denied.code, ErrorCode::INVALID_REQUEST);
+        let unknown = Error::EntitlementUnavailable {
+            feature: "auto_rollback".into(),
+        };
+        let data = from_core(&unknown);
+        assert_eq!(data.code, ErrorCode::INTERNAL_ERROR);
+        assert_eq!(data.data.expect("data")["retriable"], true);
     }
 
     fn sqlx_error() -> sqlx::Error {

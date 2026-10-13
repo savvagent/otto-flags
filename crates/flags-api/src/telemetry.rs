@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::Json;
 use chrono::{DateTime, TimeZone, Utc};
 use flags_core::platform_events::begin_live;
+use flags_core::rollback;
 use flags_core::telemetry::{self, ErrorEvent, EvalEvent, Receipt, MAX_BATCH};
 use serde::Deserialize;
 use serde_json::Value;
@@ -111,9 +112,17 @@ pub async fn evaluations(
         })
         .collect();
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
-    let receipt = telemetry::record_evaluations(&mut tx, sdk.0.app_id, events).await?;
+    let recorded = telemetry::record_evaluations(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
+    // One indexed SELECT in the transaction already open, for the policies
+    // that count this key kind's reports; the hint goes out only after commit
+    // and never waits on the checker or the platform. A failure here fails
+    // the request like a failed insert would: a failed statement aborts the
+    // transaction, so swallowing it could not save the batch, only hide why
+    // it was lost.
+    let armed = rollback::armed(&mut tx, &recorded.flags, sdk.0.kind).await?;
     tx.commit().await?;
-    Ok(Json(receipt))
+    state.hints.send(sdk.0.org_id, armed);
+    Ok(Json(recorded.receipt))
 }
 
 pub async fn errors(
@@ -136,9 +145,17 @@ pub async fn errors(
         })
         .collect();
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
-    let receipt = telemetry::record_errors(&mut tx, sdk.0.app_id, events).await?;
+    let recorded = telemetry::record_errors(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
+    // One indexed SELECT in the transaction already open, for the policies
+    // that count this key kind's reports; the hint goes out only after commit
+    // and never waits on the checker or the platform. A failure here fails
+    // the request like a failed insert would: a failed statement aborts the
+    // transaction, so swallowing it could not save the batch, only hide why
+    // it was lost.
+    let armed = rollback::armed(&mut tx, &recorded.flags, sdk.0.kind).await?;
     tx.commit().await?;
-    Ok(Json(receipt))
+    state.hints.send(sdk.0.org_id, armed);
+    Ok(Json(recorded.receipt))
 }
 
 #[cfg(test)]

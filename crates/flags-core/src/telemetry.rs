@@ -3,7 +3,8 @@
 //!
 //! Evaluations are folded into hourly buckets as they arrive (see the baseline
 //! migration for why raw rows are not kept). Errors are kept raw, truncated,
-//! for [`ERROR_RETENTION_DAYS`].
+//! for [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
+//! for [`EVAL_RETENTION_DAYS`]. [`sweep`] enforces all three.
 //!
 //! Telemetry names flags by key and the key resolves within the reporting
 //! app, so an app can only ever count against its own flags. Unknown keys are
@@ -19,6 +20,8 @@ use sqlx::FromRow;
 
 use crate::error::Result;
 use crate::ids::{FlagAppId, FlagId};
+use crate::keys::KeyKind;
+use crate::rollback::{decide, Decision, Sample, Thresholds, Trigger};
 
 pub const MAX_BATCH: usize = 1_000;
 pub const ERROR_RETENTION_DAYS: i32 = 14;
@@ -61,6 +64,15 @@ pub struct Receipt {
     pub unknown_flags: usize,
 }
 
+/// What recording a batch did: the receipt the SDK sees, and the flags the
+/// batch counted against (for whoever watches those flags next).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Recorded {
+    pub receipt: Receipt,
+    /// Flags this batch counted against, deduplicated and sorted.
+    pub flags: Vec<FlagId>,
+}
+
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -93,11 +105,16 @@ async fn flag_ids(
     Ok(rows.into_iter().collect())
 }
 
+/// Fold evaluations into hourly buckets. `reporter` is the kind of the key
+/// that authenticated the request, never a field of the request: a client key
+/// is public, so `server_count` is the part of `count` that only a server key
+/// could have reported.
 pub async fn record_evaluations(
     tx: &mut Tx<'_>,
     app: FlagAppId,
+    reporter: KeyKind,
     events: Vec<EvalEvent>,
-) -> Result<Receipt> {
+) -> Result<Recorded> {
     let mut keys: Vec<String> = events.iter().map(|e| e.flag_key.clone()).collect();
     keys.sort();
     keys.dedup();
@@ -124,13 +141,16 @@ pub async fn record_evaluations(
         *buckets.entry(key).or_default() += 1;
         receipt.accepted += 1;
     }
+    let mut flags: Vec<FlagId> = buckets.keys().map(|k| k.0).collect();
+    flags.sort();
+    flags.dedup();
     if buckets.is_empty() {
-        return Ok(receipt);
+        return Ok(Recorded { receipt, flags });
     }
 
     let org = tx.org();
-    let (mut f, mut env, mut hour, mut en, mut var, mut n) =
-        (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let (mut f, mut env, mut hour, mut en, mut var, mut n, mut server_n) =
+        (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     for ((flag, e, h, enabled, v), count) in buckets {
         f.push(flag.as_uuid());
         env.push(e);
@@ -138,12 +158,18 @@ pub async fn record_evaluations(
         en.push(enabled);
         var.push(v);
         n.push(count);
+        server_n.push(if reporter == KeyKind::Server {
+            count
+        } else {
+            0
+        });
     }
     sqlx::query(
-        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, variation, count) \
-         SELECT $1, * FROM UNNEST($2::uuid[], $3::text[], $4::timestamptz[], $5::bool[], $6::text[], $7::bigint[]) \
+        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, variation, count, server_count) \
+         SELECT $1, * FROM UNNEST($2::uuid[], $3::text[], $4::timestamptz[], $5::bool[], $6::text[], $7::bigint[], $8::bigint[]) \
          ON CONFLICT (flag_id, environment, hour, enabled, variation) \
-         DO UPDATE SET count = flag_eval_hourly.count + EXCLUDED.count",
+         DO UPDATE SET count = flag_eval_hourly.count + EXCLUDED.count, \
+                       server_count = flag_eval_hourly.server_count + EXCLUDED.server_count",
     )
     .bind(org)
     .bind(f)
@@ -152,16 +178,20 @@ pub async fn record_evaluations(
     .bind(en)
     .bind(var)
     .bind(n)
+    .bind(server_n)
     .execute(tx.conn())
     .await?;
-    Ok(receipt)
+    Ok(Recorded { receipt, flags })
 }
 
+/// Store errors raw, tagged with the kind of key that reported them (see
+/// [`record_evaluations`]).
 pub async fn record_errors(
     tx: &mut Tx<'_>,
     app: FlagAppId,
+    reporter: KeyKind,
     events: Vec<ErrorEvent>,
-) -> Result<Receipt> {
+) -> Result<Recorded> {
     let mut keys: Vec<String> = events.iter().map(|e| e.flag_key.clone()).collect();
     keys.sort();
     keys.dedup();
@@ -169,15 +199,17 @@ pub async fn record_errors(
     let now = Utc::now();
     let org = tx.org();
     let mut receipt = Receipt::default();
+    let mut flags = vec![];
     for e in events {
         let Some(id) = ids.get(&e.flag_key) else {
             receipt.unknown_flags += 1;
             continue;
         };
+        flags.push(*id);
         sqlx::query(
             "INSERT INTO flag_errors \
-               (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
         )
         .bind(org)
         .bind(id)
@@ -187,11 +219,14 @@ pub async fn record_errors(
         .bind(truncate(&e.error_message, MAX_ERROR_MESSAGE))
         .bind(e.stack_trace.as_deref().map(|s| truncate(s, MAX_STACK)))
         .bind(sane(e.at, now))
+        .bind(reporter.as_str())
         .execute(tx.conn())
         .await?;
         receipt.accepted += 1;
     }
-    Ok(receipt)
+    flags.sort();
+    flags.dedup();
+    Ok(Recorded { receipt, flags })
 }
 
 // --------------------------------------------------------------------- health
@@ -350,33 +385,54 @@ fn inert(s: &str, max: usize) -> String {
 /// Turn the numbers into a sentence. Deliberately conservative: it says what
 /// the data shows and how much of it there is, and leaves the decision to the
 /// agent and the person it works for.
-fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
-    const MIN_SAMPLE: i64 = 100;
+// pub(crate) so `rollback`'s wiring test (`assess_and_decide_agree`) can check
+// that this advice says "Consider rolling back" exactly when `decide` trips.
+pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
     if evals.enabled == 0 && evals.disabled == 0 {
         return "No evaluations reported in this window. Either the flag is not being \
                 evaluated here, or the SDK's telemetry is off."
             .into();
     }
-    if evals.enabled < MIN_SAMPLE {
+    let thresholds = Thresholds::default();
+    if evals.enabled < thresholds.min_evaluations {
         return format!(
             "Only {} evaluations with the flag on; too few to judge its effect on errors.",
             evals.enabled
         );
     }
-    match (on, off) {
-        (Some(on), Some(off)) if off > 0.0 && on > off * 2.0 && errors.enabled >= 10 => format!(
+    // The same rule the auto-rollback checker applies, with the defaults, so
+    // the advice and the action follow one definition. Not the same sample:
+    // these counts include client-key reports, count errors with no
+    // environment in every environment, and cover a rolling window, where the
+    // checker counts server reports by default, NULL-environment errors in
+    // production only, and an hour-aligned window (see `rollback`'s module
+    // docs), so the two can still disagree on one flag.
+    let sample = Sample {
+        evals_on: evals.enabled,
+        evals_off: evals.disabled,
+        errors_on: errors.enabled,
+        errors_off: errors.disabled,
+    };
+    match (on, off, decide(&sample, &thresholds)) {
+        (Some(on), Some(off), Decision::Trip(Trigger::ErrorRatio)) => format!(
             "Error rate with the flag on ({:.2}%) is {:.1}x the rate with it off ({:.2}%). \
              Consider rolling back.",
             on * 100.0,
             on / off,
             off * 100.0
         ),
-        (Some(on), Some(0.0)) if errors.enabled >= 10 => format!(
+        (Some(on), _, Decision::Trip(Trigger::OffHasNoErrors)) => format!(
             "{} errors with the flag on ({:.2}%) and none with it off. Consider rolling back.",
             errors.enabled,
             on * 100.0
         ),
-        (Some(on), _) => format!(
+        (Some(on), _, _) if evals.disabled < thresholds.min_evaluations => format!(
+            "Only {} evaluations with the flag off; too few to compare against. {:.2}% of on \
+             evaluations reported an error.",
+            evals.disabled,
+            on * 100.0
+        ),
+        (Some(on), _, _) => format!(
             "No sign of the flag raising errors: {:.2}% of on evaluations reported an error.",
             on * 100.0
         ),
@@ -384,23 +440,36 @@ fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) ->
     }
 }
 
-/// Retention: drop old error reports and evaluation buckets. Unpinned, across
-/// every org (the tables' retention policies allow exactly this).
+/// Retention: drop old error reports, evaluation buckets, and rollback events.
+/// Unpinned, across every org: each DELETE runs in its own maintenance
+/// transaction (`crate::maintenance`), which the tables' retention policies
+/// require.
 pub async fn sweep(db: &Db) -> Result<u64> {
-    let errors = sqlx::query(
-        "DELETE FROM flag_errors WHERE received_at < now() - make_interval(days => $1)",
-    )
-    .bind(ERROR_RETENTION_DAYS)
-    .execute(db.pool())
-    .await?
-    .rows_affected();
-    let evals =
-        sqlx::query("DELETE FROM flag_eval_hourly WHERE hour < now() - make_interval(days => $1)")
-            .bind(EVAL_RETENTION_DAYS)
-            .execute(db.pool())
+    let mut swept = 0;
+    for (statement, days) in [
+        (
+            "DELETE FROM flag_errors WHERE received_at < now() - make_interval(days => $1)",
+            ERROR_RETENTION_DAYS,
+        ),
+        (
+            "DELETE FROM flag_eval_hourly WHERE hour < now() - make_interval(days => $1)",
+            EVAL_RETENTION_DAYS,
+        ),
+        // Rollback events are bounded at the evaluation retention.
+        (
+            "DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => $1)",
+            EVAL_RETENTION_DAYS,
+        ),
+    ] {
+        let mut tx = crate::maintenance::begin(db).await?;
+        swept += sqlx::query(statement)
+            .bind(days)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
-    Ok(errors + evals)
+        tx.commit().await?;
+    }
+    Ok(swept)
 }
 
 #[cfg(test)]
@@ -429,6 +498,22 @@ mod tests {
         };
         let s = assess(&evals, &Counts::default(), Some(0.0), None);
         assert!(s.contains("too few"), "{s}");
+    }
+
+    #[test]
+    fn too_little_off_traffic_is_named_not_called_healthy() {
+        let evals = Counts {
+            enabled: 10_000,
+            disabled: 99,
+        };
+        let errors = Counts {
+            enabled: 10,
+            disabled: 0,
+        };
+        let s = assess(&evals, &errors, Some(0.001), Some(0.0));
+        assert!(s.contains("Only 99 evaluations with the flag off"), "{s}");
+        assert!(!s.contains("Consider rolling back"), "{s}");
+        assert!(!s.contains("No sign"), "{s}");
     }
 
     #[test]

@@ -19,9 +19,14 @@ pub mod flags;
 pub mod insight;
 pub mod org;
 pub mod out;
+pub mod rollback;
 
 pub fn router() -> ToolRouter<Flags> {
-    Flags::org_router() + Flags::apps_router() + Flags::flags_router() + Flags::insight_router()
+    Flags::org_router()
+        + Flags::apps_router()
+        + Flags::flags_router()
+        + Flags::insight_router()
+        + Flags::rollback_router()
 }
 
 /// Every tool name, in one place for tests and documentation.
@@ -43,6 +48,11 @@ pub const NAMES: &[&str] = &[
     "flag_history",
     "evaluate_flag",
     "flag_health",
+    "set_rollback_policy",
+    "remove_rollback_policy",
+    "list_rollback_policies",
+    "propose_rollback",
+    "rollback_events",
 ];
 
 #[cfg(test)]

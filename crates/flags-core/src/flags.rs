@@ -7,10 +7,16 @@
 //! transaction, so a failed call leaves no trace and a successful one leaves
 //! exactly one version.
 //!
-//! Writes lock the flag row (`FOR UPDATE`) before computing the new state, so
-//! two agents changing different environments of one flag at once both land:
-//! the second waits for the first and merges into its result instead of
-//! overwriting it.
+//! Writes lock the flag row (`FOR NO KEY UPDATE`) before computing the new
+//! state, so two agents changing different environments of one flag at once
+//! both land: the second waits for the first and merges into its result
+//! instead of overwriting it.
+//!
+//! `NO KEY` because no write changes the row's key (`id`): telemetry inserts
+//! check their foreign key to the flag with `FOR KEY SHARE`, which `FOR
+//! UPDATE` would block for as long as a write (or the rollback checker's
+//! second transaction) holds the flag. Flag writers still serialize: `FOR NO
+//! KEY UPDATE` conflicts with itself.
 
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Tx;
@@ -85,7 +91,9 @@ impl FeatureFlag {
 #[serde(rename_all = "camelCase")]
 pub struct FlagVersion {
     pub version: i32,
-    /// create, update, set_environment, archive, restore, or rollback.
+    /// create, update, set_environment, archive, restore, rollback, or
+    /// auto_rollback (a rollback policy disabled an environment; `actor_user_id`
+    /// is `None` for it).
     pub change: String,
     /// The flag's full state as of this version.
     pub snapshot: Value,
@@ -127,7 +135,9 @@ pub struct EnvPatch {
 /// Who is changing a flag and why, plus the version they believe they changed.
 #[derive(Debug, Clone)]
 pub struct ChangeMeta {
-    pub actor: UserId,
+    /// `None` for a change the system makes itself (auto-rollback); the version
+    /// then records no user and names the cause in `reason`.
+    pub actor: Option<UserId>,
     pub reason: Option<String>,
     pub expected_version: Option<i32>,
 }
@@ -279,7 +289,7 @@ impl FlagsExt for Tx<'_> {
         .await
         .map_err(|e| on_unique(e, || Error::DuplicateFlagKey { key: key.clone() }))?;
 
-        record_version(self, &flag, "create", actor, reason.as_deref()).await?;
+        record_version(self, &flag, "create", Some(actor), reason.as_deref()).await?;
         notify::flag_changed(self, &flag, notify::Kind::Created).await?;
         Ok(flag)
     }
@@ -360,49 +370,7 @@ impl FlagsExt for Tx<'_> {
         patch: EnvPatch,
         meta: ChangeMeta,
     ) -> Result<FeatureFlag> {
-        let environment = environment.trim();
-        if !app.environments.iter().any(|e| e == environment) {
-            return Err(Error::Invalid(format!(
-                "app {:?} has no environment {environment:?}; its environments are: {}. \
-                 Add one with update_app",
-                app.name,
-                app.environments.join(", ")
-            )));
-        }
-        let mut flag = lock(self, app, key, meta.expected_version).await?;
-        let mut env: EnvConfig = flag
-            .environments
-            .get(environment)
-            .map(|v| serde_json::from_value(v.clone()))
-            .transpose()
-            .map_err(|e| Error::Invalid(format!("stored environment is unreadable: {e}")))?
-            .unwrap_or(EnvConfig {
-                enabled: false,
-                rollout_percentage: None,
-                rules: vec![],
-                default_variation: None,
-            });
-        if let Some(enabled) = patch.enabled {
-            env.enabled = enabled;
-        }
-        if let Some(p) = patch.rollout_percentage {
-            env.rollout_percentage = Some(p);
-        }
-        if let Some(rules) = patch.rules {
-            env.rules = rules;
-        }
-        if let Some(v) = patch.default_variation {
-            env.default_variation = v;
-        }
-        let env = eval::validate_env(&env, &flag.variations).map_err(invalid)?;
-        let value = serde_json::to_value(&env).map_err(|e| Error::Invalid(e.to_string()))?;
-        match flag.environments.as_object_mut() {
-            Some(map) => {
-                map.insert(environment.to_string(), value);
-            }
-            None => flag.environments = serde_json::json!({ environment: value }),
-        }
-        commit_change(self, flag, "set_environment", &meta).await
+        apply_env_patch(self, app, key, environment, patch, &meta, "set_environment").await
     }
 
     async fn set_archived(
@@ -493,7 +461,92 @@ impl FlagsExt for Tx<'_> {
     }
 }
 
+/// `set_environment`'s body with the change name as a parameter, so the
+/// rollback checker disables an environment through exactly the same code.
+pub(crate) async fn apply_env_patch(
+    tx: &mut Tx<'_>,
+    app: &FlagApp,
+    key: &str,
+    environment: &str,
+    patch: EnvPatch,
+    meta: &ChangeMeta,
+    change: &str,
+) -> Result<FeatureFlag> {
+    let environment = environment.trim();
+    if !app.environments.iter().any(|e| e == environment) {
+        return Err(Error::Invalid(format!(
+            "app {:?} has no environment {environment:?}; its environments are: {}. \
+             Add one with update_app",
+            app.name,
+            app.environments.join(", ")
+        )));
+    }
+    let mut flag = lock(tx, app, key, meta.expected_version).await?;
+    let mut env: EnvConfig = flag
+        .environments
+        .get(environment)
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+        .map_err(|e| Error::Invalid(format!("stored environment is unreadable: {e}")))?
+        .unwrap_or(EnvConfig {
+            enabled: false,
+            rollout_percentage: None,
+            rules: vec![],
+            default_variation: None,
+        });
+    if let Some(enabled) = patch.enabled {
+        env.enabled = enabled;
+    }
+    if let Some(p) = patch.rollout_percentage {
+        env.rollout_percentage = Some(p);
+    }
+    if let Some(rules) = patch.rules {
+        env.rules = rules;
+    }
+    if let Some(v) = patch.default_variation {
+        env.default_variation = v;
+    }
+    let env = eval::validate_env(&env, &flag.variations).map_err(invalid)?;
+    let value = serde_json::to_value(&env).map_err(|e| Error::Invalid(e.to_string()))?;
+    match flag.environments.as_object_mut() {
+        Some(map) => {
+            map.insert(environment.to_string(), value);
+        }
+        None => flag.environments = serde_json::json!({ environment: value }),
+    }
+    commit_change(tx, flag, change, meta).await
+}
+
+/// Read a flag by id without locking it (the rollback checker's first,
+/// read-only transaction). `None` if it no longer exists.
+pub(crate) async fn get_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<FeatureFlag>> {
+    let org = tx.org();
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND id = $2"
+    ))
+    .bind(org)
+    .bind(flag)
+    .fetch_optional(tx.conn())
+    .await?)
+}
+
+/// Lock a flag by id (the rollback checker has no app/key in hand). `None` if
+/// it no longer exists. `FOR NO KEY UPDATE`, as in `lock` (see the module
+/// docs): telemetry for the flag is not blocked while the lock is held.
+pub(crate) async fn lock_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<FeatureFlag>> {
+    let org = tx.org();
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE"
+    ))
+    .bind(org)
+    .bind(flag)
+    .fetch_optional(tx.conn())
+    .await?)
+}
+
 /// Fetch and lock a flag for writing, refusing if the caller's view is stale.
+/// `FOR NO KEY UPDATE`: it serializes flag writers without blocking the
+/// `FOR KEY SHARE` that telemetry inserts take through their foreign key.
 async fn lock(
     tx: &mut Tx<'_>,
     app: &FlagApp,
@@ -502,7 +555,8 @@ async fn lock(
 ) -> Result<FeatureFlag> {
     let org = tx.org();
     let flag: Option<FeatureFlag> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 FOR UPDATE"
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
+         FOR NO KEY UPDATE"
     ))
     .bind(org)
     .bind(app.id)
@@ -526,6 +580,11 @@ async fn lock(
 }
 
 /// Write `flag`'s new state as the next version.
+///
+/// Precondition: the caller holds the flag's row lock (`lock` or
+/// `lock_by_id`, `FOR NO KEY UPDATE`) in `tx`. The before-read of `environments`
+/// that re-arming compares against is only the state being replaced if no
+/// one else can change the row in between.
 async fn commit_change(
     tx: &mut Tx<'_>,
     flag: FeatureFlag,
@@ -534,6 +593,13 @@ async fn commit_change(
 ) -> Result<FeatureFlag> {
     let reason = validate_text("reason", meta.reason.clone(), MAX_REASON)?;
     let org = tx.org();
+    // The caller holds the row lock, so this is the state being replaced.
+    let before: Value =
+        sqlx::query_scalar("SELECT environments FROM feature_flags WHERE org_id = $1 AND id = $2")
+            .bind(org)
+            .bind(flag.id)
+            .fetch_one(tx.conn())
+            .await?;
     let updated: FeatureFlag = sqlx::query_as(&format!(
         "UPDATE feature_flags SET \
            name = $3, description = $4, status = $5, environments = $6, variations = $7, \
@@ -553,6 +619,7 @@ async fn commit_change(
     .fetch_one(tx.conn())
     .await?;
     record_version(tx, &updated, change, meta.actor, reason.as_deref()).await?;
+    crate::rollback::rearm(tx, updated.id, &before, &updated.environments).await?;
     let kind = if updated.status == FlagStatus::Archived {
         notify::Kind::Deleted
     } else {
@@ -566,7 +633,7 @@ async fn record_version(
     tx: &mut Tx<'_>,
     flag: &FeatureFlag,
     change: &str,
-    actor: UserId,
+    actor: Option<UserId>,
     reason: Option<&str>,
 ) -> Result<()> {
     let org = tx.org();
