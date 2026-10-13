@@ -1,3 +1,8 @@
+# A standalone crate, excluded from the server workspace in the root Cargo.toml. This empty
+# table makes it its own workspace root, so cargo stops here instead of walking up to an
+# enclosing Cargo.toml (in a git worktree under .claude/worktrees/, the main checkout's).
+[workspace]
+
 [package]
 name = "otto-flags"
 version = "0.1.0"
