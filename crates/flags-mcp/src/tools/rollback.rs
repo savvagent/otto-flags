@@ -24,8 +24,40 @@ use super::out;
 use crate::server::{Flags, McpResult};
 
 /// Shown with a new policy that has no absolute error-rate ceiling.
-const NO_RATE_WARNING: &str = "this policy can trip only on max_error_rate while the flag has no \
-                               off traffic; set max_error_rate to guard a flag at 100%";
+const NO_RATE_WARNING: &str = "this policy can trip only on maxErrorRate while the flag has no \
+                               off traffic; set maxErrorRate to guard a flag at 100%";
+
+/// The six threshold fields, shared by `set_rollback_policy` and
+/// `propose_rollback`.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ThresholdArgs {
+    /// Evaluations with the flag on needed before judging. At least 1;
+    /// default 100.
+    #[serde(default)]
+    pub min_evaluations: Option<i64>,
+    /// Errors with the flag on needed before judging. At least 1; default 10.
+    #[serde(default)]
+    pub min_errors: Option<i64>,
+    /// Trip when the error rate with the flag on exceeds the rate with it off
+    /// by more than this factor. Greater than 1.0; default 2.0.
+    #[serde(default)]
+    pub max_error_ratio: Option<f64>,
+    /// Trip when the error rate with the flag on exceeds this absolute rate
+    /// (errors per evaluation). Above 0 and at most 1; default none. The only
+    /// trigger that works when the flag has no off traffic, as at 100%.
+    #[serde(default)]
+    pub max_error_rate: Option<f64>,
+    /// How far back to look, in hours. 1 to 24; default 1.
+    #[serde(default)]
+    pub window_hours: Option<i32>,
+    /// Count errors and evaluations reported by public client keys too.
+    /// Default false (server keys only). Client keys are public, so anyone
+    /// holding one can forge reports; turning this on lets forged reports
+    /// trip, or hold back, the rollback.
+    #[serde(default)]
+    pub include_client_reports: Option<bool>,
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -40,29 +72,8 @@ pub struct SetPolicyArgs {
     /// only records what would have happened. Defaults to enforce.
     #[serde(default)]
     pub mode: Option<Mode>,
-    /// Evaluations with the flag on needed before judging (at least 1).
-    /// Defaults to 100.
-    #[serde(default)]
-    pub min_evaluations: Option<i64>,
-    /// Errors with the flag on needed before judging (at least 1). Defaults to 10.
-    #[serde(default)]
-    pub min_errors: Option<i64>,
-    /// Trip when the error rate with the flag on exceeds the rate with it off
-    /// by more than this factor (greater than 1). Defaults to 2.
-    #[serde(default)]
-    pub max_error_ratio: Option<f64>,
-    /// Trip when the error rate with the flag on exceeds this absolute rate
-    /// (errors per evaluation, above 0 and at most 1). The only trigger that
-    /// works when the flag has no off traffic, as at 100%. Unset by default.
-    #[serde(default)]
-    pub max_error_rate: Option<f64>,
-    /// How far back to look, in hours (1 to 24). Defaults to 1.
-    #[serde(default)]
-    pub window_hours: Option<i32>,
-    /// Count errors and evaluations reported by public client keys too.
-    /// Defaults to false (server keys only).
-    #[serde(default)]
-    pub include_client_reports: Option<bool>,
+    #[serde(flatten)]
+    pub thresholds: ThresholdArgs,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -95,21 +106,9 @@ pub struct ProposeArgs {
     pub key: String,
     /// One of the app's environments.
     pub environment: String,
-    /// Start from the policy that exists for this flag and environment (else
-    /// the defaults); any field given here overrides it. See set_rollback_policy
-    /// for what each means.
-    #[serde(default)]
-    pub min_evaluations: Option<i64>,
-    #[serde(default)]
-    pub min_errors: Option<i64>,
-    #[serde(default)]
-    pub max_error_ratio: Option<f64>,
-    #[serde(default)]
-    pub max_error_rate: Option<f64>,
-    #[serde(default)]
-    pub window_hours: Option<i32>,
-    #[serde(default)]
-    pub include_client_reports: Option<bool>,
+    /// Fields given here override the stored policy (else the defaults).
+    #[serde(flatten)]
+    pub thresholds: ThresholdArgs,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -120,24 +119,13 @@ pub struct EventsArgs {
     /// Only this flag's events. Defaults to every flag in the app.
     #[serde(default)]
     pub key: Option<String>,
-    /// How many events, newest first. Defaults to 50, at most 200.
+    /// How many events, newest first. Default 50; values outside 1-200 are clamped.
     #[serde(default)]
     pub limit: Option<i64>,
 }
 
-/// The optional threshold fields, as given by an agent.
-#[derive(Default)]
-struct Overrides {
-    min_evaluations: Option<i64>,
-    min_errors: Option<i64>,
-    max_error_ratio: Option<f64>,
-    max_error_rate: Option<f64>,
-    window_hours: Option<i32>,
-    include_client_reports: Option<bool>,
-}
-
 /// `base` with every given field replaced.
-fn overlay(base: Thresholds, o: Overrides) -> Thresholds {
+fn overlay(base: Thresholds, o: ThresholdArgs) -> Thresholds {
     Thresholds {
         min_evaluations: o.min_evaluations.unwrap_or(base.min_evaluations),
         min_errors: o.min_errors.unwrap_or(base.min_errors),
@@ -171,11 +159,12 @@ impl Flags {
     #[tool(
         name = "set_rollback_policy",
         description = "Arm auto-rollback for a flag in one environment, or replace its policy. \
-                       When the error rate with the flag on crosses the thresholds, the \
+                       Replaces the whole policy: any threshold you omit takes its default, not \
+                       the stored value. To preview, call propose_rollback with every threshold \
+                       you intend to set. When the error rate with the flag on crosses the thresholds, the \
                        environment is switched off (mode enforce) or the event is only recorded \
-                       (mode observe). Omitted thresholds take the defaults. Needs a plan with \
-                       auto-rollback; billed as a change. Call propose_rollback first to see what \
-                       it would do now."
+                       (mode observe). Needs a plan with \
+                       auto-rollback; billed as a change."
     )]
     pub async fn set_rollback_policy(
         &self,
@@ -190,20 +179,11 @@ impl Flags {
             .await
             .mcp()?;
         let warning = args
+            .thresholds
             .max_error_rate
             .is_none()
             .then(|| NO_RATE_WARNING.into());
-        let thresholds = overlay(
-            Thresholds::default(),
-            Overrides {
-                min_evaluations: args.min_evaluations,
-                min_errors: args.min_errors,
-                max_error_ratio: args.max_error_ratio,
-                max_error_rate: args.max_error_rate,
-                window_hours: args.window_hours,
-                include_client_reports: args.include_client_reports,
-            },
-        );
+        let thresholds = overlay(Thresholds::default(), args.thresholds);
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "set_rollback_policy").await?;
         let app = tx.resolve_app(&args.app).await.mcp()?;
@@ -226,7 +206,7 @@ impl Flags {
     #[tool(
         name = "remove_rollback_policy",
         description = "Delete a flag's auto-rollback policy for one environment, and its \
-                       events. Free and never plan-gated, so an org that downgraded can always \
+                       events (its history is deleted too). Free and never plan-gated, so an org that downgraded can always \
                        clean up."
     )]
     pub async fn remove_rollback_policy(
@@ -281,8 +261,8 @@ impl Flags {
         name = "propose_rollback",
         description = "Dry run: the error counts auto-rollback would judge right now for a flag \
                        in an environment, the thresholds, and what it would decide. Starts from \
-                       the existing policy if there is one, else the defaults; fields you pass \
-                       override them. Changes nothing. Free."
+                       the stored policy (or the defaults when there is none) and overrides the \
+                       fields you pass; it cannot clear a stored maxErrorRate. Changes nothing. Free."
     )]
     pub async fn propose_rollback(
         &self,
@@ -308,14 +288,7 @@ impl Flags {
             existing
                 .as_ref()
                 .map_or_else(Thresholds::default, |p| p.thresholds.clone()),
-            Overrides {
-                min_evaluations: args.min_evaluations,
-                min_errors: args.min_errors,
-                max_error_ratio: args.max_error_ratio,
-                max_error_rate: args.max_error_rate,
-                window_hours: args.window_hours,
-                include_client_reports: args.include_client_reports,
-            },
+            args.thresholds,
         );
         thresholds.validate().mcp()?;
         let (window_start, sample) = tx.sample(flag.id, environment, &thresholds).await.mcp()?;
@@ -367,5 +340,112 @@ impl Flags {
             .mcp()?;
         tx.commit().await.mcp()?;
         Ok(Json(out::EventsOut { events }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flags_core::rollback::Trigger;
+
+    #[test]
+    fn omitted_fields_keep_the_base() {
+        let base = Thresholds {
+            max_error_rate: Some(0.2),
+            window_hours: 6,
+            ..Thresholds::default()
+        };
+        assert_eq!(overlay(base.clone(), ThresholdArgs::default()), base);
+    }
+
+    #[test]
+    fn given_fields_win() {
+        let t = overlay(
+            Thresholds {
+                max_error_rate: Some(0.2),
+                ..Thresholds::default()
+            },
+            ThresholdArgs {
+                min_evaluations: Some(7),
+                min_errors: Some(3),
+                max_error_ratio: Some(5.0),
+                max_error_rate: Some(0.5),
+                window_hours: Some(12),
+                include_client_reports: Some(true),
+            },
+        );
+        assert_eq!(
+            t,
+            Thresholds {
+                min_evaluations: 7,
+                min_errors: 3,
+                max_error_ratio: 5.0,
+                max_error_rate: Some(0.5),
+                window_hours: 12,
+                include_client_reports: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_stored_max_error_rate_cannot_be_cleared() {
+        let base = Thresholds {
+            max_error_rate: Some(0.2),
+            ..Thresholds::default()
+        };
+        assert_eq!(
+            overlay(base, ThresholdArgs::default()).max_error_rate,
+            Some(0.2)
+        );
+    }
+
+    #[test]
+    fn a_trip_note_says_it_would_trip() {
+        assert!(note(Decision::Trip(Trigger::ErrorRatio), true).contains("would trip"));
+    }
+
+    #[test]
+    fn a_below_minimums_note_says_not_yet() {
+        assert!(note(Decision::BelowMinimums, true).contains("below the minimums"));
+    }
+
+    #[test]
+    fn a_healthy_note_says_within_thresholds() {
+        assert!(note(Decision::Healthy, true).contains("within the thresholds"));
+    }
+
+    #[test]
+    fn a_policy_that_cannot_trip_says_so() {
+        for d in [Decision::BelowMinimums, Decision::Healthy] {
+            assert!(note(d, false).contains("cannot trip"));
+        }
+    }
+
+    #[test]
+    fn the_warning_uses_the_wire_name() {
+        assert!(NO_RATE_WARNING.contains("maxErrorRate"));
+        assert!(!NO_RATE_WARNING.contains("max_error_rate"));
+    }
+
+    #[test]
+    fn flattened_threshold_docs_reach_the_schema() {
+        for schema in [
+            serde_json::to_value(schemars::schema_for!(SetPolicyArgs)).unwrap(),
+            serde_json::to_value(schemars::schema_for!(ProposeArgs)).unwrap(),
+        ] {
+            let text = schema.to_string();
+            for field in [
+                "minEvaluations",
+                "minErrors",
+                "maxErrorRatio",
+                "maxErrorRate",
+                "windowHours",
+                "includeClientReports",
+            ] {
+                assert!(text.contains(field), "schema lacks {field}: {text}");
+            }
+            assert!(text.contains("default 100"), "docs lost: {text}");
+            assert!(text.contains("forge"), "docs lost: {text}");
+        }
     }
 }
