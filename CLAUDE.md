@@ -58,7 +58,7 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - test: DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace
 - lint: cargo clippy --workspace --all-targets -- -D warnings
 - format: cargo fmt --all -- --check
-- extra: `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/'` must print nothing
+- extra: `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` must print nothing
 - when Dockerfile, .dockerignore, Cargo.toml, Cargo.lock, rust-toolchain.toml, crates/**: podman build -t otto-flags:check .
 - when package.json, pnpm-lock.yaml, pnpm-workspace.yaml, packages/angular/**, packages/astro/**, packages/mcp-datadog/**, packages/mcp-dynatrace/**, packages/mcp-newrelic/**, packages/mcp-pagerduty/**, packages/mcp-sdk/**, packages/mcp-sentry/**, packages/mcp-splunk/**, packages/nextjs/**, packages/node-server/**, packages/react/**, packages/remix/**, packages/solid/**, packages/svelte/**, packages/sveltekit/**, packages/typescript/**, packages/vue/**, examples/angular-app/**, examples/astro-app/**, examples/nextjs-app/**, examples/node-backend/**, examples/react-app/**, examples/remix-app/**, examples/solid-app/**, examples/svelte-app/**, examples/sveltekit-app/**, examples/vue-app/**: pnpm install --frozen-lockfile && pnpm lint && pnpm build && pnpm test
 - when packages/rust-server/**: cd packages/rust-server && cargo fmt --check

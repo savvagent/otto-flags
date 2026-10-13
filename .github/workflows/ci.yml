@@ -80,7 +80,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          changed=$(git diff --name-status --diff-filter=MDR "origin/${BASE_REF}...HEAD" -- 'crates/*/migrations/')
+          changed=$(git diff --name-status --diff-filter=MDR "origin/${BASE_REF}...HEAD" -- 'crates/*/migrations/*')
           if [ -n "$changed" ]; then
             echo "::error::existing migrations were modified, deleted, or renamed; add a new migration instead"
             echo "$changed"
