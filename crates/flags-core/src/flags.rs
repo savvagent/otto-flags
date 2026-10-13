@@ -7,10 +7,16 @@
 //! transaction, so a failed call leaves no trace and a successful one leaves
 //! exactly one version.
 //!
-//! Writes lock the flag row (`FOR UPDATE`) before computing the new state, so
-//! two agents changing different environments of one flag at once both land:
-//! the second waits for the first and merges into its result instead of
-//! overwriting it.
+//! Writes lock the flag row (`FOR NO KEY UPDATE`) before computing the new
+//! state, so two agents changing different environments of one flag at once
+//! both land: the second waits for the first and merges into its result
+//! instead of overwriting it.
+//!
+//! `NO KEY` because no write changes the row's key (`id`): telemetry inserts
+//! check their foreign key to the flag with `FOR KEY SHARE`, which `FOR
+//! UPDATE` would block for as long as a write (or the rollback checker's
+//! second transaction) holds the flag. Flag writers still serialize: `FOR NO
+//! KEY UPDATE` conflicts with itself.
 
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Tx;
@@ -525,11 +531,12 @@ pub(crate) async fn get_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<Fe
 }
 
 /// Lock a flag by id (the rollback checker has no app/key in hand). `None` if
-/// it no longer exists.
+/// it no longer exists. `FOR NO KEY UPDATE`, as in `lock` (see the module
+/// docs): telemetry for the flag is not blocked while the lock is held.
 pub(crate) async fn lock_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<FeatureFlag>> {
     let org = tx.org();
     Ok(sqlx::query_as(&format!(
-        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND id = $2 FOR UPDATE"
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND id = $2 FOR NO KEY UPDATE"
     ))
     .bind(org)
     .bind(flag)
@@ -538,6 +545,8 @@ pub(crate) async fn lock_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<F
 }
 
 /// Fetch and lock a flag for writing, refusing if the caller's view is stale.
+/// `FOR NO KEY UPDATE`: it serializes flag writers without blocking the
+/// `FOR KEY SHARE` that telemetry inserts take through their foreign key.
 async fn lock(
     tx: &mut Tx<'_>,
     app: &FlagApp,
@@ -546,7 +555,8 @@ async fn lock(
 ) -> Result<FeatureFlag> {
     let org = tx.org();
     let flag: Option<FeatureFlag> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 FOR UPDATE"
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
+         FOR NO KEY UPDATE"
     ))
     .bind(org)
     .bind(app.id)
@@ -572,7 +582,7 @@ async fn lock(
 /// Write `flag`'s new state as the next version.
 ///
 /// Precondition: the caller holds the flag's row lock (`lock` or
-/// `lock_by_id`, `FOR UPDATE`) in `tx`. The before-read of `environments`
+/// `lock_by_id`, `FOR NO KEY UPDATE`) in `tx`. The before-read of `environments`
 /// that re-arming compares against is only the state being replaced if no
 /// one else can change the row in between.
 async fn commit_change(

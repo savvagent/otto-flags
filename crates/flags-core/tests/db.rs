@@ -1664,6 +1664,43 @@ async fn every_outcome_text_satisfies_the_events_check(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// A flag write in progress does not block telemetry for that flag: the
+/// write's row lock is FOR NO KEY UPDATE, which the telemetry insert's FK
+/// check (FOR KEY SHARE) does not wait on.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_flag_write_in_progress_does_not_block_its_telemetry(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, _) = policy_fixture(&db, org, actor).await;
+
+    // Holds the flag's row lock until it ends.
+    let mut writer = db.begin(org).await.unwrap();
+    writer
+        .set_environment(&app, "f", "production", on(true), meta(actor))
+        .await
+        .unwrap();
+
+    let mut tx = db.begin(org).await.unwrap();
+    sqlx::query("SET LOCAL lock_timeout = '1s'")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(1, true, Some("production")),
+    )
+    .await
+    .expect("telemetry waited on the flag write's lock");
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(1, true))
+        .await
+        .expect("telemetry waited on the flag write's lock");
+    tx.commit().await.unwrap();
+    writer.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn turning_an_environment_back_on_rearms_its_policy(pool: PgPool) {
     let db = db(pool).await;
