@@ -8,6 +8,7 @@ use flags_core::eval::{Context, Operator, Rule};
 use flags_core::flags::{ChangeMeta, EnvPatch, FlagPatch, FlagsExt, NewFlag};
 use flags_core::keys::KeyKind;
 use flags_core::platform_events::{self, begin_live, Outcome};
+use flags_core::rollback::Thresholds;
 use flags_core::telemetry::{self, ErrorEvent, EvalEvent};
 use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
@@ -743,4 +744,53 @@ async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
     assert!(platform_events::revoked(&db, org, gone).await.unwrap());
     assert!(!platform_events::revoked(&db, org, stays).await.unwrap());
     assert!(begin_live(&db, org, Some(stays)).await.is_ok());
+}
+
+/// The columns' defaults and `Thresholds::default()` are one set of numbers
+/// written twice; this keeps them from drifting.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn policy_column_defaults_match_the_rust_thresholds(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    let row: (i64, i64, f64, Option<f64>, i32, bool) = sqlx::query_as(
+        "INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) \
+         VALUES ($1, $2, $3, 'production') \
+         RETURNING min_evaluations, min_errors, max_error_ratio, max_error_rate, \
+                   window_hours, include_client_reports",
+    )
+    .bind(org)
+    .bind(app.id)
+    .bind(flag.id)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let from_columns = Thresholds {
+        min_evaluations: row.0,
+        min_errors: row.1,
+        max_error_ratio: row.2,
+        max_error_rate: row.3,
+        window_hours: row.4,
+        include_client_reports: row.5,
+    };
+    assert_eq!(from_columns, Thresholds::default());
 }

@@ -20,6 +20,7 @@ use sqlx::FromRow;
 use crate::error::Result;
 use crate::ids::{FlagAppId, FlagId};
 use crate::keys::KeyKind;
+use crate::rollback::{decide, Decision, Sample, Thresholds, Trigger};
 
 pub const MAX_BATCH: usize = 1_000;
 pub const ERROR_RETENTION_DAYS: i32 = 14;
@@ -383,7 +384,7 @@ fn inert(s: &str, max: usize) -> String {
 /// Turn the numbers into a sentence. Deliberately conservative: it says what
 /// the data shows and how much of it there is, and leaves the decision to the
 /// agent and the person it works for.
-fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
+pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
     const MIN_SAMPLE: i64 = 100;
     if evals.enabled == 0 && evals.disabled == 0 {
         return "No evaluations reported in this window. Either the flag is not being \
@@ -396,20 +397,28 @@ fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) ->
             evals.enabled
         );
     }
-    match (on, off) {
-        (Some(on), Some(off)) if off > 0.0 && on > off * 2.0 && errors.enabled >= 10 => format!(
+    // The same rule the auto-rollback checker applies, with the defaults, so
+    // this advice and that action cannot disagree.
+    let sample = Sample {
+        evals_on: evals.enabled,
+        evals_off: evals.disabled,
+        errors_on: errors.enabled,
+        errors_off: errors.disabled,
+    };
+    match (on, off, decide(&sample, &Thresholds::default())) {
+        (Some(on), Some(off), Decision::Trip(Trigger::ErrorRatio)) => format!(
             "Error rate with the flag on ({:.2}%) is {:.1}x the rate with it off ({:.2}%). \
              Consider rolling back.",
             on * 100.0,
             on / off,
             off * 100.0
         ),
-        (Some(on), Some(0.0)) if errors.enabled >= 10 => format!(
+        (Some(on), _, Decision::Trip(Trigger::OffHasNoErrors)) => format!(
             "{} errors with the flag on ({:.2}%) and none with it off. Consider rolling back.",
             errors.enabled,
             on * 100.0
         ),
-        (Some(on), _) => format!(
+        (Some(on), _, _) => format!(
             "No sign of the flag raising errors: {:.2}% of on evaluations reported an error.",
             on * 100.0
         ),

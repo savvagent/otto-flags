@@ -24,6 +24,7 @@ pub mod keys;
 pub mod migrate;
 pub mod notify;
 pub mod platform_events;
+pub mod rollback;
 pub mod scopes;
 pub mod telemetry;
 pub mod usage;
