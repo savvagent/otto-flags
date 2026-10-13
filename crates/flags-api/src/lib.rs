@@ -14,7 +14,9 @@
 //! The contract is the one in `docs/SDK-DEVELOPER-GUIDE.md`, kept as-is so the
 //! SDKs in `packages/` work unchanged. Keys travel in `Authorization: Bearer`
 //! or `X-SDK-Key`, never in a URL. This surface is the hot path: nothing here
-//! calls the platform or an LLM, and no tool is metered.
+//! calls the platform or an LLM, and no tool is metered. Telemetry may hint the
+//! rollback checker, in-process and after commit, which still makes no
+//! platform call.
 
 mod error;
 mod platform;
@@ -27,6 +29,7 @@ use std::time::Duration;
 use axum::routing::{get, post};
 use axum::Router;
 use flags_core::notify::Listener;
+use flags_core::rollback::Hints;
 use http::{header, HeaderName, Method};
 use otto_tenant::Db;
 use tower_http::cors::{Any, CorsLayer};
@@ -37,6 +40,8 @@ pub use error::ApiError;
 pub struct AppState {
     pub db: Db,
     pub listener: Listener,
+    /// Tells the rollback checker which flags just got telemetry.
+    pub hints: Hints,
     /// Verifies the platform's lifecycle webhooks (`otto_whsec_…`).
     pub platform_webhook_secret: String,
     /// How often an idle stream is sent a heartbeat.
@@ -44,10 +49,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: Db, listener: Listener, platform_webhook_secret: impl Into<String>) -> Self {
+    pub fn new(
+        db: Db,
+        listener: Listener,
+        hints: Hints,
+        platform_webhook_secret: impl Into<String>,
+    ) -> Self {
         Self {
             db,
             listener,
+            hints,
             platform_webhook_secret: platform_webhook_secret.into(),
             heartbeat: Duration::from_secs(30),
         }

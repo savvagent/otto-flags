@@ -9,6 +9,9 @@
 //!   everything else                   JSON 404
 //! ```
 //!
+//! The rollback checker is started separately by [`spawn_checker`] so `main`
+//! can stop it on shutdown; its [`Hints`] handle is passed to [`router`].
+//!
 //! Assembly is a library function so a test can build the whole router: axum
 //! panics on a route registered twice, and that is better found by a test than
 //! by a deploy.
@@ -21,10 +24,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::response::{IntoResponse, Response};
 use axum::Router;
+use flags_core::entitlements::Entitlements;
 use flags_core::notify::Listener;
+use flags_core::rollback::{Checker, CheckerConfig, Hints};
 use http::{StatusCode, Uri};
 use otto_resource::{ClientConfig, PlatformClient};
 use otto_tenant::Db;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tower_http::trace::TraceLayer;
 
 pub use config::{Config, LogFormat};
@@ -44,12 +51,14 @@ pub fn router(
     db: Db,
     platform: Arc<PlatformClient>,
     listener: Listener,
+    hints: Hints,
     config: &Config,
 ) -> Router {
     let mcp = flags_mcp::router(db.clone(), mcp_config(platform, config));
     let api = flags_api::router(flags_api::AppState::new(
         db.clone(),
         listener,
+        hints,
         &config.platform_webhook_secret,
     ));
     health::router(db)
@@ -59,6 +68,25 @@ pub fn router(
         // Request spans without headers: including them would log every
         // bearer token and SDK key in clear.
         .layer(TraceLayer::new_for_http())
+}
+
+/// Start the rollback checker. Returns the [`Hints`] for the SDK API and the
+/// task to await on shutdown. Entitlement checks use the same upgrade URL as
+/// the MCP surface.
+pub fn spawn_checker(
+    db: Db,
+    platform: Arc<PlatformClient>,
+    config: &Config,
+    checker: CheckerConfig,
+    shutdown: watch::Receiver<bool>,
+) -> (Hints, JoinHandle<()>) {
+    let upgrade_url = mcp_config(platform.clone(), config).upgrade_url;
+    Checker::spawn(
+        db,
+        Entitlements::new(platform, upgrade_url),
+        checker,
+        shutdown,
+    )
 }
 
 fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Config {
@@ -105,6 +133,7 @@ mod tests {
             Db::from_pool(pool),
             platform_client(&config).unwrap(),
             Listener::detached(),
+            Hints::detached(),
             &config,
         )
     }

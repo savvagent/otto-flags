@@ -11,6 +11,7 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Form, Json, Router};
 use flags_core::notify::Listener;
+use flags_core::rollback::Hints;
 use flags_server::{platform_client, router, Config};
 use http::{Request, StatusCode};
 use otto_resource::{
@@ -151,7 +152,13 @@ async fn server(pool: PgPool, platform_url: &str) -> Server {
     let db = Db::from_pool(pool);
     let platform = platform_client(&config).unwrap();
     Server {
-        app: router(db.clone(), platform.clone(), Listener::detached(), &config),
+        app: router(
+            db.clone(),
+            platform.clone(),
+            Listener::detached(),
+            Hints::detached(),
+            &config,
+        ),
         db,
         platform,
     }
