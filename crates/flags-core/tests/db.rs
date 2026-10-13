@@ -2116,6 +2116,25 @@ async fn archived_flags_and_missing_environments_are_skipped(pool: PgPool) {
     assert_eq!(after.version, before.version);
 }
 
+/// The real statement, unpinned, as `otto_app`: the
+/// `rollback_policies_checker` row-level policy must let it see every org.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn due_policies_sees_every_org_as_otto_app(pool: PgPool) {
+    let admin = db(pool.clone()).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    let (_, flag_a, _) = checker_fixture(&admin, a, actor, &[], Mode::Enforce).await;
+    let (_, flag_b, _) = checker_fixture(&admin, b, actor, &[], Mode::Enforce).await;
+
+    let app_db = otto_app_db(&pool).await;
+    let due = due_policies(&app_db, std::time::Duration::from_secs(300), 200)
+        .await
+        .unwrap();
+    assert_eq!(due.len(), 2, "{due:?}");
+    assert!(due.contains(&(a, flag_a.id)) && due.contains(&(b, flag_b.id)));
+    app_db.pool().close().await;
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn due_policies_sees_every_org_unpinned(pool: PgPool) {
     let db = db(pool).await;

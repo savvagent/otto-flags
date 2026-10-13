@@ -113,7 +113,7 @@ fn decide(answer: Entitlement, feature: &str, upgrade_url: &str) -> Result<()> {
 #[derive(Clone)]
 pub struct Entitlements {
     platform: Arc<PlatformClient>,
-    pub upgrade_url: String,
+    upgrade_url: String,
     failed: Arc<NegativeCache>,
 }
 

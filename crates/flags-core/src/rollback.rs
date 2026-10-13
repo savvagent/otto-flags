@@ -28,10 +28,14 @@
 //! debounce. It covers dropped hints and policies created after their
 //! telemetry arrived.
 //!
-//! A flag whose check fails (an org deleted but not yet purged, a stored
-//! environment the patch refuses) never advances `last_checked_at`, so the
-//! backstop would keep returning it. After a failure the flag is left alone
-//! for [`FAILURE_COOLDOWN`]; a successful check clears that. If at least
+//! A flag whose check fails never advances `last_checked_at`, so the backstop
+//! would keep returning it. A failure that retrying cannot fix (an org
+//! deleted but not yet purged, a stored environment the patch refuses) leaves
+//! the flag alone for [`FAILURE_COOLDOWN`]; a successful check clears that. A
+//! retriable failure (a pool timeout, a serialization failure, the platform
+//! unreachable) counts as a check, so the next hint or backstop pass retries
+//! it after the usual debounce: a telemetry burst, the likeliest time for a
+//! pool timeout, is also when a misbehaving flag most needs checking. If at least
 //! `backstop_limit` policies fail persistently they can still fill the
 //! backstop's slots; that is accepted, since hints still reach every other
 //! flag.
@@ -1264,12 +1268,12 @@ async fn run<E: EntitlementSource>(
             return Exit::Requested;
         }
         for key in schedule.take_due(Instant::now()) {
-            let ok = check_one(&db, &entitlements, key).await;
+            let result = check_one(&db, &entitlements, key).await;
             let now = Instant::now();
-            if ok {
-                schedule.checked(key, now);
-            } else {
-                schedule.failed(key, now);
+            match result {
+                Checked::Ok => schedule.checked(key, now),
+                Checked::Retry => schedule.retry(key, now),
+                Checked::GiveUp => schedule.failed(key, now),
             }
             if *shutdown.borrow() {
                 return Exit::Requested;
@@ -1333,8 +1337,27 @@ async fn sleep_until(due: Option<Instant>) {
     }
 }
 
-/// Check one flag and log what happened; whether the check succeeded.
-async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): Key) -> bool {
+/// How a check of one flag ended, for scheduling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Checked {
+    Ok,
+    /// Failed in a way a later attempt could fix: retry after the debounce.
+    Retry,
+    /// Failed in a way retrying will not fix: cool down.
+    GiveUp,
+}
+
+/// Whether a failed check is worth retrying soon.
+fn classify(e: &Error) -> Checked {
+    if e.retriable() {
+        Checked::Retry
+    } else {
+        Checked::GiveUp
+    }
+}
+
+/// Check one flag and log what happened.
+async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): Key) -> Checked {
     match check_flag(db, entitlements, org, flag).await {
         Ok(report) => {
             for (policy, outcome) in report.outcomes {
@@ -1344,18 +1367,22 @@ async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): 
                     tracing::debug!(%org, %flag, %policy, outcome = outcome.as_str(), "auto-rollback trip recorded, not acted on");
                 }
             }
-            true
+            Checked::Ok
         }
         // A deleted org, not yet purged: expected, and nothing to do.
-        Err(Error::AccessRevoked) => {
+        Err(e @ Error::AccessRevoked) => {
             tracing::debug!(%org, %flag, "auto-rollback skipped a flag of a deleted org");
-            false
+            classify(&e)
         }
         Err(e) => {
+            let result = classify(&e);
             // The code only: database text never reaches a log above debug.
-            tracing::warn!(%org, %flag, code = e.code(), "auto-rollback check failed");
+            tracing::warn!(
+                %org, %flag, code = e.code(), retry = result == Checked::Retry,
+                "auto-rollback check failed"
+            );
             tracing::debug!(%org, %flag, error = %e, "auto-rollback check failure");
-            false
+            result
         }
     }
 }
@@ -1437,8 +1464,14 @@ impl Schedule {
         self.cooldown.remove(&key);
     }
 
-    /// `key`'s check failed at `now`: it counts as checked, and is left alone
-    /// for [`FAILURE_COOLDOWN`].
+    /// `key`'s check failed at `now` in a way a retry could fix: it counts as
+    /// checked, so the next hint is due after the debounce.
+    pub(crate) fn retry(&mut self, key: Key, now: Instant) {
+        self.last_checked.insert(key, now);
+    }
+
+    /// `key`'s check failed at `now` in a way retrying will not fix: it counts
+    /// as checked, and is left alone for [`FAILURE_COOLDOWN`].
     pub(crate) fn failed(&mut self, key: Key, now: Instant) {
         self.last_checked.insert(key, now);
         self.cooldown.insert(key, later(now, FAILURE_COOLDOWN));
@@ -1553,6 +1586,34 @@ mod tests {
         assert_eq!(s.next_due(), Some(t0 + FAILURE_COOLDOWN));
         assert!(s.take_due(t0 + FAILURE_COOLDOWN - secs(1)).is_empty());
         assert_eq!(s.take_due(t0 + FAILURE_COOLDOWN), vec![k]);
+    }
+
+    #[test]
+    fn a_retriable_failure_retries_after_the_debounce_not_the_cooldown() {
+        let mut s = Schedule::new(DEBOUNCE);
+        let t0 = Instant::now();
+        let k = key();
+        s.retry(k, t0);
+        assert!(!s.cooldown.contains_key(&k));
+        s.hint(k, t0 + secs(1));
+        assert_eq!(s.next_due(), Some(t0 + DEBOUNCE));
+        assert_eq!(s.take_due(t0 + DEBOUNCE), vec![k]);
+    }
+
+    #[test]
+    fn only_non_retriable_errors_give_up() {
+        assert_eq!(classify(&Error::AccessRevoked), Checked::GiveUp);
+        assert_eq!(classify(&Error::Invalid("bad".into())), Checked::GiveUp);
+        assert_eq!(
+            classify(&Error::Db(sqlx::Error::PoolTimedOut)),
+            Checked::Retry
+        );
+        assert_eq!(
+            classify(&Error::EntitlementUnavailable {
+                feature: AUTO_ROLLBACK.into()
+            }),
+            Checked::Retry
+        );
     }
 
     #[test]
