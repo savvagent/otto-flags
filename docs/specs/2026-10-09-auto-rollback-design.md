@@ -1,6 +1,6 @@
 # Auto-rollback, gated by the plan — Design
 
-**Status:** Approved (spec critique, 2 rounds), 2026-10-09. Planned: [the plan](../plans/2026-10-10-auto-rollback.md).
+**Status:** IMPLEMENTED (#24). Approved (spec critique, 2 rounds), 2026-10-09; amended in review. Plan: [the plan](../plans/2026-10-10-auto-rollback.md).
 **Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11), and folds in
 [#12](https://github.com/savvagent/otto-flags/issues/12) (§3a). Depends on
 [savvagent/otto-platform#30](https://github.com/savvagent/otto-platform/issues/30).
@@ -182,20 +182,15 @@ MCP tools and the background checker.
 New file `crates/flags-core/migrations/0002_auto_rollback.sql`. Nothing in `0001_baseline.sql`
 changes (Rule 6).
 
-> **As shipped (review of #24):** the migration file is the source of truth; the SQL below is the
-> approved design. Review added: `SET LOCAL lock_timeout = '3s'`; the `reporter` and
-> `server_count` CHECKs added `NOT VALID` (plus `server_count <= count`); `rollback_policies_org_idx`
-> dropped (covered by `UNIQUE (org_id, id)`), `rollback_policies_due_idx` and
-> `rollback_events_policy_idx` instead of the flag/org indexes; `last_error_code` /
-> `last_error_at` on policies; `rollback_events.policy_id` nullable with
-> `ON DELETE SET NULL (policy_id)` (#28); and every unpinned policy also requires
-> `current_setting('app.maintenance', true) = 'on'`, set only by background maintenance code (#27).
-
-The migration as shipped differs from this sketch after review of #24: it opens with
-`SET LOCAL lock_timeout = '3s'`; the two CHECKs on existing tables are added `NOT VALID` (no
-validation scan under ACCESS EXCLUSIVE), and `server_count` is also checked `<= count`;
-`rollback_policies_org_idx` is dropped (`UNIQUE (org_id, id)` covers it). `0002_auto_rollback.sql`
-is authoritative.
+> **As shipped (review of #24):** `0002_auto_rollback.sql` is authoritative; the SQL below is the
+> approved design. Review added: `SET LOCAL lock_timeout = '3s'`; the two CHECKs on existing tables
+> added `NOT VALID` (no validation scan under ACCESS EXCLUSIVE), plus `server_count <= count`;
+> `rollback_policies_org_idx` dropped (`UNIQUE (org_id, id)` covers it), with
+> `rollback_policies_due_idx` for the backstop and `rollback_events_policy_idx` beside
+> `rollback_events_flag_idx`; `last_error_code` / `last_error_at` on policies;
+> `rollback_events.policy_id` nullable with `ON DELETE SET NULL (policy_id)` (#28); and every
+> unpinned policy also requires `current_setting('app.maintenance', true) = 'on'`, set only by
+> background maintenance code (#27).
 
 ```sql
 -- Which kind of SDK key reported an error. Auto-rollback counts only server
@@ -468,7 +463,7 @@ domain call → commit).
 | Tool | Scope | Billable | Plan-gated | Does |
 |---|---|---|---|---|
 | `set_rollback_policy` | `flags:write` | yes | yes | Create or replace the policy for (app, flag, environment); omitted thresholds take the defaults. Setting `includeClientReports: true` also needs a fresh owner/admin lookup, like app creation and key rotation. |
-| `remove_rollback_policy` | `flags:write` | no | no | Delete it (events cascade). Free and not plan-gated, so a downgraded or over-quota org can always clean up. |
+| `remove_rollback_policy` | `flags:write` | no | no | Delete it; its events are kept with a null `policy_id` (#28). Free and not plan-gated, so a downgraded or over-quota org can always clean up. |
 | `list_rollback_policies` | `flags:read` | no | no | Policies for an app, or one flag; includes armed/tripped state. |
 | `propose_rollback` | `flags:read` | no | no | Dry run: the current sample, the thresholds, and what `decide` says, for one policy or for ad-hoc thresholds on a flag and environment. Changes nothing. |
 | `rollback_events` | `flags:read` | no | no | Recent events for a flag or app, newest first, at most 200. |

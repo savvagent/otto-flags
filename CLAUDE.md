@@ -151,6 +151,9 @@ crate module docs.
 - **Composite `(org_id, id)` foreign keys** between tenant tables (FK checks bypass RLS).
   `app_keys` and `deleted_orgs` are the deliberate pre-org exceptions.
 - **Request paths open transactions with `platform_events::begin_live`**, never `Db::begin`.
+  Unpinned cross-org access goes only through `flags_core::maintenance::begin` (background code:
+  sweeps, the rollback checker's due-policy scan), which sets the `app.maintenance` marker the
+  unpinned RLS policies require.
 - **No SQL outside `flags-core`**, and only runtime `sqlx::query`/`query_as`, never `query!`
   macros (the Docker build has no database).
 - **Client keys are public.** `sdk_` and `srv_` keys are stored as SHA-256 hashes; a client key
