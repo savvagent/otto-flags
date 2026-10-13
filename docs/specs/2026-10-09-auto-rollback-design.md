@@ -352,8 +352,12 @@ of:
 1. `evals_on >= min_evaluations` and `errors_on >= min_errors`, and
 2. any of
    - `rate_on > max_error_rate` (if set), or
-   - `evals_off > 0`, `errors_off > 0`, and `rate_on > rate_off * max_error_ratio`, or
-   - `evals_off > 0` and `errors_off == 0` (on is erroring, off is not).
+   - `evals_off >= min_evaluations`, `errors_off > 0`, and `rate_on > rate_off * max_error_ratio`, or
+   - `evals_off >= min_evaluations` and `errors_off == 0` (on is erroring, off is not).
+
+The comparative triggers reuse `min_evaluations` for the off side (review of #24): near 100%
+rollout the few evaluations left off show no errors by chance, so `evals_off > 0` alone tripped
+`errors_off == 0` on noise.
 
 With the defaults this is exactly `telemetry::assess`'s "Consider rolling back" condition
 (`crates/flags-core/src/telemetry.rs:353-380`: 100 evaluations, 10 errors, 2x). `assess` is
@@ -362,7 +366,8 @@ refactored to call `decide` with default thresholds, so the advice an agent read
 no evaluations on a side (`telemetry.rs:311-313`), so with the defaults and no `max_error_rate`
 the two match exactly. `assess` keeps its wording; its tests are kept and pin the shared cases.
 
-With no off traffic (a flag at 100%), only `max_error_rate` can trip a policy. That is allowed
+With fewer than `min_evaluations` off evaluations (a flag at or near 100%), only
+`max_error_rate` can trip a policy. That is allowed
 (off traffic can appear later), but `set_rollback_policy` returns a `warning` saying so whenever
 `max_error_rate` is unset, and `propose_rollback` reports `can_trip: false` with the reason.
 

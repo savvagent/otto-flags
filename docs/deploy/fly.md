@@ -87,9 +87,10 @@ A policy per (flag, environment) disables that environment as an ordinary flag v
 `auto_rollback`, no user actor) when the error rate with the flag on exceeds the rate with it off.
 It shows in `flag_history` and is undone with `rollback_flag` or `set_flag_environment`; turning
 the environment back on re-arms the policy. Defaults: at least 100 evaluations and 10 errors
-with the flag on, and an on-rate more than 2x the off-rate (or off traffic with no errors at
-all), over this hour so far (`windowHours` 1-24). An optional `maxErrorRate` trips on the
-on-rate alone. Only server-key reports count unless a policy sets `includeClientReports`.
+with the flag on, at least 100 evaluations with it off, and an on-rate more than 2x the off-rate
+(or off traffic with no errors at all), over this hour so far (`windowHours` 1-24). An optional
+`maxErrorRate` trips on the on-rate alone, and is the only trigger with less off traffic than
+that (a rollout at or near 100%). Only server-key reports count unless a policy sets `includeClientReports`.
 Mode `observe` records what would have happened without changing the flag.
 
 - **Plan-gated.** Every paid plan (team, business, enterprise) includes `auto_rollback` through

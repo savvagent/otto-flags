@@ -7,6 +7,12 @@
 //! thresholds, so what an agent is told and what the checker does cannot
 //! disagree.
 //!
+//! Comparing the error rate with the flag on against the rate with it off
+//! needs evidence on both sides: the comparative triggers apply only when the
+//! off side has at least `min_evaluations` evaluations too. Near 100% rollout
+//! the few evaluations left off would show no errors by chance, so there only
+//! `max_error_rate` can trip.
+//!
 //! ## When the checker runs
 //!
 //! The Fly machine suspends when idle, and a suspended process runs no
@@ -195,15 +201,27 @@ pub enum Decision {
     Trip(Trigger),
 }
 
-/// The decision rule. Trips when the sample meets both minimums and any of:
-/// the on rate exceeds `max_error_rate`; the off side has traffic and errors
-/// and the on rate exceeds the off rate times `max_error_ratio` (strictly);
-/// the off side has traffic but no errors.
+/// The decision rule. Judges only a sample with at least `min_evaluations`
+/// evaluations and `min_errors` errors with the flag on, and then trips on
+/// any of:
+///
+/// - the on rate exceeds `max_error_rate`, when one is set;
+/// - with at least `min_evaluations` evaluations with the flag off (the same
+///   minimum, so both sides of the comparison carry as much evidence): the
+///   off side has errors and the on rate exceeds the off rate times
+///   `max_error_ratio` (strictly), or the off side has no errors at all.
+///
+/// With less off traffic than that (a rollout near 100%, where the few
+/// evaluations left off would show no errors by chance), only
+/// `max_error_rate` can trip.
 ///
 /// ```
 /// use flags_core::rollback::{decide, Decision, Sample, Thresholds, Trigger};
 /// let s = Sample { evals_on: 1000, evals_off: 1000, errors_on: 50, errors_off: 5 };
 /// assert_eq!(decide(&s, &Thresholds::default()), Decision::Trip(Trigger::ErrorRatio));
+/// // At 99%, the 99 evaluations left off are too few to compare against.
+/// let s = Sample { evals_on: 10_000, evals_off: 99, errors_on: 10, errors_off: 0 };
+/// assert_eq!(decide(&s, &Thresholds::default()), Decision::Healthy);
 /// ```
 pub fn decide(sample: &Sample, t: &Thresholds) -> Decision {
     if sample.evals_on < t.min_evaluations || sample.errors_on < t.min_errors {
@@ -217,27 +235,38 @@ pub fn decide(sample: &Sample, t: &Thresholds) -> Decision {
     if t.max_error_rate.is_some_and(|max| on > max) {
         return Decision::Trip(Trigger::MaxErrorRate);
     }
-    if let Some(off) = sample.rate_off() {
-        if sample.errors_off == 0 {
-            return Decision::Trip(Trigger::OffHasNoErrors);
-        }
-        if on > off * t.max_error_ratio {
-            return Decision::Trip(Trigger::ErrorRatio);
+    if enough_off_traffic(sample, t) {
+        if let Some(off) = sample.rate_off() {
+            if sample.errors_off == 0 {
+                return Decision::Trip(Trigger::OffHasNoErrors);
+            }
+            if on > off * t.max_error_ratio {
+                return Decision::Trip(Trigger::ErrorRatio);
+            }
         }
     }
     Decision::Healthy
 }
 
-/// False when `decide` can never trip on this sample's shape: no off traffic
-/// and no `max_error_rate`, so there is nothing to compare against.
+/// Whether the off side has enough evaluations for the comparative triggers.
+fn enough_off_traffic(sample: &Sample, t: &Thresholds) -> bool {
+    // max(1): with invalid thresholds, no off traffic is still not enough.
+    sample.evals_off >= t.min_evaluations.max(1)
+}
+
+/// False when `decide` can never trip on this sample's shape: fewer than
+/// `min_evaluations` evaluations with the flag off and no `max_error_rate`,
+/// so there is nothing to compare against.
 ///
 /// ```
 /// use flags_core::rollback::{can_trip, Sample, Thresholds};
 /// let at_full_rollout = Sample { evals_on: 5000, errors_on: 400, ..Sample::default() };
 /// assert!(!can_trip(&at_full_rollout, &Thresholds::default()));
+/// let a_sliver_off = Sample { evals_off: 99, ..at_full_rollout };
+/// assert!(!can_trip(&a_sliver_off, &Thresholds::default()));
 /// ```
 pub fn can_trip(sample: &Sample, t: &Thresholds) -> bool {
-    sample.evals_off > 0 || t.max_error_rate.is_some()
+    enough_off_traffic(sample, t) || t.max_error_rate.is_some()
 }
 
 /// What a policy does when it trips.
@@ -1888,6 +1917,48 @@ mod tests {
     }
 
     #[test]
+    fn a_sliver_of_off_traffic_cannot_trip_a_comparison() {
+        // 99% rollout: 0.1% errors on, and the 99 evaluations left off saw
+        // none, as they almost always would (0.1 expected). Too little off
+        // traffic to compare against, so only maxErrorRate could trip.
+        let sample = s(10_000, 99, 10, 0);
+        assert_eq!(d(&sample), Decision::Healthy);
+        assert!(!can_trip(&sample, &Thresholds::default()));
+        // Nor does a ratio over a few off evaluations.
+        assert_eq!(d(&s(1000, 50, 100, 1)), Decision::Healthy);
+        // maxErrorRate still guards it.
+        let t = Thresholds {
+            max_error_rate: Some(0.0005),
+            ..Thresholds::default()
+        };
+        assert!(can_trip(&sample, &t));
+        assert_eq!(decide(&sample, &t), Decision::Trip(Trigger::MaxErrorRate));
+    }
+
+    #[test]
+    fn exactly_the_minimum_off_traffic_may_trip() {
+        // min_evaluations (100) off evaluations: both comparisons apply.
+        let at_min = s(1000, 100, 50, 0);
+        assert!(can_trip(&at_min, &Thresholds::default()));
+        assert_eq!(d(&at_min), Decision::Trip(Trigger::OffHasNoErrors));
+        assert_eq!(d(&s(1000, 100, 50, 1)), Decision::Trip(Trigger::ErrorRatio));
+        // One fewer, and neither does.
+        let below = s(1000, 99, 50, 0);
+        assert!(!can_trip(&below, &Thresholds::default()));
+        assert_eq!(d(&below), Decision::Healthy);
+        // The off minimum follows the policy's own min_evaluations.
+        let t = Thresholds {
+            min_evaluations: 20,
+            ..Thresholds::default()
+        };
+        assert_eq!(
+            decide(&s(1000, 20, 50, 0), &t),
+            Decision::Trip(Trigger::OffHasNoErrors)
+        );
+        assert_eq!(decide(&s(1000, 19, 50, 0), &t), Decision::Healthy);
+    }
+
+    #[test]
     fn a_max_rate_trips_without_off_traffic() {
         let t = Thresholds {
             max_error_rate: Some(0.01),
@@ -1960,7 +2031,12 @@ mod tests {
             (0, 0, 0, 0),
             (1000, 1000, 30, 10),
             (100, 1, 10, 1),
+            // Too little off traffic to compare: no longer a trip.
             (100, 1, 10, 0),
+            (10_000, 99, 10, 0),
+            (10_000, 100, 10, 0),
+            (1000, 100, 50, 0),
+            (1000, 99, 50, 0),
         ];
         for (evals_on, evals_off, errors_on, errors_off) in cases {
             let sample = s(evals_on, evals_off, errors_on, errors_off);

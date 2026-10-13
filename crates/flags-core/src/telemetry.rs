@@ -420,6 +420,12 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
             errors.enabled,
             on * 100.0
         ),
+        (Some(on), _, _) if evals.disabled < thresholds.min_evaluations => format!(
+            "Only {} evaluations with the flag off; too few to compare against. {:.2}% of on \
+             evaluations reported an error.",
+            evals.disabled,
+            on * 100.0
+        ),
         (Some(on), _, _) => format!(
             "No sign of the flag raising errors: {:.2}% of on evaluations reported an error.",
             on * 100.0
@@ -482,6 +488,22 @@ mod tests {
         };
         let s = assess(&evals, &Counts::default(), Some(0.0), None);
         assert!(s.contains("too few"), "{s}");
+    }
+
+    #[test]
+    fn too_little_off_traffic_is_named_not_called_healthy() {
+        let evals = Counts {
+            enabled: 10_000,
+            disabled: 99,
+        };
+        let errors = Counts {
+            enabled: 10,
+            disabled: 0,
+        };
+        let s = assess(&evals, &errors, Some(0.001), Some(0.0));
+        assert!(s.contains("Only 99 evaluations with the flag off"), "{s}");
+        assert!(!s.contains("Consider rolling back"), "{s}");
+        assert!(!s.contains("No sign"), "{s}");
     }
 
     #[test]

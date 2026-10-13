@@ -24,8 +24,8 @@ use super::out;
 use crate::server::{Flags, McpResult};
 
 /// Shown with a new policy that has no absolute error-rate ceiling.
-const NO_RATE_WARNING: &str = "this policy can trip only on maxErrorRate while the flag has no \
-                               off traffic; set maxErrorRate to guard a flag at 100%";
+const NO_RATE_WARNING: &str = "Without maxErrorRate this policy cannot trip while the flag has \
+                               too little off traffic (for example at 100% rollout).";
 
 /// The six threshold fields, shared by `set_rollback_policy` and
 /// `propose_rollback`.
@@ -148,8 +148,9 @@ fn note(decision: Decision, can_trip: bool) -> String {
         Decision::Healthy if can_trip => {
             "the sample is within the thresholds, so the policy would not act".into()
         }
-        _ => "the flag has no off traffic and maxErrorRate is unset, so this policy cannot trip \
-              until it does; set maxErrorRate to guard a flag at 100%"
+        _ => "not enough off traffic: the flag has fewer than minEvaluations evaluations with it \
+              off and maxErrorRate is unset, so this policy cannot trip; set maxErrorRate, or keep \
+              at least minEvaluations evaluations with the flag off (a rollout below 100%)"
             .into(),
     }
 }
@@ -417,7 +418,11 @@ mod tests {
     #[test]
     fn a_policy_that_cannot_trip_says_so() {
         for d in [Decision::BelowMinimums, Decision::Healthy] {
-            assert!(note(d, false).contains("cannot trip"));
+            let n = note(d, false);
+            assert!(n.contains("cannot trip"), "{n}");
+            assert!(n.contains("not enough off traffic"), "{n}");
+            assert!(n.contains("set maxErrorRate"), "{n}");
+            assert!(n.contains("evaluations with the flag off"), "{n}");
         }
     }
 
