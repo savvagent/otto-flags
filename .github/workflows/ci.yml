@@ -63,8 +63,10 @@ jobs:
         run: cargo test --workspace
 
   # Migrations are append-only. sqlx stores each applied migration's checksum
-  # and refuses to start against a database whose files no longer match, so
-  # editing even a comment in an applied migration takes down the next deploy.
+  # and refuses to start when a known file no longer matches, so editing even
+  # a comment in an applied migration takes down the next deploy. sqlx ignores
+  # applied versions it does not know (`MIGRATOR` sets `ignore_missing` for
+  # rollbacks), so this job is what catches a deleted or renamed migration.
   migrations-append-only:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
