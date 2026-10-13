@@ -883,7 +883,32 @@ async fn rollback_policies_are_org_isolated_and_replaced_in_place(pool: PgPool) 
     assert_eq!(first.state, PolicyState::Armed);
     assert_eq!(first.flag_key, "f");
 
+    // A flag from another app is refused.
+    let mut stray = flag.clone();
+    stray.app_id = flags_core::ids::FlagAppId::new();
+    let err = tx
+        .set_policy(
+            &app,
+            &stray,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument");
+
     // Tripped state survives a replacement (decision 4).
+    sqlx::query("UPDATE rollback_policies SET last_checked_at = now() - interval '5 minutes'")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let checked: Option<chrono::DateTime<Utc>> =
+        sqlx::query_scalar("SELECT last_checked_at FROM rollback_policies")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
     sqlx::query("UPDATE rollback_policies SET tripped_at = now()")
         .execute(tx.conn())
         .await
@@ -909,6 +934,7 @@ async fn rollback_policies_are_org_isolated_and_replaced_in_place(pool: PgPool) 
         .unwrap();
     assert_eq!(second.policy.id, first.policy.id);
     assert_eq!(second.policy.created_by, Some(actor));
+    assert_eq!(second.policy.last_checked_at, checked);
     assert_eq!(second.policy.mode, Mode::Observe);
     assert_eq!(second.policy.thresholds, t2);
     assert!(second.policy.tripped_at.is_some());
@@ -932,21 +958,12 @@ async fn rollback_policies_are_org_isolated_and_replaced_in_place(pool: PgPool) 
         .await
         .unwrap()
         .is_none());
-    assert!(!tx
-        .remove_policy(&app, &flag, "production", actor)
-        .await
-        .unwrap());
+    assert!(!tx.remove_policy(&flag, "production", actor).await.unwrap());
     tx.commit().await.unwrap();
 
     let mut tx = db.begin(a).await.unwrap();
-    assert!(tx
-        .remove_policy(&app, &flag, "production", actor)
-        .await
-        .unwrap());
-    assert!(!tx
-        .remove_policy(&app, &flag, "production", actor)
-        .await
-        .unwrap());
+    assert!(tx.remove_policy(&flag, "production", actor).await.unwrap());
+    assert!(!tx.remove_policy(&flag, "production", actor).await.unwrap());
     assert_eq!(
         audit_actions(&mut tx).await,
         vec![
@@ -1294,5 +1311,56 @@ async fn rollback_events_are_newest_first_and_capped(pool: PgPool) {
     );
     assert_eq!(tx.rollback_events(&app, None, 0).await.unwrap().len(), 1);
     assert_eq!(tx.rollback_events(&app, None, -5).await.unwrap().len(), 1);
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn every_outcome_text_satisfies_the_events_check(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    let all = [
+        rollback::Outcome::RolledBack,
+        rollback::Outcome::WouldRollBack,
+        rollback::Outcome::NotEntitled,
+        rollback::Outcome::EntitlementUnknown,
+    ];
+    for o in all {
+        sqlx::query(
+            "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+             VALUES ($1, $2, $3, 'production', $4, '{}'::jsonb)",
+        )
+        .bind(org)
+        .bind(policy.policy.id)
+        .bind(flag.id)
+        .bind(o.as_str())
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let mut got: Vec<_> = tx
+        .rollback_events(&app, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.outcome.as_str())
+        .collect();
+    got.sort();
+    let mut want: Vec<_> = all.iter().map(|o| o.as_str()).collect();
+    want.sort();
+    assert_eq!(got, want);
     tx.commit().await.unwrap();
 }

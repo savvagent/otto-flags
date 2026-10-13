@@ -211,6 +211,8 @@ pub enum Mode {
 #[serde(rename_all = "camelCase")]
 pub struct Policy {
     pub id: Uuid,
+    /// Not serialized: a caller already knows its own org.
+    #[serde(skip)]
     pub org_id: OrgId,
     pub app_id: FlagAppId,
     pub flag_id: FlagId,
@@ -363,7 +365,6 @@ pub trait RollbackExt {
     /// Delete a policy; whether there was one.
     fn remove_policy(
         &mut self,
-        app: &FlagApp,
         flag: &FeatureFlag,
         environment: &str,
         actor: UserId,
@@ -415,6 +416,12 @@ impl RollbackExt for Tx<'_> {
         t: Thresholds,
         actor: UserId,
     ) -> Result<PolicyView> {
+        if flag.app_id != app.id {
+            return Err(Error::Invalid(format!(
+                "flag '{}' does not belong to app '{}'",
+                flag.key, app.name
+            )));
+        }
         if !app.environments.iter().any(|e| e == environment) {
             return Err(Error::Invalid(format!(
                 "app '{}' has no environment '{environment}'; its environments are: {}",
@@ -471,7 +478,6 @@ impl RollbackExt for Tx<'_> {
 
     async fn remove_policy(
         &mut self,
-        _app: &FlagApp,
         flag: &FeatureFlag,
         environment: &str,
         actor: UserId,
@@ -649,6 +655,77 @@ mod tests {
 
     fn d(sample: &Sample) -> Decision {
         decide(sample, &Thresholds::default())
+    }
+
+    #[test]
+    fn outcome_text_round_trips_and_unknown_text_errs() {
+        for o in [
+            Outcome::RolledBack,
+            Outcome::WouldRollBack,
+            Outcome::NotEntitled,
+            Outcome::EntitlementUnknown,
+        ] {
+            assert_eq!(Outcome::try_from(o.as_str().to_string()), Ok(o));
+            assert_eq!(
+                serde_json::to_value(o).unwrap(),
+                serde_json::json!(o.as_str())
+            );
+        }
+        assert!(Outcome::try_from("exploded".to_string()).is_err());
+    }
+
+    #[test]
+    fn policy_views_serialize_flat_in_camel_case() {
+        let now = Utc::now();
+        let policy = Policy {
+            id: Uuid::nil(),
+            org_id: OrgId::new(),
+            app_id: FlagAppId::new(),
+            flag_id: FlagId::new(),
+            environment: "production".into(),
+            mode: Mode::Observe,
+            thresholds: Thresholds::default(),
+            tripped_at: None,
+            last_checked_at: None,
+            created_by: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let v = serde_json::to_value(PolicyView {
+            policy,
+            flag_key: "f".into(),
+            state: PolicyState::EnvironmentMissing,
+        })
+        .unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "appId",
+                "createdAt",
+                "createdBy",
+                "environment",
+                "flagId",
+                "flagKey",
+                "id",
+                "includeClientReports",
+                "lastCheckedAt",
+                "maxErrorRate",
+                "maxErrorRatio",
+                "minErrors",
+                "minEvaluations",
+                "mode",
+                "state",
+                "trippedAt",
+                "updatedAt",
+                "windowHours"
+            ]
+        );
+        assert_eq!(v["mode"], "observe");
+        assert_eq!(v["state"], "environmentMissing");
+        assert_eq!(v["minEvaluations"], 100);
     }
 
     #[test]
