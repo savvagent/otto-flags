@@ -182,6 +182,15 @@ MCP tools and the background checker.
 New file `crates/flags-core/migrations/0002_auto_rollback.sql`. Nothing in `0001_baseline.sql`
 changes (Rule 6).
 
+> **As shipped (review of #24):** the migration file is the source of truth; the SQL below is the
+> approved design. Review added: `SET LOCAL lock_timeout = '3s'`; the `reporter` and
+> `server_count` CHECKs added `NOT VALID` (plus `server_count <= count`); `rollback_policies_org_idx`
+> dropped (covered by `UNIQUE (org_id, id)`), `rollback_policies_due_idx` and
+> `rollback_events_policy_idx` instead of the flag/org indexes; `last_error_code` /
+> `last_error_at` on policies; `rollback_events.policy_id` nullable with
+> `ON DELETE SET NULL (policy_id)` (#28); and every unpinned policy also requires
+> `current_setting('app.maintenance', true) = 'on'`, set only by background maintenance code (#27).
+
 The migration as shipped differs from this sketch after review of #24: it opens with
 `SET LOCAL lock_timeout = '3s'`; the two CHECKs on existing tables are added `NOT VALID` (no
 validation scan under ACCESS EXCLUSIVE), and `server_count` is also checked `<= count`;
@@ -368,9 +377,12 @@ rollout the few evaluations left off show no errors by chance, so `evals_off > 0
 With the defaults this is exactly `telemetry::assess`'s "Consider rolling back" condition
 (`crates/flags-core/src/telemetry.rs:353-380`: 100 evaluations, 10 errors, 2x). `assess` is
 refactored to call `decide` with default thresholds, so the advice an agent reads from
-`flag_health` and the automatic action cannot disagree. `assess`'s rates are already `None` with
-no evaluations on a side (`telemetry.rs:311-313`), so with the defaults and no `max_error_rate`
-the two match exactly. `assess` keeps its wording; its tests are kept and pin the shared cases.
+`flag_health` and the automatic action share one rule. They judge different samples, so they can
+still disagree on the same flag: `flag_health` counts client-key reports, counts NULL-environment
+errors in every environment, and looks back a rolling window, while the checker counts server-key
+reports only by default, counts NULL-environment errors toward production only, and starts its
+window at the top of the hour (§4 Sample). `assess` keeps its other wording and gains one line for
+an off side too thin to compare against; its existing tests are kept and pin the shared cases.
 
 With fewer than `min_evaluations` off evaluations (a flag at or near 100%), only
 `max_error_rate` can trip a policy. That is allowed
@@ -455,7 +467,7 @@ domain call → commit).
 
 | Tool | Scope | Billable | Plan-gated | Does |
 |---|---|---|---|---|
-| `set_rollback_policy` | `flags:write` | yes | yes | Create or replace the policy for (app, flag, environment); omitted thresholds take the defaults. |
+| `set_rollback_policy` | `flags:write` | yes | yes | Create or replace the policy for (app, flag, environment); omitted thresholds take the defaults. Setting `includeClientReports: true` also needs a fresh owner/admin lookup, like app creation and key rotation. |
 | `remove_rollback_policy` | `flags:write` | no | no | Delete it (events cascade). Free and not plan-gated, so a downgraded or over-quota org can always clean up. |
 | `list_rollback_policies` | `flags:read` | no | no | Policies for an app, or one flag; includes armed/tripped state. |
 | `propose_rollback` | `flags:read` | no | no | Dry run: the current sample, the thresholds, and what `decide` says, for one policy or for ad-hoc thresholds on a flag and environment. Changes nothing. |
@@ -534,7 +546,8 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
    policy with no tuning automates what agents are already told. The window differs (§4 Sample).
 4. **Server-key telemetry only, by default** (premise 4), for errors and evaluations alike.
    Browser-only apps must opt in with `include_client_reports`, accepting that their public key
-   can be used to trip it.
+   can be used to trip it. Because that exposes a production environment to anyone holding the
+   public key, opting in needs an owner or admin (fresh platform lookup), added in review of #24.
 5. **Entitlement is checked at trip time, not only at creation,** so a downgrade stops
    automation within the 60 s cache, and a policy left behind is inert rather than deleted.
 6. **Fail closed on an unknown entitlement** (confirmed by Rob on 2026-10-09). If the platform cannot answer, no rollback happens

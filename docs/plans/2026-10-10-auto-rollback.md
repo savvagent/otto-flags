@@ -151,6 +151,15 @@ back.
    record a non-billable one). It is a dry run that commits nothing: its transaction is dropped,
    so a usage row would need a commit the tool otherwise never makes. Free tools' usage rows
    are for visibility only; nothing is lost but a count of dry runs.
+15. **Review of #24 changed these** (all recorded in the spec where they touch the design):
+   the comparative triggers need `min_evaluations` off evaluations; `includeClientReports: true`
+   needs an owner or admin; flags are locked `FOR NO KEY UPDATE`; checker transactions set a 2 s
+   lock timeout and a 10 s statement timeout, a whole check is bounded at 15 s, only transient
+   errors are retried, and each policy acts in its own savepoint, recording its last error code on
+   the policy when it fails; one failing policy no longer cools the whole flag down; `0002`/`0003`
+   set a lock timeout and add their CHECKs `NOT VALID`; unpinned reads also require the
+   `app.maintenance` marker that background code sets (#27); removing a policy keeps its events
+   with a NULL `policy_id` (#28); the dry run lives in `flags-core` as `rollback::propose`.
 
 ## File Structure
 
