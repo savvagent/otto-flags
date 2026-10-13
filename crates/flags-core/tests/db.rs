@@ -6,6 +6,7 @@ use chrono::Utc;
 use flags_core::apps::{AppsExt, Rotate};
 use flags_core::eval::{Context, Operator, Rule};
 use flags_core::flags::{ChangeMeta, EnvPatch, FlagPatch, FlagsExt, NewFlag};
+use flags_core::keys::KeyKind;
 use flags_core::platform_events::{self, begin_live, Outcome};
 use flags_core::telemetry::{self, ErrorEvent, EvalEvent};
 use flags_core::{eval, keys, Error};
@@ -536,12 +537,12 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         environment: "production".into(),
         at: now,
     });
-    let r = telemetry::record_evaluations(&mut tx, app.id, events.clone())
+    let r = telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events.clone())
         .await
         .unwrap();
-    assert_eq!((r.accepted, r.unknown_flags), (300, 1));
+    assert_eq!((r.receipt.accepted, r.receipt.unknown_flags), (300, 1));
     // A second batch adds to the same bucket rather than duplicating it.
-    telemetry::record_evaluations(&mut tx, app.id, events)
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events)
         .await
         .unwrap();
 
@@ -556,7 +557,7 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
             at: now,
         })
         .collect();
-    telemetry::record_errors(&mut tx, app.id, errors)
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Server, errors)
         .await
         .unwrap();
 
@@ -578,6 +579,92 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(stored, 2_000);
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn telemetry_records_the_reporting_key_kind(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let evals = |key: &str, n: usize| -> Vec<EvalEvent> {
+        (0..n)
+            .map(|_| EvalEvent {
+                flag_key: key.into(),
+                enabled: true,
+                variation: Some("v".into()),
+                environment: "production".into(),
+                at: now,
+            })
+            .collect()
+    };
+    let mut server_batch = evals("f", 3);
+    server_batch.extend(evals("gone", 1));
+    let recorded = telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, server_batch)
+        .await
+        .unwrap();
+    assert_eq!(
+        (recorded.receipt.accepted, recorded.receipt.unknown_flags),
+        (3, 1)
+    );
+    // Listed once however many events named it; unknown keys are excluded.
+    assert_eq!(recorded.flags, vec![flag.id]);
+    let recorded = telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, evals("f", 2))
+        .await
+        .unwrap();
+    assert_eq!(recorded.flags, vec![flag.id]);
+
+    let (count, server_count): (i64, i64) =
+        sqlx::query_as("SELECT count, server_count FROM flag_eval_hourly WHERE flag_id = $1")
+            .bind(flag.id)
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_eq!((count, server_count), (5, 3));
+
+    let error = || {
+        vec![ErrorEvent {
+            flag_key: "f".into(),
+            flag_enabled: true,
+            environment: Some("production".into()),
+            error_type: "E".into(),
+            error_message: "m".into(),
+            stack_trace: None,
+            at: now,
+        }]
+    };
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Server, error())
+        .await
+        .unwrap();
+    let recorded = telemetry::record_errors(&mut tx, app.id, KeyKind::Client, error())
+        .await
+        .unwrap();
+    assert_eq!(recorded.flags, vec![flag.id]);
+    let mut reporters: Vec<Option<String>> = sqlx::query_scalar("SELECT reporter FROM flag_errors")
+        .fetch_all(tx.conn())
+        .await
+        .unwrap();
+    reporters.sort();
+    assert_eq!(
+        reporters,
+        vec![Some("client".to_string()), Some("server".to_string())]
+    );
     tx.commit().await.unwrap();
 }
 

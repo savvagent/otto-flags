@@ -19,6 +19,7 @@ use sqlx::FromRow;
 
 use crate::error::Result;
 use crate::ids::{FlagAppId, FlagId};
+use crate::keys::KeyKind;
 
 pub const MAX_BATCH: usize = 1_000;
 pub const ERROR_RETENTION_DAYS: i32 = 14;
@@ -61,6 +62,15 @@ pub struct Receipt {
     pub unknown_flags: usize,
 }
 
+/// What recording a batch did: the receipt the SDK sees, and the flags the
+/// batch counted against (for whoever watches those flags next).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Recorded {
+    pub receipt: Receipt,
+    /// Flags this batch counted against, deduplicated and sorted.
+    pub flags: Vec<FlagId>,
+}
+
 fn truncate(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -93,11 +103,16 @@ async fn flag_ids(
     Ok(rows.into_iter().collect())
 }
 
+/// Fold evaluations into hourly buckets. `reporter` is the kind of the key
+/// that authenticated the request, never a field of the request: a client key
+/// is public, so `server_count` is the part of `count` that only a server key
+/// could have reported.
 pub async fn record_evaluations(
     tx: &mut Tx<'_>,
     app: FlagAppId,
+    reporter: KeyKind,
     events: Vec<EvalEvent>,
-) -> Result<Receipt> {
+) -> Result<Recorded> {
     let mut keys: Vec<String> = events.iter().map(|e| e.flag_key.clone()).collect();
     keys.sort();
     keys.dedup();
@@ -124,13 +139,16 @@ pub async fn record_evaluations(
         *buckets.entry(key).or_default() += 1;
         receipt.accepted += 1;
     }
+    let mut flags: Vec<FlagId> = buckets.keys().map(|k| k.0).collect();
+    flags.sort();
+    flags.dedup();
     if buckets.is_empty() {
-        return Ok(receipt);
+        return Ok(Recorded { receipt, flags });
     }
 
     let org = tx.org();
-    let (mut f, mut env, mut hour, mut en, mut var, mut n) =
-        (vec![], vec![], vec![], vec![], vec![], vec![]);
+    let (mut f, mut env, mut hour, mut en, mut var, mut n, mut server_n) =
+        (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     for ((flag, e, h, enabled, v), count) in buckets {
         f.push(flag.as_uuid());
         env.push(e);
@@ -138,12 +156,18 @@ pub async fn record_evaluations(
         en.push(enabled);
         var.push(v);
         n.push(count);
+        server_n.push(if reporter == KeyKind::Server {
+            count
+        } else {
+            0
+        });
     }
     sqlx::query(
-        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, variation, count) \
-         SELECT $1, * FROM UNNEST($2::uuid[], $3::text[], $4::timestamptz[], $5::bool[], $6::text[], $7::bigint[]) \
+        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, variation, count, server_count) \
+         SELECT $1, * FROM UNNEST($2::uuid[], $3::text[], $4::timestamptz[], $5::bool[], $6::text[], $7::bigint[], $8::bigint[]) \
          ON CONFLICT (flag_id, environment, hour, enabled, variation) \
-         DO UPDATE SET count = flag_eval_hourly.count + EXCLUDED.count",
+         DO UPDATE SET count = flag_eval_hourly.count + EXCLUDED.count, \
+                       server_count = flag_eval_hourly.server_count + EXCLUDED.server_count",
     )
     .bind(org)
     .bind(f)
@@ -152,16 +176,20 @@ pub async fn record_evaluations(
     .bind(en)
     .bind(var)
     .bind(n)
+    .bind(server_n)
     .execute(tx.conn())
     .await?;
-    Ok(receipt)
+    Ok(Recorded { receipt, flags })
 }
 
+/// Store errors raw, tagged with the kind of key that reported them (see
+/// [`record_evaluations`]).
 pub async fn record_errors(
     tx: &mut Tx<'_>,
     app: FlagAppId,
+    reporter: KeyKind,
     events: Vec<ErrorEvent>,
-) -> Result<Receipt> {
+) -> Result<Recorded> {
     let mut keys: Vec<String> = events.iter().map(|e| e.flag_key.clone()).collect();
     keys.sort();
     keys.dedup();
@@ -169,15 +197,17 @@ pub async fn record_errors(
     let now = Utc::now();
     let org = tx.org();
     let mut receipt = Receipt::default();
+    let mut flags = vec![];
     for e in events {
         let Some(id) = ids.get(&e.flag_key) else {
             receipt.unknown_flags += 1;
             continue;
         };
+        flags.push(*id);
         sqlx::query(
             "INSERT INTO flag_errors \
-               (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
         )
         .bind(org)
         .bind(id)
@@ -187,11 +217,14 @@ pub async fn record_errors(
         .bind(truncate(&e.error_message, MAX_ERROR_MESSAGE))
         .bind(e.stack_trace.as_deref().map(|s| truncate(s, MAX_STACK)))
         .bind(sane(e.at, now))
+        .bind(reporter.as_str())
         .execute(tx.conn())
         .await?;
         receipt.accepted += 1;
     }
-    Ok(receipt)
+    flags.sort();
+    flags.dedup();
+    Ok(Recorded { receipt, flags })
 }
 
 // --------------------------------------------------------------------- health

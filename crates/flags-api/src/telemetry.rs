@@ -111,9 +111,9 @@ pub async fn evaluations(
         })
         .collect();
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
-    let receipt = telemetry::record_evaluations(&mut tx, sdk.0.app_id, events).await?;
+    let recorded = telemetry::record_evaluations(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
     tx.commit().await?;
-    Ok(Json(receipt))
+    Ok(Json(recorded.receipt))
 }
 
 pub async fn errors(
@@ -136,9 +136,9 @@ pub async fn errors(
         })
         .collect();
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
-    let receipt = telemetry::record_errors(&mut tx, sdk.0.app_id, events).await?;
+    let recorded = telemetry::record_errors(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
     tx.commit().await?;
-    Ok(Json(receipt))
+    Ok(Json(recorded.receipt))
 }
 
 #[cfg(test)]
