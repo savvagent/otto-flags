@@ -331,6 +331,17 @@ const reconnect = (attempt) => {
 
 SDKs should report evaluation metrics and errors back to Otto Flags for analytics.
 
+Report telemetry with the key the SDK already holds: a server SDK sends it with its server key
+(`srv_`), a browser or mobile SDK with the public client key (`sdk_`). The examples below show a
+server SDK. Both endpoints record which kind of key sent each report (never a field of the
+request), and auto-rollback counts only server-key reports by default (see below), so a server
+SDK must send evaluations as well as errors with its server key: errors and evaluations are split
+by key kind the same way, and a policy compares the two.
+
+Both payloads take an optional `environment` per event (or `context.environment`). Omitted, an
+evaluation counts toward `production`; an error is stored without one, which auto-rollback counts
+toward `production` and `flag_health` counts in every environment.
+
 #### Track Evaluations
 
 **Endpoint:** `POST /api/telemetry/evaluations`
@@ -340,7 +351,7 @@ Batch evaluation events for analytics.
 ```http
 POST /api/telemetry/evaluations
 Content-Type: application/json
-Authorization: Bearer sdk_xxx
+Authorization: Bearer srv_xxx
 
 {
   "evaluations": [
@@ -348,6 +359,7 @@ Authorization: Bearer sdk_xxx
       "flag_key": "dark-mode",
       "result": true,
       "user_id": "user-123",
+      "environment": "production",
       "context": { ... },
       "timestamp": 1700000000
     }
@@ -366,7 +378,7 @@ Report errors that occur while a flag is enabled (for AI-powered correlation).
 ```http
 POST /api/telemetry/errors
 Content-Type: application/json
-Authorization: Bearer sdk_xxx
+Authorization: Bearer srv_xxx
 
 {
   "errors": [
@@ -376,6 +388,7 @@ Authorization: Bearer sdk_xxx
       "error_type": "TypeError",
       "error_message": "Cannot read property 'x' of undefined",
       "stack_trace": "...",
+      "environment": "production",
       "context": { ... },
       "timestamp": 1700000000
     }
@@ -383,10 +396,15 @@ Authorization: Bearer sdk_xxx
 }
 ```
 
-**Auto-rollback:** telemetry reported with the server key (`srv_`) drives auto-rollback. Reports
-made with the client key (`sdk_`) count only for policies that opt in (`includeClientReports`),
-because the client key is public and anyone holding it can send reports. Error reports without
-an `environment` count toward `production`. This needs no wire change.
+A browser or mobile SDK sends the same bodies with `Authorization: Bearer sdk_xxx`.
+
+**Auto-rollback:** telemetry reported with the server key (`srv_`) drives auto-rollback: both its
+evaluations and its errors. Reports made with the client key (`sdk_`) count only for policies
+that opt in (`includeClientReports`, which only an org owner or admin can set), because the
+client key is public and anyone holding it can send reports. A server SDK that sends errors with
+`srv_` but evaluations with `sdk_` gives a policy errors and no evaluations to compare them with,
+so it never trips. Error reports without an `environment` count toward `production`. The wire
+format is unchanged: `environment` was already accepted.
 
 ---
 

@@ -4,8 +4,17 @@
 //! The decision is pure: the thresholds a policy carries and [`decide`], the one
 //! definition of "this flag is misbehaving". `flag_health`'s advice
 //! ([`crate::telemetry`]'s `assess`) calls the same function with the default
-//! thresholds, so what an agent is told and what the checker does cannot
-//! disagree.
+//! thresholds, so the two apply the same *rule*. They do not judge the same
+//! *sample*, so on the same flag they can still disagree:
+//!
+//! - `flag_health` counts every report; the checker counts only server-key
+//!   reports unless a policy sets `include_client_reports`.
+//! - `flag_health` counts errors with no environment in every environment it
+//!   is asked about; the checker counts them toward `production` only.
+//! - `flag_health` looks back a rolling `window_hours` from now (evaluations
+//!   from the start of the hour that falls in); the checker's window is
+//!   hour-aligned: the current hour so far plus the `window_hours - 1` before
+//!   it ([`RollbackExt::sample`]).
 //!
 //! Comparing the error rate with the flag on against the rate with it off
 //! needs evidence on both sides: the comparative triggers apply only when the
@@ -306,8 +315,11 @@ pub struct Policy {
     #[sqlx(flatten)]
     #[serde(flatten)]
     pub thresholds: Thresholds,
-    /// Set when the policy tripped; cleared when the environment is turned
-    /// back on. A tripped policy does not act again.
+    /// Set only when an enforcing policy turned its environment off (or
+    /// found it already off) with the plan's entitlement granted; cleared when
+    /// the environment is turned back on. Observe-mode, not-entitled, and
+    /// unknown-entitlement trips leave it unset: the policy stays armed and
+    /// the trip shows only in the events. A tripped policy does not act again.
     pub tripped_at: Option<DateTime<Utc>>,
     pub last_checked_at: Option<DateTime<Utc>>,
     pub created_by: Option<UserId>,
@@ -320,7 +332,9 @@ pub struct Policy {
 pub enum PolicyState {
     /// Watching.
     Armed,
-    /// Acted (or would have); waiting for the environment to be turned back on.
+    /// An enforcing policy turned the environment off; waiting for it to be
+    /// turned back on. Observe-mode, not-entitled, and unknown-entitlement
+    /// trips leave a policy armed (see [`Policy::tripped_at`]).
     Tripped,
     /// The app no longer has this policy's environment; the policy cannot act.
     EnvironmentMissing,

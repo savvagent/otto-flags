@@ -86,28 +86,38 @@ A hand deploy is `fly deploy -a otto-flags --remote-only`.
 A policy per (flag, environment) disables that environment as an ordinary flag version (change
 `auto_rollback`, no user actor) when the error rate with the flag on exceeds the rate with it off.
 It shows in `flag_history` and is undone with `rollback_flag` or `set_flag_environment`; turning
-the environment back on re-arms the policy. Defaults: at least 100 evaluations and 10 errors
-with the flag on, at least 100 evaluations with it off, and an on-rate more than 2x the off-rate
-(or off traffic with no errors at all), over this hour so far (`windowHours` 1-24). An optional
-`maxErrorRate` trips on the on-rate alone, and is the only trigger with less off traffic than
-that (a rollout at or near 100%). Only server-key reports count unless a policy sets `includeClientReports`.
-Mode `observe` records what would have happened without changing the flag.
+the environment back on re-arms the policy (setting the policy again does not). Defaults: at
+least 100 evaluations and 10 errors with the flag on, at least 100 evaluations with it off, and
+an on-rate more than 2x the off-rate (or off traffic with no errors at all). The window is
+hour-aligned: the current hour so far plus the `windowHours - 1` hours before it (`windowHours`
+1-24, default 1, which is this hour so far). An optional `maxErrorRate` trips on the on-rate
+alone, and is the only trigger with less off traffic than that (a rollout at or near 100%). Only
+server-key reports count unless a policy sets `includeClientReports` (owner or admin only). Mode
+`observe` records what would have happened without changing the flag.
 
 - **Plan-gated.** Every paid plan (team, business, enterprise) includes `auto_rollback` through
-  the platform's `plans.features` (otto-platform 0.5.0); free does not. The answer is cached for
-  60 s and fails closed: a timeout or platform error means no rollback, recorded as
-  `entitlement_unknown`. Creating or changing a policy is billed; removing, listing,
-  `propose_rollback`, and `rollback_events` are free.
+  the platform's `plans.features` (otto-platform 0.5.0, savvagent/otto-platform#30); free does
+  not. A successful answer is cached for 60 s by the platform client; a failed lookup is
+  remembered for 10 s, so an outage costs one 2 s timeout per org per 10 s. It fails closed: a
+  timeout or platform error means no rollback, recorded as `entitlement_unknown`. Creating or
+  changing a policy is billed; removing, listing, `propose_rollback`, and `rollback_events` are
+  free.
 - **When it checks.** When SDK telemetry arrives, plus a 5-minute pass while the machine is
   awake. That works with `auto_stop_machines = "suspend"` and changes no cost. Detection latency
-  is bounded by the SDKs' telemetry flush intervals.
+  is the SDK's telemetry flush interval, plus up to the 30 s per-flag debounce, plus any checks
+  queued ahead of it (flags are checked one at a time; each check gives up after 15 s, and waits
+  at most 2 s for a flag's row lock, and is then retried).
 - **Outcomes** in `rollback_events`: `rolled_back`, `would_roll_back` (observe), `not_entitled`,
   `entitlement_unknown`. Suppressed outcomes are recorded at most once per hour per policy.
   Events are kept 90 days.
 - **No new secret, env var, scope, or recurring cost.**
-- **Rolling the image back.** Once migrations `0002` (auto-rollback) and `0003` are applied,
-  sqlx refuses to boot an older image that does not know them, so `fly deploy` of a pre-0002
-  image fails. Recovery is roll-forward.
+- **Rolling the image back.** #31 (merged before this change) makes the migrator ignore applied
+  migrations an image does not know, so an image built from #31 onward boots against the newer
+  schema: rolling back to the release just before auto-rollback works, and that release simply
+  ignores the auto-rollback tables (no policy is checked while it serves; policies and events
+  are kept). An image from before #31 still refuses to boot once `0002` and `0003` are applied,
+  so going back that far means rolling forward instead. `0002` and `0003` are additive, so the
+  older release's writes still satisfy them.
 - Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
   non-exempt pool role.
 
@@ -115,7 +125,7 @@ Diagnostics (SELECT-only):
 
 ```sql
 SELECT outcome, count(*) FROM rollback_events GROUP BY 1;
-SELECT count(*) FILTER (WHERE tripped_at IS NULL), count(*) FROM rollback_policies;
+SELECT count(*) FILTER (WHERE tripped_at IS NULL) AS armed, count(*) AS total FROM rollback_policies;
 ```
 
 ## Checking it

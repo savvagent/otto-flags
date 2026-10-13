@@ -400,7 +400,12 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
         );
     }
     // The same rule the auto-rollback checker applies, with the defaults, so
-    // this advice and that action cannot disagree.
+    // the advice and the action follow one definition. Not the same sample:
+    // these counts include client-key reports, count errors with no
+    // environment in every environment, and cover a rolling window, where the
+    // checker counts server reports by default, NULL-environment errors in
+    // production only, and an hour-aligned window (see `rollback`'s module
+    // docs), so the two can still disagree on one flag.
     let sample = Sample {
         evals_on: evals.enabled,
         evals_off: evals.disabled,
