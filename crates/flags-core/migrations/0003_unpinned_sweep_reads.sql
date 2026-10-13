@@ -30,3 +30,22 @@ CREATE POLICY flag_eval_hourly_retention_read ON flag_eval_hourly
 CREATE POLICY platform_events_retention_read ON platform_events
   FOR SELECT USING (current_org() IS NULL
                     AND current_setting('app.maintenance', true) = 'on');
+
+-- 0001's DELETE-only retention policies (flag_errors_retention and siblings)
+-- grant an unpinned DELETE with no marker, and a DELETE with no WHERE reads no
+-- columns, so it needs no SELECT policy: an unmarked unpinned
+-- `DELETE FROM flag_errors` would still empty the table across orgs (#27).
+-- A RESTRICTIVE policy ANDs with those permissive ones, so an unpinned DELETE
+-- now also needs the maintenance marker, WHERE clause or not. Pinned deletes
+-- (the org.deleted purge's per-org loop, any per-org write) are unaffected:
+-- current_org() is set. audit_events is left alone: otto_app has no DELETE
+-- on it, and its unpinned purge delete is #21's.
+CREATE POLICY flag_errors_maintenance_delete ON flag_errors
+  AS RESTRICTIVE FOR DELETE
+  USING (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');
+CREATE POLICY flag_eval_hourly_maintenance_delete ON flag_eval_hourly
+  AS RESTRICTIVE FOR DELETE
+  USING (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');
+CREATE POLICY platform_events_maintenance_delete ON platform_events
+  AS RESTRICTIVE FOR DELETE
+  USING (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');

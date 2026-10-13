@@ -3334,3 +3334,76 @@ async fn removing_a_policy_keeps_its_events(pool: PgPool) {
     assert_eq!(tx.rollback_events(&app, None, 10).await.unwrap().len(), 1);
     tx.commit().await.unwrap();
 }
+
+/// An unpinned DELETE with no WHERE needs no SELECT policy, so 0001's
+/// DELETE-only retention policies alone would let an unmarked one empty the
+/// table across orgs. The restrictive maintenance_delete policies refuse it
+/// without the marker; with it, or pinned to an org, deletes still work.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unmarked_unpinned_deletes_touch_nothing(pool: PgPool) {
+    let admin = db(pool.clone()).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, _) = policy_fixture(&admin, org, actor).await;
+    let tables = ["flag_errors", "flag_eval_hourly", "platform_events"];
+    let seed = || async {
+        let mut tx = admin.begin(org).await.unwrap();
+        telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(1, true))
+            .await
+            .unwrap();
+        telemetry::record_errors(
+            &mut tx,
+            app.id,
+            KeyKind::Server,
+            error_events(1, true, Some("production")),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO platform_events (event_id, org_id, kind) \
+             VALUES ($1, $2, 'member.removed')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(org)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    };
+    seed().await;
+
+    for table in tables {
+        let mut tx = as_app_unpinned(&pool).await;
+        let n = sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(n, 0, "an unmarked unpinned DELETE emptied {table}");
+        tx.rollback().await.unwrap();
+
+        let mut tx = as_app_maintenance(&pool).await;
+        let n = sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(n, 1, "a marked DELETE on {table}");
+        tx.rollback().await.unwrap();
+    }
+
+    // Pinned deletes (the org.deleted purge's loop) need no marker.
+    let app_db = otto_app_db(&pool).await;
+    let mut tx = app_db.begin(org).await.unwrap();
+    for table in tables {
+        let n = sqlx::query(&format!("DELETE FROM {table} WHERE org_id = $1"))
+            .bind(org)
+            .execute(tx.conn())
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(n, 1, "a pinned DELETE on {table}");
+    }
+    tx.rollback().await.unwrap();
+    app_db.pool().close().await;
+}
