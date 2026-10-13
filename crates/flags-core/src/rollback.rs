@@ -35,7 +35,9 @@
 //! Hints are debounced per flag: a flag is checked at most once per
 //! [`CheckerConfig::debounce`] (30 s). A hint for a flag checked more recently
 //! than that is deferred to the end of the interval (the trailing edge), never
-//! dropped, so the batch that crossed a threshold is checked within 30 s.
+//! dropped, so the batch that crossed a threshold is normally checked within
+//! 30 s (later when checks of other flags are queued ahead of it, since flags
+//! are checked one at a time).
 //!
 //! While the process is awake, a backstop pass every
 //! [`CheckerConfig::backstop_every`] (5 min) asks [`due_policies`] for
@@ -101,7 +103,9 @@ use otto_tenant::audit::Entry;
 #[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Thresholds {
-    /// Evaluations with the flag on needed before judging (>= 1).
+    /// Evaluations with the flag on needed before judging, and with it off
+    /// before the comparative triggers (`max_error_ratio`, off-has-no-errors)
+    /// apply (>= 1).
     pub min_evaluations: i64,
     /// Errors with the flag on needed before judging (>= 1).
     pub min_errors: i64,
@@ -109,7 +113,8 @@ pub struct Thresholds {
     /// factor (> 1.0).
     pub max_error_ratio: f64,
     /// Trip when the on error rate exceeds this absolute rate (0 < r <= 1).
-    /// The only trigger that works with no off traffic.
+    /// The only trigger that works with too little off traffic (fewer than
+    /// `min_evaluations` evaluations with the flag off).
     pub max_error_rate: Option<f64>,
     /// How far back the sample reaches, in hours (1 to 24).
     pub window_hours: i32,
@@ -208,7 +213,8 @@ pub enum Trigger {
     MaxErrorRate,
     /// The on error rate is more than `max_error_ratio` times the off rate.
     ErrorRatio,
-    /// The flag is erroring while on and the off side has traffic but no errors.
+    /// The flag is erroring while on, and the off side has enough traffic
+    /// (`min_evaluations`) but no errors.
     OffHasNoErrors,
 }
 
@@ -1008,8 +1014,9 @@ pub async fn due_policies(
     Ok(due)
 }
 
-/// Check every armed policy of one flag and act on the ones that trip
-/// (spec §4, "Acting on a trip").
+/// Check every armed policy of one flag and act on the ones that trip: an
+/// enforcing policy turns its environment off, the others record what would
+/// have happened, in the steps below.
 ///
 /// 1. A `begin_live` transaction (refused for a deleted org) reads the armed
 ///    policies and samples each. Policies that do not trip, or cannot act

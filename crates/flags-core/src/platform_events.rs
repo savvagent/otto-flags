@@ -106,7 +106,7 @@ async fn exclude_requests(tx: &mut Tx<'_>, org: OrgId) -> Result<()> {
 
 /// Housekeeping: forget dedupe markers older than `keep_days` and expired
 /// removed-member tombstones. Unpinned, in a maintenance transaction
-/// ([`crate::maintenance`]), which `platform_events`' retention policies
+/// (`crate::maintenance`), which `platform_events`' retention policies
 /// require.
 pub async fn sweep(db: &Db, keep_days: i32) -> Result<u64> {
     let mut tx = crate::maintenance::begin(db).await?;

@@ -59,7 +59,8 @@ Auto-rollback is on paid plans: set_rollback_policy arms it for a flag in one \
 environment, propose_rollback shows what it would do right now without changing \
 anything, list_rollback_policies shows the policies and whether each is armed, \
 rollback_events shows what they have done, and remove_rollback_policy deletes one. \
-By default only telemetry sent with the app's server key counts. An environment \
+By default only telemetry sent with the app's server key counts; counting the \
+public client key's reports too (includeClientReports) needs an owner or admin. An environment \
 auto-rollback turned off stays off until someone turns it back on, which also \
 re-arms its policy.
 
@@ -241,6 +242,7 @@ mod tests {
             "rollback_events",
             "server key",
             "stays off until someone turns it back on",
+            "includeClientReports) needs an owner or admin",
         ] {
             assert!(
                 INSTRUCTIONS.contains(phrase),

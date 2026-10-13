@@ -385,7 +385,8 @@ fn inert(s: &str, max: usize) -> String {
 /// Turn the numbers into a sentence. Deliberately conservative: it says what
 /// the data shows and how much of it there is, and leaves the decision to the
 /// agent and the person it works for.
-// pub(crate) so the agreement test in `rollback` can call it.
+// pub(crate) so `rollback`'s wiring test (`assess_and_decide_agree`) can check
+// that this advice says "Consider rolling back" exactly when `decide` trips.
 pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
     if evals.enabled == 0 && evals.disabled == 0 {
         return "No evaluations reported in this window. Either the flag is not being \
@@ -441,7 +442,7 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
 
 /// Retention: drop old error reports, evaluation buckets, and rollback events.
 /// Unpinned, across every org: each DELETE runs in its own maintenance
-/// transaction ([`crate::maintenance`]), which the tables' retention policies
+/// transaction (`crate::maintenance`), which the tables' retention policies
 /// require.
 pub async fn sweep(db: &Db) -> Result<u64> {
     let mut swept = 0;
