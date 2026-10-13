@@ -5,13 +5,12 @@
 use flags_core::apps::{FlagApp, IssuedKeys};
 use flags_core::eval::Evaluation;
 use flags_core::flags::{FeatureFlag, FlagVersion};
-use flags_core::rollback::{Event, Observation, PolicyView};
+use flags_core::rollback::{Event, PolicyView, Proposal};
 use flags_core::telemetry::Health;
 use flags_core::usage::Status;
 use otto_tenant::ids::{OrgId, UserId};
 use schemars::JsonSchema;
 use serde::Serialize;
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -179,14 +178,8 @@ pub struct RemovedPolicyOut {
 pub struct ProposalOut {
     pub key: String,
     pub environment: String,
-    /// The existing policy the thresholds started from, if any.
-    pub policy_id: Option<Uuid>,
-    /// The current sample, the thresholds judged, and the decision.
-    pub observation: Observation,
-    pub would_trip: bool,
-    /// False when these thresholds can never trip on this sample's shape.
-    pub can_trip: bool,
-    pub note: String,
+    #[serde(flatten)]
+    pub proposal: Proposal,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

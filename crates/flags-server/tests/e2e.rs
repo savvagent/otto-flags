@@ -1151,3 +1151,73 @@ async fn propose_rollback_changes_nothing(pool: PgPool) {
     .unwrap();
     assert_eq!(events["events"], json!([]), "{events}");
 }
+
+/// Counting public client-key reports lets anyone holding that key steer the
+/// rollback, so opting in takes an owner or admin, checked at the platform
+/// now, as creating an app does.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn counting_client_reports_needs_an_owner_or_admin(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    platform.lock().unwrap().entitled.insert(org);
+    let (_, _, _, _) = org_with_flag(&s, &platform, org, "risky").await;
+    let member = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Member,
+        flags_core::scopes::KNOWN,
+    );
+    let admin = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Admin,
+        flags_core::scopes::KNOWN,
+    );
+    let opt_in = json!({"app": "web", "key": "risky", "environment": "production",
+                        "includeClientReports": true});
+
+    let err = tool(&s.app, &member, "set_rollback_policy", opt_in.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(err["data"]["code"], "forbidden", "{err}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("includeClientReports"),
+        "{err}"
+    );
+    let listed = tool(
+        &s.app,
+        &member,
+        "list_rollback_policies",
+        json!({"app": "web"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(listed["policies"], json!([]), "{listed}");
+
+    // A member may still arm a policy that counts server reports only.
+    let plain = tool(
+        &s.app,
+        &member,
+        "set_rollback_policy",
+        json!({"app": "web", "key": "risky", "environment": "production"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plain["policy"]["includeClientReports"], false, "{plain}");
+    // Turning it on for an existing policy is refused the same way.
+    let err = tool(&s.app, &member, "set_rollback_policy", opt_in.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(err["data"]["code"], "forbidden", "{err}");
+
+    let set = tool(&s.app, &admin, "set_rollback_policy", opt_in)
+        .await
+        .unwrap();
+    assert_eq!(set["policy"]["includeClientReports"], true, "{set}");
+}

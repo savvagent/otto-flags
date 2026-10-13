@@ -504,19 +504,8 @@ impl RollbackExt for Tx<'_> {
         t: Thresholds,
         actor: UserId,
     ) -> Result<PolicyView> {
-        if flag.app_id != app.id {
-            return Err(Error::Invalid(format!(
-                "flag '{}' does not belong to app '{}'",
-                flag.key, app.name
-            )));
-        }
-        if !app.environments.iter().any(|e| e == environment) {
-            return Err(Error::Invalid(format!(
-                "app '{}' has no environment '{environment}'; its environments are: {}",
-                app.name,
-                app.environments.join(", ")
-            )));
-        }
+        require_flag_in_app(app, flag)?;
+        require_environment(app, environment)?;
         t.validate()?;
         let org = self.org();
         let policy: Policy = sqlx::query_as(&format!(
@@ -769,6 +758,143 @@ pub(crate) async fn rearm(
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+// ------------------------------------------------------------ the dry run
+
+/// Threshold fields to change; `None` keeps the base value.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThresholdOverrides {
+    pub min_evaluations: Option<i64>,
+    pub min_errors: Option<i64>,
+    pub max_error_ratio: Option<f64>,
+    pub max_error_rate: Option<f64>,
+    pub window_hours: Option<i32>,
+    pub include_client_reports: Option<bool>,
+}
+
+/// `base` with every given field replaced. An omitted `max_error_rate` keeps
+/// the base's, so overrides cannot clear one.
+///
+/// ```
+/// use flags_core::rollback::{overlay, ThresholdOverrides, Thresholds};
+/// let t = overlay(
+///     Thresholds { max_error_rate: Some(0.2), ..Thresholds::default() },
+///     &ThresholdOverrides { window_hours: Some(6), ..Default::default() },
+/// );
+/// assert_eq!((t.window_hours, t.max_error_rate), (6, Some(0.2)));
+/// ```
+pub fn overlay(base: Thresholds, o: &ThresholdOverrides) -> Thresholds {
+    Thresholds {
+        min_evaluations: o.min_evaluations.unwrap_or(base.min_evaluations),
+        min_errors: o.min_errors.unwrap_or(base.min_errors),
+        max_error_ratio: o.max_error_ratio.unwrap_or(base.max_error_ratio),
+        max_error_rate: o.max_error_rate.or(base.max_error_rate),
+        window_hours: o.window_hours.unwrap_or(base.window_hours),
+        include_client_reports: o
+            .include_client_reports
+            .unwrap_or(base.include_client_reports),
+    }
+}
+
+/// What a policy would decide right now, without acting.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Proposal {
+    /// The stored policy the thresholds started from, if any.
+    pub policy_id: Option<Uuid>,
+    /// The current sample, the thresholds judged, and the decision on the
+    /// numbers alone.
+    pub observation: Observation,
+    /// Whether a check now would act (or record, in observe mode): the
+    /// numbers trip and the policy can act.
+    pub would_trip: bool,
+    /// False when these thresholds can never trip on this sample's shape.
+    pub can_trip: bool,
+    /// False when the flag is archived or the app no longer has the
+    /// environment: then no policy acts, whatever the numbers say.
+    pub can_act: bool,
+    /// One sentence saying what this means.
+    pub note: String,
+}
+
+/// The dry run behind `propose_rollback`: the stored policy for `flag` in
+/// `environment` (or the defaults), with `overrides` applied and validated,
+/// judged on the current sample exactly as the checker would. Reads only.
+///
+/// The environment must be one of the app's (the check `set_policy` makes),
+/// unless a stored policy names it: a policy whose environment the app
+/// dropped is reported as unable to act, as an archived flag's is. The
+/// policy's mode and the org's plan are not considered.
+pub async fn propose(
+    tx: &mut Tx<'_>,
+    app: &FlagApp,
+    flag: &FeatureFlag,
+    environment: &str,
+    overrides: &ThresholdOverrides,
+) -> Result<Proposal> {
+    require_flag_in_app(app, flag)?;
+    let existing = tx.find_policy(flag.id, environment).await?;
+    if existing.is_none() {
+        require_environment(app, environment)?;
+    }
+    let thresholds = overlay(
+        existing
+            .as_ref()
+            .map_or_else(Thresholds::default, |p| p.thresholds.clone()),
+        overrides,
+    );
+    thresholds.validate()?;
+    let (window_start, sample) = tx.sample(flag.id, environment, &thresholds).await?;
+    let decision = decide(&sample, &thresholds);
+    let can_trip = can_trip(&sample, &thresholds);
+    let blocked = blocked(flag, app, environment);
+    Ok(Proposal {
+        policy_id: existing.map(|p| p.id),
+        would_trip: blocked.is_none() && matches!(decision, Decision::Trip(_)),
+        can_trip,
+        can_act: blocked.is_none(),
+        note: note(decision, can_trip, blocked),
+        observation: Observation {
+            window_start,
+            rate_on: sample.rate_on(),
+            rate_off: sample.rate_off(),
+            sample,
+            thresholds,
+            decision,
+        },
+    })
+}
+
+/// One sentence saying what the sample means for these thresholds.
+fn note(decision: Decision, can_trip: bool, blocked: Option<Blocked>) -> String {
+    let numbers = match decision {
+        Decision::Trip(_) => "this policy would trip on the current sample",
+        Decision::BelowMinimums if can_trip => {
+            "the sample is below the minimums, so the policy would not act yet"
+        }
+        Decision::Healthy if can_trip => {
+            "the sample is within the thresholds, so the policy would not act"
+        }
+        _ => {
+            "not enough off traffic: the flag has fewer than minEvaluations evaluations with \
+             it off and maxErrorRate is unset, so this policy cannot trip; set maxErrorRate, \
+             or keep at least minEvaluations evaluations with the flag off (a rollout below \
+             100%)"
+        }
+    };
+    match blocked {
+        None => numbers.to_string(),
+        Some(Blocked::Archived) => format!(
+            "the flag is archived, so no policy acts on it until it is restored; on the \
+             numbers alone, {numbers}"
+        ),
+        Some(Blocked::EnvironmentMissing) => format!(
+            "the app no longer has this environment, so this policy cannot act (add the \
+             environment back with update_app, or remove the policy); on the numbers alone, \
+             {numbers}"
+        ),
+    }
 }
 
 // ------------------------------------------------------------ the checker
@@ -1035,7 +1161,46 @@ async fn enforce(
 
 /// A policy can act only on an active flag, in an environment its app still has.
 fn can_act(flag: &FeatureFlag, app: &FlagApp, policy: &Policy) -> bool {
-    flag.status == FlagStatus::Active && app.environments.contains(&policy.environment)
+    blocked(flag, app, &policy.environment).is_none()
+}
+
+/// Why a policy on `flag` in `environment` cannot act, if it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Blocked {
+    Archived,
+    EnvironmentMissing,
+}
+
+fn blocked(flag: &FeatureFlag, app: &FlagApp, environment: &str) -> Option<Blocked> {
+    if flag.status != FlagStatus::Active {
+        Some(Blocked::Archived)
+    } else if !app.environments.iter().any(|e| e == environment) {
+        Some(Blocked::EnvironmentMissing)
+    } else {
+        None
+    }
+}
+
+fn require_flag_in_app(app: &FlagApp, flag: &FeatureFlag) -> Result<()> {
+    if flag.app_id != app.id {
+        return Err(Error::Invalid(format!(
+            "flag '{}' does not belong to app '{}'",
+            flag.key, app.name
+        )));
+    }
+    Ok(())
+}
+
+/// The environment check `set_policy` and [`propose`] share.
+fn require_environment(app: &FlagApp, environment: &str) -> Result<()> {
+    if !app.environments.iter().any(|e| e == environment) {
+        return Err(Error::Invalid(format!(
+            "app '{}' has no environment '{environment}'; its environments are: {}",
+            app.name,
+            app.environments.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 fn env_enabled(flag: &FeatureFlag, environment: &str) -> bool {
@@ -2000,6 +2165,77 @@ mod tests {
             d(&s(100, 1000, 10, 0)),
             Decision::Trip(Trigger::OffHasNoErrors)
         );
+    }
+
+    #[test]
+    fn notes_say_what_the_numbers_mean() {
+        assert!(note(Decision::Trip(Trigger::ErrorRatio), true, None).contains("would trip"));
+        assert!(note(Decision::BelowMinimums, true, None).contains("below the minimums"));
+        assert!(note(Decision::Healthy, true, None).contains("within the thresholds"));
+        for d in [Decision::BelowMinimums, Decision::Healthy] {
+            let n = note(d, false, None);
+            assert!(n.contains("cannot trip"), "{n}");
+            assert!(n.contains("not enough off traffic"), "{n}");
+            assert!(n.contains("set maxErrorRate"), "{n}");
+            assert!(n.contains("evaluations with the flag off"), "{n}");
+        }
+    }
+
+    #[test]
+    fn a_policy_that_cannot_act_says_why() {
+        let trip = Decision::Trip(Trigger::ErrorRatio);
+        let n = note(trip, true, Some(Blocked::Archived));
+        assert!(n.contains("archived") && n.contains("would trip"), "{n}");
+        let n = note(trip, true, Some(Blocked::EnvironmentMissing));
+        assert!(n.contains("no longer has this environment"), "{n}");
+    }
+
+    #[test]
+    fn omitted_overrides_keep_the_base_and_given_ones_win() {
+        let base = Thresholds {
+            max_error_rate: Some(0.2),
+            window_hours: 6,
+            ..Thresholds::default()
+        };
+        assert_eq!(overlay(base.clone(), &ThresholdOverrides::default()), base);
+        let all = ThresholdOverrides {
+            min_evaluations: Some(7),
+            min_errors: Some(3),
+            max_error_ratio: Some(5.0),
+            max_error_rate: Some(0.5),
+            window_hours: Some(12),
+            include_client_reports: Some(true),
+        };
+        assert_eq!(
+            overlay(base, &all),
+            Thresholds {
+                min_evaluations: 7,
+                min_errors: 3,
+                max_error_ratio: 5.0,
+                max_error_rate: Some(0.5),
+                window_hours: 12,
+                include_client_reports: true,
+            }
+        );
+    }
+
+    #[test]
+    fn an_observation_carries_its_decision_flat() {
+        let observation = |decision| Observation {
+            window_start: Utc::now(),
+            sample: s(200, 200, 30, 0),
+            rate_on: Some(0.15),
+            rate_off: Some(0.0),
+            thresholds: Thresholds::default(),
+            decision,
+        };
+        let v = serde_json::to_value(observation(Decision::Trip(Trigger::OffHasNoErrors))).unwrap();
+        assert_eq!(v["decision"], "trip", "{v}");
+        assert_eq!(v["trigger"], "offHasNoErrors", "{v}");
+        assert_eq!(v["sample"]["errorsOn"], 30, "{v}");
+        let v = serde_json::to_value(observation(Decision::Healthy)).unwrap();
+        assert_eq!(v["decision"], "healthy", "{v}");
+        assert!(v.get("trigger").is_none(), "{v}");
     }
 
     #[test]

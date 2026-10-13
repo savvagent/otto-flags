@@ -8,11 +8,8 @@
 
 use flags_core::apps::AppsExt;
 use flags_core::entitlements::AUTO_ROLLBACK;
-use flags_core::error::Error as CoreError;
 use flags_core::flags::FlagsExt;
-use flags_core::rollback::{
-    can_trip, decide, Decision, Mode, Observation, RollbackExt, Thresholds,
-};
+use flags_core::rollback::{self, overlay, Mode, RollbackExt, ThresholdOverrides, Thresholds};
 use flags_core::scopes::{FLAGS_READ, FLAGS_WRITE};
 use rmcp::handler::server::tool::Extension;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -124,36 +121,24 @@ pub struct EventsArgs {
     pub limit: Option<i64>,
 }
 
-/// `base` with every given field replaced.
-fn overlay(base: Thresholds, o: ThresholdArgs) -> Thresholds {
-    Thresholds {
-        min_evaluations: o.min_evaluations.unwrap_or(base.min_evaluations),
-        min_errors: o.min_errors.unwrap_or(base.min_errors),
-        max_error_ratio: o.max_error_ratio.unwrap_or(base.max_error_ratio),
-        max_error_rate: o.max_error_rate.or(base.max_error_rate),
-        window_hours: o.window_hours.unwrap_or(base.window_hours),
-        include_client_reports: o
-            .include_client_reports
-            .unwrap_or(base.include_client_reports),
+impl From<ThresholdArgs> for ThresholdOverrides {
+    fn from(a: ThresholdArgs) -> Self {
+        Self {
+            min_evaluations: a.min_evaluations,
+            min_errors: a.min_errors,
+            max_error_ratio: a.max_error_ratio,
+            max_error_rate: a.max_error_rate,
+            window_hours: a.window_hours,
+            include_client_reports: a.include_client_reports,
+        }
     }
 }
 
-/// One sentence saying what the sample means for these thresholds.
-fn note(decision: Decision, can_trip: bool) -> String {
-    match decision {
-        Decision::Trip(_) => "this policy would trip on the current sample".into(),
-        Decision::BelowMinimums if can_trip => {
-            "the sample is below the minimums, so the policy would not act yet".into()
-        }
-        Decision::Healthy if can_trip => {
-            "the sample is within the thresholds, so the policy would not act".into()
-        }
-        _ => "not enough off traffic: the flag has fewer than minEvaluations evaluations with it \
-              off and maxErrorRate is unset, so this policy cannot trip; set maxErrorRate, or keep \
-              at least minEvaluations evaluations with the flag off (a rollout below 100%)"
-            .into(),
-    }
-}
+/// Why opting in to client reports takes an owner or admin.
+const CLIENT_REPORTS_NEED_ADMIN: &str = "counting client-key reports in an auto-rollback policy \
+    (includeClientReports) needs an owner or admin of this organization, because anyone holding \
+    the public client key can then trip or hold back the rollback; ask one to set it, or leave \
+    includeClientReports off";
 
 #[tool_router(router = rollback_router, vis = "pub(crate)")]
 impl Flags {
@@ -174,7 +159,13 @@ impl Flags {
     ) -> Result<Json<out::PolicyOut>, ErrorData> {
         let caller = self.caller(&parts)?;
         caller.require_scope(FLAGS_WRITE).mcp()?;
-        // A platform call: made before a pooled connection is held.
+        // Platform calls: made before a pooled connection is held. A policy
+        // replaces the whole stored one, so every set that counts client
+        // reports opts in again and is checked.
+        if args.thresholds.include_client_reports == Some(true) {
+            self.require_admin(&caller, CLIENT_REPORTS_NEED_ADMIN)
+                .await?;
+        }
         self.entitlements()
             .require(caller.org_id, AUTO_ROLLBACK)
             .await
@@ -184,7 +175,7 @@ impl Flags {
             .max_error_rate
             .is_none()
             .then(|| NO_RATE_WARNING.into());
-        let thresholds = overlay(Thresholds::default(), args.thresholds);
+        let thresholds = overlay(Thresholds::default(), &args.thresholds.into());
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "set_rollback_policy").await?;
         let app = tx.resolve_app(&args.app).await.mcp()?;
@@ -276,42 +267,16 @@ impl Flags {
         let app = tx.resolve_app(&args.app).await.mcp()?;
         let flag = tx.require_flag(&app, &args.key).await.mcp()?;
         let environment = args.environment.trim();
-        if !app.environments.iter().any(|e| e == environment) {
-            return Err(CoreError::Invalid(format!(
-                "app '{}' has no environment '{environment}'; its environments are: {}",
-                app.name,
-                app.environments.join(", ")
-            )))
-            .mcp();
-        }
-        let existing = tx.find_policy(flag.id, environment).await.mcp()?;
-        let thresholds = overlay(
-            existing
-                .as_ref()
-                .map_or_else(Thresholds::default, |p| p.thresholds.clone()),
-            args.thresholds,
-        );
-        thresholds.validate().mcp()?;
-        let (window_start, sample) = tx.sample(flag.id, environment, &thresholds).await.mcp()?;
+        let proposal =
+            rollback::propose(&mut tx, &app, &flag, environment, &args.thresholds.into())
+                .await
+                .mcp()?;
         // Read only: dropping the transaction rolls it back.
         drop(tx);
-        let decision = decide(&sample, &thresholds);
-        let can_trip = can_trip(&sample, &thresholds);
         Ok(Json(out::ProposalOut {
             key: flag.key,
             environment: environment.to_string(),
-            policy_id: existing.map(|p| p.id),
-            would_trip: matches!(decision, Decision::Trip(_)),
-            can_trip,
-            note: note(decision, can_trip),
-            observation: Observation {
-                window_start,
-                rate_on: sample.rate_on(),
-                rate_off: sample.rate_off(),
-                sample,
-                thresholds,
-                decision,
-            },
+            proposal,
         }))
     }
 
@@ -347,83 +312,29 @@ impl Flags {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flags_core::rollback::Trigger;
 
     #[test]
-    fn omitted_fields_keep_the_base() {
-        let base = Thresholds {
-            max_error_rate: Some(0.2),
-            window_hours: 6,
-            ..Thresholds::default()
-        };
-        assert_eq!(overlay(base.clone(), ThresholdArgs::default()), base);
-    }
-
-    #[test]
-    fn given_fields_win() {
-        let t = overlay(
-            Thresholds {
-                max_error_rate: Some(0.2),
-                ..Thresholds::default()
-            },
-            ThresholdArgs {
+    fn every_threshold_arg_reaches_the_overrides() {
+        let o: ThresholdOverrides = ThresholdArgs {
+            min_evaluations: Some(7),
+            min_errors: Some(3),
+            max_error_ratio: Some(5.0),
+            max_error_rate: Some(0.5),
+            window_hours: Some(12),
+            include_client_reports: Some(true),
+        }
+        .into();
+        assert_eq!(
+            o,
+            ThresholdOverrides {
                 min_evaluations: Some(7),
                 min_errors: Some(3),
                 max_error_ratio: Some(5.0),
                 max_error_rate: Some(0.5),
                 window_hours: Some(12),
                 include_client_reports: Some(true),
-            },
-        );
-        assert_eq!(
-            t,
-            Thresholds {
-                min_evaluations: 7,
-                min_errors: 3,
-                max_error_ratio: 5.0,
-                max_error_rate: Some(0.5),
-                window_hours: 12,
-                include_client_reports: true,
             }
         );
-    }
-
-    #[test]
-    fn a_stored_max_error_rate_cannot_be_cleared() {
-        let base = Thresholds {
-            max_error_rate: Some(0.2),
-            ..Thresholds::default()
-        };
-        assert_eq!(
-            overlay(base, ThresholdArgs::default()).max_error_rate,
-            Some(0.2)
-        );
-    }
-
-    #[test]
-    fn a_trip_note_says_it_would_trip() {
-        assert!(note(Decision::Trip(Trigger::ErrorRatio), true).contains("would trip"));
-    }
-
-    #[test]
-    fn a_below_minimums_note_says_not_yet() {
-        assert!(note(Decision::BelowMinimums, true).contains("below the minimums"));
-    }
-
-    #[test]
-    fn a_healthy_note_says_within_thresholds() {
-        assert!(note(Decision::Healthy, true).contains("within the thresholds"));
-    }
-
-    #[test]
-    fn a_policy_that_cannot_trip_says_so() {
-        for d in [Decision::BelowMinimums, Decision::Healthy] {
-            let n = note(d, false);
-            assert!(n.contains("cannot trip"), "{n}");
-            assert!(n.contains("not enough off traffic"), "{n}");
-            assert!(n.contains("set maxErrorRate"), "{n}");
-            assert!(n.contains("evaluations with the flag off"), "{n}");
-        }
     }
 
     #[test]

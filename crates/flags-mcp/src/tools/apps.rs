@@ -46,6 +46,10 @@ pub struct RotateKeysArgs {
     pub which: Rotate,
 }
 
+/// Why managing apps takes an owner or admin.
+const APPS_NEED_ADMIN: &str = "managing apps and their SDK keys needs an owner or admin of this \
+    organization; ask one to do it, or to change your role at the otto platform";
+
 const KEYS_NOTE: &str = "The server key (srv_…) is a secret and is shown only now: store it in \
     the application's secret manager as its Otto Flags API key for server-side SDKs. The client \
     key (sdk_…) is public and can ship in browser or mobile code; list_apps shows it again.";
@@ -84,7 +88,7 @@ impl Flags {
     ) -> Result<Json<out::AppKeysOut>, ErrorData> {
         let caller = self.caller(&parts)?;
         caller.require_scope(APPS_ADMIN).mcp()?;
-        self.require_admin(&caller).await?;
+        self.require_admin(&caller, APPS_NEED_ADMIN).await?;
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "create_app").await?;
         let (app, keys) = tx
@@ -111,7 +115,7 @@ impl Flags {
     ) -> Result<Json<out::AppOut>, ErrorData> {
         let caller = self.caller(&parts)?;
         caller.require_scope(APPS_ADMIN).mcp()?;
-        self.require_admin(&caller).await?;
+        self.require_admin(&caller, APPS_NEED_ADMIN).await?;
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "update_app").await?;
         let app = tx.resolve_app(&args.app).await.mcp()?;
@@ -136,7 +140,7 @@ impl Flags {
     ) -> Result<Json<out::AppKeysOut>, ErrorData> {
         let caller = self.caller(&parts)?;
         caller.require_scope(APPS_ADMIN).mcp()?;
-        self.require_admin(&caller).await?;
+        self.require_admin(&caller, APPS_NEED_ADMIN).await?;
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "rotate_app_keys").await?;
         let app = tx.resolve_app(&args.app).await.mcp()?;

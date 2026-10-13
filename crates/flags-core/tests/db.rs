@@ -2836,3 +2836,146 @@ async fn one_policys_failure_does_not_undo_anothers_rollback(pool: PgPool) {
         vec![("rolled_back".to_string(), Some(before.version + 1))]
     );
 }
+
+// ---- propose: the dry run
+
+use flags_core::rollback::{propose, ThresholdOverrides};
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn propose_judges_the_stored_policy_with_overrides(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    let mut tx = db.begin(org).await.unwrap();
+    let p = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "production",
+        &ThresholdOverrides::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(p.policy_id, Some(policy));
+    assert!(p.would_trip && p.can_trip && p.can_act, "{p:?}");
+    assert_eq!(p.observation.sample.errors_on, 30);
+    assert!(p.note.contains("would trip"), "{}", p.note);
+
+    // An override replaces only its field.
+    let p = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "production",
+        &ThresholdOverrides {
+            min_errors: Some(31),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!p.would_trip);
+    assert_eq!(p.observation.thresholds.min_errors, 31);
+    assert_eq!(p.observation.thresholds.min_evaluations, 100);
+
+    // An invalid override is refused like set_policy refuses it.
+    let err = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "production",
+        &ThresholdOverrides {
+            window_hours: Some(99),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument");
+
+    // No policy: the defaults, and an unknown environment is refused with
+    // the same message set_policy gives.
+    let p = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "staging",
+        &ThresholdOverrides::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(p.policy_id, None);
+    assert_eq!(p.observation.thresholds, Thresholds::default());
+    let proposed = propose(&mut tx, &app, &flag, "qa", &ThresholdOverrides::default())
+        .await
+        .unwrap_err()
+        .to_string();
+    let set = tx
+        .set_policy(
+            &app,
+            &flag,
+            "qa",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(proposed, set);
+    tx.rollback().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn propose_says_a_policy_that_cannot_act_would_not_trip(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, _, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    // Archived.
+    let mut tx = db.begin(org).await.unwrap();
+    let flag = tx.set_archived(&app, "f", true, meta(actor)).await.unwrap();
+    let p = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "production",
+        &ThresholdOverrides::default(),
+    )
+    .await
+    .unwrap();
+    assert!(!p.can_act && !p.would_trip, "{p:?}");
+    assert!(matches!(
+        p.observation.decision,
+        rollback::Decision::Trip(_)
+    ));
+    assert!(p.note.contains("archived"), "{}", p.note);
+    tx.rollback().await.unwrap();
+
+    // The stored policy's environment is gone from the app.
+    let mut tx = db.begin(org).await.unwrap();
+    let flag = tx.require_flag(&app, "f").await.unwrap();
+    let app = tx
+        .set_app_environments(&app, &["staging".into()], actor)
+        .await
+        .unwrap();
+    let p = propose(
+        &mut tx,
+        &app,
+        &flag,
+        "production",
+        &ThresholdOverrides::default(),
+    )
+    .await
+    .unwrap();
+    assert!(p.policy_id.is_some());
+    assert!(!p.can_act && !p.would_trip, "{p:?}");
+    assert!(p.note.contains("no longer has"), "{}", p.note);
+    tx.rollback().await.unwrap();
+}

@@ -134,13 +134,15 @@ impl Flags {
         self.meter.charge(tx, caller.user_id, tool).await.mcp()
     }
 
-    /// Refuse unless the caller is an owner or admin of the org *now*.
+    /// Refuse unless the caller is an owner or admin of the org *now*, with
+    /// `refusal` (what needs the role, and what to do instead) as the
+    /// `forbidden` error's message.
     ///
     /// The role on the principal is as of the last introspection, cached for up
     /// to a minute, so a just-demoted admin would still pass a check against
     /// it. This asks the platform (its own cache is seconds). Fails closed: a
     /// platform that cannot answer is an error, never "allowed".
-    pub async fn require_admin(&self, caller: &Principal) -> Result<(), ErrorData> {
+    pub async fn require_admin(&self, caller: &Principal, refusal: &str) -> Result<(), ErrorData> {
         let member = self
             .platform
             .member(caller.org_id.as_uuid(), caller.user_id.as_uuid())
@@ -150,10 +152,7 @@ impl Flags {
         if member.role.can_administer() {
             Ok(())
         } else {
-            Err(error::forbidden(
-                "managing apps and their SDK keys needs an owner or admin of this organization; \
-                 ask one to do it, or to change your role at the otto platform",
-            ))
+            Err(error::forbidden(refusal))
         }
     }
 }
