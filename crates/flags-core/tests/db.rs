@@ -1496,6 +1496,54 @@ async fn null_environment_errors_count_for_production_only(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// Errors are windowed like evaluations, and counted for their own
+/// environment. Stamped from the database clock, as the window is.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn errors_outside_the_window_or_another_environment_do_not_count(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (_, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    // In the previous hour; this hour; this hour but staging.
+    sqlx::query(
+        "INSERT INTO flag_errors \
+           (org_id, flag_id, environment, flag_enabled, error_type, error_message, \
+            occurred_at, reporter) \
+         VALUES ($1, $2, 'production', true, 'E', 'm', \
+                 date_trunc('hour', now()) - interval '30 minutes', 'server'), \
+                ($1, $2, 'production', true, 'E', 'm', now(), 'server'), \
+                ($1, $2, 'staging', true, 'E', 'm', now(), 'server')",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+
+    let one = Thresholds::default();
+    let two = Thresholds {
+        window_hours: 2,
+        ..one.clone()
+    };
+    let errors_on = |s: rollback::Sample| s.errors_on;
+    assert_eq!(
+        errors_on(tx.sample(flag.id, "production", &one).await.unwrap().1),
+        1,
+        "the previous hour is outside a 1-hour window, and staging is not production"
+    );
+    assert_eq!(
+        errors_on(tx.sample(flag.id, "production", &two).await.unwrap().1),
+        2,
+        "a 2-hour window reaches the previous hour"
+    );
+    assert_eq!(
+        errors_on(tx.sample(flag.id, "staging", &two).await.unwrap().1),
+        1
+    );
+    tx.rollback().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn the_sample_window_starts_at_the_top_of_the_hour(pool: PgPool) {
     let db = db(pool).await;

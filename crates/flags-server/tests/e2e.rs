@@ -45,6 +45,8 @@ struct Platform {
     legacy: HashSet<Uuid>,
     /// Orgs whose usage status the platform cannot serve (503).
     unavailable: HashSet<Uuid>,
+    /// Usage-status requests received, per org.
+    usage_status_hits: HashMap<Uuid, usize>,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -78,7 +80,8 @@ async fn usage_status(
     State(p): State<Shared>,
     Path(org): Path<Uuid>,
 ) -> Result<Json<Value>, StatusCode> {
-    let p = p.lock().unwrap();
+    let mut p = p.lock().unwrap();
+    *p.usage_status_hits.entry(org).or_default() += 1;
     if p.unavailable.contains(&org) {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -1078,13 +1081,36 @@ async fn a_policy_turns_a_failing_flag_off_and_tells_the_stream(pool: PgPool) {
     .await
     .unwrap();
     report(&s, &client_key, "forged", 150, 150, 30).await;
-    // 1 s is ~20x the 50 ms debounce; the propose_rollback below shows these
-    // reports would have tripped had client reports counted.
-    let tripped = eventually(Duration::from_secs(1), || async {
-        !enabled_in(&flag(&s, &t, "forged").await, "production")
+    let last_checked = || async {
+        let listed = tool(
+            &s.app,
+            &t,
+            "list_rollback_policies",
+            json!({"app": "web", "key": "forged"}),
+        )
+        .await
+        .unwrap();
+        listed["policies"][0]["lastCheckedAt"].clone()
+    };
+    // Client-key telemetry does not even wake the checker for a policy that
+    // ignores it: 1 s is ~20x the 50 ms debounce.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        last_checked().await.is_null(),
+        "client telemetry hinted the checker"
+    );
+    // Server-key telemetry does; once the checker has judged the flag, with
+    // the forged reports in the window, production is still on.
+    report(&s, &server_key, "forged", 1, 0, 0).await;
+    let judged = eventually(Duration::from_secs(5), || async {
+        !last_checked().await.is_null()
     })
     .await;
-    assert!(!tripped, "client-key reports tripped a default policy");
+    assert!(judged, "the checker never judged the forged flag");
+    assert!(
+        enabled_in(&flag(&s, &t, "forged").await, "production"),
+        "client-key reports tripped a default policy"
+    );
     // The reports arrived, and would have tripped had they counted.
     let counted = tool(
         &s.app,
@@ -1242,4 +1268,127 @@ async fn counting_client_reports_needs_an_owner_or_admin(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(set["policy"]["includeClientReports"], true, "{set}");
+}
+
+/// A token without the scope a rollback tool needs is refused with the
+/// scope error, before anything else is looked at.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rollback_tools_check_their_scopes(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    platform.lock().unwrap().entitled.insert(org);
+    org_with_flag(&s, &platform, org, "risky").await;
+    let reader = token(&platform, org, Uuid::new_v4(), Role::Owner, &["flags:read"]);
+    let writer = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Owner,
+        &["flags:write"],
+    );
+    let target = json!({"app": "web", "key": "risky", "environment": "production"});
+
+    for (t, name, args) in [
+        (&reader, "set_rollback_policy", target.clone()),
+        (&reader, "remove_rollback_policy", target.clone()),
+        (&writer, "list_rollback_policies", json!({"app": "web"})),
+        (&writer, "propose_rollback", target.clone()),
+        (&writer, "rollback_events", json!({"app": "web"})),
+    ] {
+        let err = tool(&s.app, t, name, args).await.unwrap_err();
+        assert_eq!(err["data"]["code"], "insufficient_scope", "{name}: {err}");
+    }
+}
+
+/// Only setting a policy is billed; the rest record a free row, except the
+/// dry run, which records none. A refused set is never billed.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn only_setting_a_policy_is_billed(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let org = Uuid::new_v4();
+    platform.lock().unwrap().entitled.insert(org);
+    let (t, _, _, _) = org_with_flag(&s, &platform, org, "risky").await;
+    let target = json!({"app": "web", "key": "risky", "environment": "production"});
+
+    // Refused for bad input, inside the transaction that would have billed.
+    for bad in [
+        json!({"app": "web", "key": "risky", "environment": "production", "windowHours": 99}),
+        json!({"app": "web", "key": "risky", "environment": "qa"}),
+    ] {
+        let err = tool(&s.app, &t, "set_rollback_policy", bad)
+            .await
+            .unwrap_err();
+        assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
+    }
+
+    tool(&s.app, &t, "set_rollback_policy", target.clone())
+        .await
+        .unwrap();
+    tool(&s.app, &t, "list_rollback_policies", json!({"app": "web"}))
+        .await
+        .unwrap();
+    tool(&s.app, &t, "propose_rollback", target.clone())
+        .await
+        .unwrap();
+    tool(&s.app, &t, "rollback_events", json!({"app": "web"}))
+        .await
+        .unwrap();
+    tool(&s.app, &t, "remove_rollback_policy", target)
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
+        "SELECT tool, billable, count(*) FROM usage_outbox \
+         WHERE org_id = $1 AND tool LIKE '%rollback%' GROUP BY 1, 2 ORDER BY 1, 2",
+    )
+    .bind(org)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("list_rollback_policies".to_string(), false, 1),
+            ("remove_rollback_policy".to_string(), false, 1),
+            ("rollback_events".to_string(), false, 1),
+            ("set_rollback_policy".to_string(), true, 1),
+        ]
+    );
+}
+
+/// A failed plan lookup is remembered for a few seconds, so an outage costs
+/// one platform request per org, not one per check.
+#[tokio::test]
+async fn a_failed_entitlement_lookup_is_not_repeated_at_once() {
+    use flags_core::entitlements::{Entitlement, EntitlementSource, Entitlements, AUTO_ROLLBACK};
+    let (url, platform) = start_platform().await;
+    let mut config = Config::for_test();
+    config.platform_url = url.clone();
+    let client = platform_client(&config).unwrap();
+    let org = Uuid::new_v4();
+    platform.lock().unwrap().unavailable.insert(org);
+    let entitlements = Entitlements::new(client, config.upgrade_url());
+    let hits = || {
+        platform
+            .lock()
+            .unwrap()
+            .usage_status_hits
+            .get(&org)
+            .copied()
+            .unwrap_or(0)
+    };
+
+    for _ in 0..2 {
+        assert_eq!(
+            entitlements.check(OrgId::from(org), AUTO_ROLLBACK).await,
+            Entitlement::Unknown
+        );
+    }
+    assert_eq!(
+        hits(),
+        1,
+        "the second check within 10 s asked the platform again"
+    );
 }
