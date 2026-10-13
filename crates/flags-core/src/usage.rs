@@ -166,7 +166,7 @@ impl Meter {
     }
 }
 
-fn plan_name(plan: &str) -> String {
+pub(crate) fn plan_name(plan: &str) -> String {
     let mut chars = plan.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().chain(chars).collect(),

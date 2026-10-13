@@ -57,6 +57,24 @@ pub enum Error {
         upgrade_url: String,
     },
 
+    #[error(
+        "{feature} is not included in this organization's {plan} plan, so this was refused. \
+         Upgrade at {upgrade_url}"
+    )]
+    FeatureNotInPlan {
+        feature: String,
+        plan: String,
+        upgrade_url: String,
+    },
+
+    /// The platform could not confirm the entitlement; fails closed. The text
+    /// is ours, never the platform's.
+    #[error(
+        "the otto platform could not confirm that this organization's plan includes {feature}; \
+         nothing was changed. Retry shortly."
+    )]
+    EntitlementUnavailable { feature: String },
+
     #[error(transparent)]
     Platform(#[from] otto_resource::Error),
 
@@ -80,7 +98,8 @@ impl Error {
             Error::VersionConflict { .. } => "version_conflict",
             Error::AccessRevoked => "access_revoked",
             Error::QuotaExceeded { .. } => "quota_exceeded",
-            Error::Platform(_) => "platform_unavailable",
+            Error::FeatureNotInPlan { .. } => "feature_not_in_plan",
+            Error::EntitlementUnavailable { .. } | Error::Platform(_) => "platform_unavailable",
             Error::Tenant(t) => t.code(),
             Error::Db(_) => "internal_error",
         }
@@ -89,7 +108,7 @@ impl Error {
     /// Whether repeating the same call unchanged could succeed.
     pub fn retriable(&self) -> bool {
         match self {
-            Error::Db(_) => true,
+            Error::Db(_) | Error::EntitlementUnavailable { .. } => true,
             Error::Platform(p) => p.is_retriable(),
             Error::Tenant(otto_tenant::Error::Db(_)) => true,
             _ => false,

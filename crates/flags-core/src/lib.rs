@@ -16,6 +16,7 @@
 
 pub mod apps;
 pub mod audit;
+pub mod entitlements;
 pub mod error;
 pub mod eval;
 pub mod flags;
