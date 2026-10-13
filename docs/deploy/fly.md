@@ -86,8 +86,10 @@ A hand deploy is `fly deploy -a otto-flags --remote-only`.
 A policy per (flag, environment) disables that environment as an ordinary flag version (change
 `auto_rollback`, no user actor) when the error rate with the flag on exceeds the rate with it off.
 It shows in `flag_history` and is undone with `rollback_flag` or `set_flag_environment`; turning
-the environment back on re-arms the policy. Defaults: 100 evaluations, 10 errors, on-rate more
-than 2x the off-rate (or errors only with it on), over this hour so far (`windowHours` 1-24).
+the environment back on re-arms the policy. Defaults: at least 100 evaluations and 10 errors
+with the flag on, and an on-rate more than 2x the off-rate (or off traffic with no errors at
+all), over this hour so far (`windowHours` 1-24). An optional `maxErrorRate` trips on the
+on-rate alone. Only server-key reports count unless a policy sets `includeClientReports`.
 Mode `observe` records what would have happened without changing the flag.
 
 - **Plan-gated.** Every paid plan (team, business, enterprise) includes `auto_rollback` through
@@ -102,9 +104,9 @@ Mode `observe` records what would have happened without changing the flag.
   `entitlement_unknown`. Suppressed outcomes are recorded at most once per hour per policy.
   Events are kept 90 days.
 - **No new secret, env var, scope, or recurring cost.**
-- **Rolling the image back.** Migrations `0002` (auto-rollback) and `0003` are applied. sqlx
-  refuses a database holding a migration the image does not know, so `fly deploy` of an older
-  image will not boot. Recovery is roll-forward.
+- **Rolling the image back.** Once migrations `0002` (auto-rollback) and `0003` are applied,
+  sqlx refuses to boot an older image that does not know them, so `fly deploy` of a pre-0002
+  image fails. Recovery is roll-forward.
 - Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
   non-exempt pool role.
 
