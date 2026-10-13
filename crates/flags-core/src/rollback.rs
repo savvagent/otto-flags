@@ -58,19 +58,19 @@ impl Thresholds {
     pub fn validate(&self) -> Result<()> {
         if self.min_evaluations < 1 {
             return Err(Error::Invalid(format!(
-                "min_evaluations must be at least 1, got {}",
+                "minEvaluations must be at least 1, got {}",
                 self.min_evaluations
             )));
         }
         if self.min_errors < 1 {
             return Err(Error::Invalid(format!(
-                "min_errors must be at least 1, got {}",
+                "minErrors must be at least 1, got {}",
                 self.min_errors
             )));
         }
         if !(self.max_error_ratio.is_finite() && self.max_error_ratio > 1.0) {
             return Err(Error::Invalid(format!(
-                "max_error_ratio must be greater than 1.0 (the factor by which the error rate \
+                "maxErrorRatio must be greater than 1.0 (the factor by which the error rate \
                  with the flag on must exceed the rate with it off), got {}",
                 self.max_error_ratio
             )));
@@ -78,14 +78,14 @@ impl Thresholds {
         if let Some(r) = self.max_error_rate {
             if !(r > 0.0 && r <= 1.0) {
                 return Err(Error::Invalid(format!(
-                    "max_error_rate must be greater than 0 and at most 1 (errors per \
+                    "maxErrorRate must be greater than 0 and at most 1 (errors per \
                      evaluation), or omitted, got {r}"
                 )));
             }
         }
         if !(1..=24).contains(&self.window_hours) {
             return Err(Error::Invalid(format!(
-                "window_hours must be between 1 and 24, got {}",
+                "windowHours must be between 1 and 24, got {}",
                 self.window_hours
             )));
         }
@@ -128,7 +128,7 @@ pub enum Trigger {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "decision", content = "trigger", rename_all = "camelCase")]
 pub enum Decision {
     /// Not enough evaluations or errors with the flag on to judge.
     BelowMinimums,
@@ -207,6 +207,71 @@ mod tests {
     #[test]
     fn too_few_errors_is_below_minimums() {
         assert_eq!(d(&s(1000, 1000, 9, 0)), Decision::BelowMinimums);
+    }
+
+    #[test]
+    fn exactly_the_minimums_is_enough_to_trip() {
+        assert_eq!(
+            d(&s(100, 1000, 10, 0)),
+            Decision::Trip(Trigger::OffHasNoErrors)
+        );
+    }
+
+    #[test]
+    fn decisions_serialize_as_one_object_shape() {
+        assert_eq!(
+            serde_json::to_value(Decision::Healthy).unwrap(),
+            serde_json::json!({"decision": "healthy"})
+        );
+        assert_eq!(
+            serde_json::to_value(Decision::Trip(Trigger::ErrorRatio)).unwrap(),
+            serde_json::json!({"decision": "trip", "trigger": "errorRatio"})
+        );
+    }
+
+    #[test]
+    fn validation_messages_use_the_wire_field_names() {
+        let ok = Thresholds::default();
+        for (bad, name) in [
+            (
+                Thresholds {
+                    min_evaluations: 0,
+                    ..ok.clone()
+                },
+                "minEvaluations",
+            ),
+            (
+                Thresholds {
+                    min_errors: 0,
+                    ..ok.clone()
+                },
+                "minErrors",
+            ),
+            (
+                Thresholds {
+                    max_error_ratio: 1.0,
+                    ..ok.clone()
+                },
+                "maxErrorRatio",
+            ),
+            (
+                Thresholds {
+                    max_error_rate: Some(0.0),
+                    ..ok.clone()
+                },
+                "maxErrorRate",
+            ),
+            (
+                Thresholds {
+                    window_hours: 25,
+                    ..ok.clone()
+                },
+                "windowHours",
+            ),
+        ] {
+            let msg = bad.validate().unwrap_err().to_string();
+            assert!(msg.contains(name), "{msg}");
+        }
     }
 
     #[test]
@@ -293,13 +358,16 @@ mod tests {
         assert!(edge.validate().is_ok());
     }
 
-    /// `flag_health`'s advice and the checker's action agree on every case.
+    /// Wiring check: `assess` says "Consider rolling back" only when `decide`
+    /// returns `Trip`, over these cases.
     #[test]
     fn assess_and_decide_agree() {
         let cases = [
             (1000, 1000, 50, 5),
             (10, 0, 0, 0),
             (1000, 1000, 9, 0),
+            (150, 1000, 5, 0),
+            (100, 1000, 10, 0),
             (99, 1000, 99, 0),
             (1000, 1000, 20, 10),
             (1000, 1000, 20, 0),

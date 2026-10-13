@@ -384,14 +384,15 @@ fn inert(s: &str, max: usize) -> String {
 /// Turn the numbers into a sentence. Deliberately conservative: it says what
 /// the data shows and how much of it there is, and leaves the decision to the
 /// agent and the person it works for.
+// pub(crate) so the agreement test in `rollback` can call it.
 pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Option<f64>) -> String {
-    const MIN_SAMPLE: i64 = 100;
     if evals.enabled == 0 && evals.disabled == 0 {
         return "No evaluations reported in this window. Either the flag is not being \
                 evaluated here, or the SDK's telemetry is off."
             .into();
     }
-    if evals.enabled < MIN_SAMPLE {
+    let thresholds = Thresholds::default();
+    if evals.enabled < thresholds.min_evaluations {
         return format!(
             "Only {} evaluations with the flag on; too few to judge its effect on errors.",
             evals.enabled
@@ -405,7 +406,7 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
         errors_on: errors.enabled,
         errors_off: errors.disabled,
     };
-    match (on, off, decide(&sample, &Thresholds::default())) {
+    match (on, off, decide(&sample, &thresholds)) {
         (Some(on), Some(off), Decision::Trip(Trigger::ErrorRatio)) => format!(
             "Error rate with the flag on ({:.2}%) is {:.1}x the rate with it off ({:.2}%). \
              Consider rolling back.",
