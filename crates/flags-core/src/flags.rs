@@ -136,7 +136,7 @@ pub struct ChangeMeta {
     pub expected_version: Option<i32>,
 }
 
-const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
+pub(crate) const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
                     variations, configuration, version, created_at, updated_at, archived_at";
 
 const MAX_DESCRIPTION: usize = 2_000;
@@ -511,9 +511,8 @@ pub(crate) async fn apply_env_patch(
     commit_change(tx, flag, change, meta).await
 }
 
-/// Lock a flag by id (the checker has no app/key in hand). `None` if it no
-/// longer exists.
-#[allow(dead_code)] // first caller is the rollback checker
+/// Lock a flag by id (the rollback checker has no app/key in hand). `None` if
+/// it no longer exists.
 pub(crate) async fn lock_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<FeatureFlag>> {
     let org = tx.org();
     Ok(sqlx::query_as(&format!(
@@ -558,6 +557,11 @@ async fn lock(
 }
 
 /// Write `flag`'s new state as the next version.
+///
+/// Precondition: the caller holds the flag's row lock (`lock` or
+/// `lock_by_id`, `FOR UPDATE`) in `tx`. The before-read of `environments`
+/// that re-arming compares against is only the state being replaced if no
+/// one else can change the row in between.
 async fn commit_change(
     tx: &mut Tx<'_>,
     flag: FeatureFlag,

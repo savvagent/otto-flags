@@ -8,19 +8,22 @@
 //! disagree.
 
 use std::future::Future;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Tx;
+use otto_tenant::{Db, Tx};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::apps::FlagApp;
+use crate::apps::{AppsExt, FlagApp};
 use crate::audit::action;
+use crate::entitlements::{Entitlement, EntitlementSource, AUTO_ROLLBACK};
 use crate::error::{Error, Result};
-use crate::flags::FeatureFlag;
+use crate::flags::{self, ChangeMeta, EnvPatch, FeatureFlag, FlagStatus};
 use crate::ids::{FlagAppId, FlagId};
+use crate::platform_events::begin_live;
 use otto_tenant::audit::Entry;
 
 /// When a policy trips. The defaults are the column defaults of
@@ -678,6 +681,349 @@ pub(crate) async fn rearm(
     Ok(())
 }
 
+// ------------------------------------------------------------ the checker
+
+/// What [`check_flag`] did for one flag.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CheckReport {
+    /// Armed policies the flag had when the check began.
+    pub checked: usize,
+    /// The outcome for each policy that still tripped once the entitlement was
+    /// known, whether or not its (deduplicated) event was written this time.
+    pub outcomes: Vec<(Uuid, Outcome)>,
+}
+
+/// Unpinned: armed policies whose `last_checked_at` is NULL or older than
+/// `older_than`, least recently checked first, as distinct (org, flag) pairs.
+/// `limit` bounds the policies read, so a flag with several due policies can
+/// make the result shorter than `limit`.
+///
+/// The one statement the checker runs without pinning an org: the
+/// `rollback_policies_checker` row-level policy allows exactly this SELECT
+/// when `current_org()` is NULL. Acting on a pair goes through [`check_flag`],
+/// which pins the org.
+pub async fn due_policies(
+    db: &Db,
+    older_than: Duration,
+    limit: i64,
+) -> Result<Vec<(OrgId, FlagId)>> {
+    // The inner scan walks rollback_policies_due_idx in order and stops at
+    // `limit`; the outer query only folds a flag's environments together.
+    Ok(sqlx::query_as(
+        "SELECT org_id, flag_id FROM ( \
+           SELECT org_id, flag_id, last_checked_at FROM rollback_policies \
+           WHERE tripped_at IS NULL \
+             AND (last_checked_at IS NULL \
+                  OR last_checked_at < now() - make_interval(secs => $1)) \
+           ORDER BY last_checked_at NULLS FIRST \
+           LIMIT $2 \
+         ) due \
+         GROUP BY org_id, flag_id \
+         ORDER BY bool_or(last_checked_at IS NULL) DESC, min(last_checked_at)",
+    )
+    .bind(older_than.as_secs_f64())
+    .bind(limit.max(0))
+    .fetch_all(db.pool())
+    .await?)
+}
+
+/// Check every armed policy of one flag and act on the ones that trip
+/// (spec §4, "Acting on a trip").
+///
+/// 1. A `begin_live` transaction (refused for a deleted org) reads the armed
+///    policies and samples each. Policies that do not trip, or cannot act
+///    (archived flag, environment no longer in the app), have
+///    `last_checked_at` advanced; the transaction commits.
+/// 2. If any tripped, the platform is asked whether the org's plan includes
+///    auto-rollback, with no pooled connection held.
+/// 3. A second `begin_live` transaction locks the flag, re-reads each tripped
+///    policy, re-samples, and re-decides (the world may have moved during the
+///    network call), then acts by outcome and advances `last_checked_at`.
+///
+/// Holds at most one pooled connection at a time. Writes are not metered: no
+/// user called a tool.
+pub async fn check_flag(
+    db: &Db,
+    entitlements: &impl EntitlementSource,
+    org: OrgId,
+    flag: FlagId,
+) -> Result<CheckReport> {
+    // Transaction 1: sample without locking anything.
+    let mut tx = begin_live(db, org, None).await?;
+    let policies = armed_policies(&mut tx, flag).await?;
+    let mut report = CheckReport {
+        checked: policies.len(),
+        outcomes: Vec::new(),
+    };
+    if policies.is_empty() {
+        tx.commit().await?;
+        return Ok(report);
+    }
+    let Some((current, app)) = flag_and_app(&mut tx, flag).await? else {
+        // The flag (and so its policies) is gone, or its app is.
+        tx.commit().await?;
+        return Ok(report);
+    };
+    let mut done = Vec::new();
+    let mut tripped = Vec::new();
+    for policy in policies {
+        if can_act(&current, &app, &policy) {
+            let (_, sample) = tx
+                .sample(flag, &policy.environment, &policy.thresholds)
+                .await?;
+            if matches!(decide(&sample, &policy.thresholds), Decision::Trip(_)) {
+                tripped.push(policy.id);
+                continue;
+            }
+        }
+        done.push(policy.id);
+    }
+    // Only policy rows are written here, never the flag row, so this cannot
+    // deadlock with a change holding the flag lock.
+    mark_checked(&mut tx, &done).await?;
+    tx.commit().await?;
+    if tripped.is_empty() {
+        return Ok(report);
+    }
+
+    // Between transactions: the only network call, with no connection held.
+    let entitlement = entitlements.check(org, AUTO_ROLLBACK).await;
+
+    // Transaction 2: re-check under the flag's lock, then act.
+    let mut tx = begin_live(db, org, None).await?;
+    // Lock order: the flag row before any policy row. `commit_change` updates
+    // rollback_policies (re-arming) while holding the flag lock, so touching a
+    // policy first here could deadlock with a concurrent set_environment.
+    let Some(mut current) = flags::lock_by_id(&mut tx, flag).await? else {
+        tx.commit().await?;
+        return Ok(report);
+    };
+    let Some(app) = tx.get_app(current.app_id).await? else {
+        tx.commit().await?;
+        return Ok(report);
+    };
+    let mut checked = Vec::new();
+    for id in tripped {
+        // Still there and still armed? Mode and thresholds are taken as they
+        // are now: an edit during the network call wins.
+        let Some(policy) = armed_policy(&mut tx, id).await? else {
+            continue;
+        };
+        checked.push(policy.id);
+        if !can_act(&current, &app, &policy) {
+            continue;
+        }
+        let t = &policy.thresholds;
+        let (window_start, sample) = tx.sample(flag, &policy.environment, t).await?;
+        let decision = decide(&sample, t);
+        if !matches!(decision, Decision::Trip(_)) {
+            continue;
+        }
+        let observation = Observation {
+            window_start,
+            rate_on: sample.rate_on(),
+            rate_off: sample.rate_off(),
+            sample,
+            thresholds: t.clone(),
+            decision,
+        };
+        let outcome = match (&entitlement, policy.mode) {
+            (Entitlement::Granted, Mode::Enforce) => {
+                let version = if env_enabled(&current, &policy.environment) {
+                    current = flags::apply_env_patch(
+                        &mut tx,
+                        &app,
+                        &current.key,
+                        &policy.environment,
+                        EnvPatch {
+                            enabled: Some(false),
+                            ..Default::default()
+                        },
+                        &ChangeMeta {
+                            actor: None,
+                            reason: Some(rollback_reason(policy.id, &observation.sample)),
+                            expected_version: None,
+                        },
+                        "auto_rollback",
+                    )
+                    .await?;
+                    Some(current.version)
+                } else {
+                    None
+                };
+                mark_tripped(&mut tx, policy.id).await?;
+                record_event(&mut tx, &policy, Outcome::RolledBack, &observation, version).await?;
+                Outcome::RolledBack
+            }
+            (Entitlement::Granted, Mode::Observe) => Outcome::WouldRollBack,
+            (Entitlement::Denied { .. }, _) => Outcome::NotEntitled,
+            (Entitlement::Unknown, _) => Outcome::EntitlementUnknown,
+        };
+        if outcome != Outcome::RolledBack {
+            record_suppressed(&mut tx, &policy, outcome, &observation).await?;
+        }
+        report.outcomes.push((policy.id, outcome));
+    }
+    mark_checked(&mut tx, &checked).await?;
+    tx.commit().await?;
+    Ok(report)
+}
+
+/// A policy can act only on an active flag, in an environment its app still has.
+fn can_act(flag: &FeatureFlag, app: &FlagApp, policy: &Policy) -> bool {
+    flag.status == FlagStatus::Active && app.environments.contains(&policy.environment)
+}
+
+fn env_enabled(flag: &FeatureFlag, environment: &str) -> bool {
+    flag.environments
+        .get(environment)
+        .and_then(|e| e.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The version's reason: numbers and an id only, never reported text.
+fn rollback_reason(policy: Uuid, s: &Sample) -> String {
+    let on = s.rate_on().unwrap_or(0.0) * 100.0;
+    let off = s
+        .rate_off()
+        .map_or_else(|| "n/a".to_string(), |r| format!("{:.2}%", r * 100.0));
+    let n = s.evals_on + s.evals_off;
+    format!("auto-rollback by policy {policy}: error rate on {on:.2}% vs off {off} over {n} evaluations")
+}
+
+/// The flag (unlocked) and its app, for transaction 1.
+async fn flag_and_app(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<(FeatureFlag, FlagApp)>> {
+    let org = tx.org();
+    let found: Option<FeatureFlag> = sqlx::query_as(&format!(
+        "SELECT {} FROM feature_flags WHERE org_id = $1 AND id = $2",
+        flags::COLS
+    ))
+    .bind(org)
+    .bind(flag)
+    .fetch_optional(tx.conn())
+    .await?;
+    let Some(found) = found else {
+        return Ok(None);
+    };
+    Ok(tx.get_app(found.app_id).await?.map(|app| (found, app)))
+}
+
+async fn armed_policies(tx: &mut Tx<'_>, flag: FlagId) -> Result<Vec<Policy>> {
+    let org = tx.org();
+    Ok(sqlx::query_as(&format!(
+        "SELECT {POLICY_COLS} FROM rollback_policies p \
+         WHERE p.org_id = $1 AND p.flag_id = $2 AND p.tripped_at IS NULL \
+         ORDER BY p.environment"
+    ))
+    .bind(org)
+    .bind(flag)
+    .fetch_all(tx.conn())
+    .await?)
+}
+
+/// Re-read one policy, if it still exists and is armed. The caller holds the
+/// flag's lock, and re-arming and tripping both happen under it, so the
+/// answer cannot change before the transaction ends.
+async fn armed_policy(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<Policy>> {
+    let org = tx.org();
+    Ok(sqlx::query_as(&format!(
+        "SELECT {POLICY_COLS} FROM rollback_policies p \
+         WHERE p.org_id = $1 AND p.id = $2 AND p.tripped_at IS NULL"
+    ))
+    .bind(org)
+    .bind(id)
+    .fetch_optional(tx.conn())
+    .await?)
+}
+
+async fn mark_checked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let org = tx.org();
+    sqlx::query(
+        "UPDATE rollback_policies SET last_checked_at = now() WHERE org_id = $1 AND id = ANY($2)",
+    )
+    .bind(org)
+    .bind(ids)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+async fn mark_tripped(tx: &mut Tx<'_>, id: Uuid) -> Result<()> {
+    let org = tx.org();
+    sqlx::query(
+        "UPDATE rollback_policies SET tripped_at = now(), updated_at = now() \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(id)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Record a `rolled_back` event. Not deduplicated: a policy trips at most
+/// once until it is re-armed.
+async fn record_event(
+    tx: &mut Tx<'_>,
+    policy: &Policy,
+    outcome: Outcome,
+    observation: &Observation,
+    flag_version: Option<i32>,
+) -> Result<()> {
+    insert_event(tx, policy, outcome, observation, flag_version, false).await
+}
+
+/// Record a suppressed outcome (`would_roll_back`, `not_entitled`,
+/// `entitlement_unknown`) unless this policy recorded the same one in the last
+/// hour, so a policy that keeps tripping without acting writes at most one row
+/// per outcome per hour.
+async fn record_suppressed(
+    tx: &mut Tx<'_>,
+    policy: &Policy,
+    outcome: Outcome,
+    observation: &Observation,
+) -> Result<()> {
+    insert_event(tx, policy, outcome, observation, None, true).await
+}
+
+async fn insert_event(
+    tx: &mut Tx<'_>,
+    policy: &Policy,
+    outcome: Outcome,
+    observation: &Observation,
+    flag_version: Option<i32>,
+    dedup: bool,
+) -> Result<()> {
+    let org = tx.org();
+    let observed = serde_json::to_value(observation)
+        .map_err(|e| Error::Invalid(format!("observation does not serialize: {e}")))?;
+    // The dedup lookup is served by rollback_events_policy_idx.
+    sqlx::query(
+        "INSERT INTO rollback_events \
+           (org_id, policy_id, flag_id, environment, outcome, observed, flag_version) \
+         SELECT $1, $2, $3, $4, $5, $6, $7 \
+         WHERE NOT $8 OR NOT EXISTS ( \
+           SELECT 1 FROM rollback_events \
+           WHERE org_id = $1 AND policy_id = $2 AND outcome = $5 \
+             AND created_at > now() - interval '1 hour')",
+    )
+    .bind(org)
+    .bind(policy.id)
+    .bind(policy.flag_id)
+    .bind(&policy.environment)
+    .bind(outcome.as_str())
+    .bind(observed)
+    .bind(flag_version)
+    .bind(dedup)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -694,6 +1040,25 @@ mod tests {
 
     fn d(sample: &Sample) -> Decision {
         decide(sample, &Thresholds::default())
+    }
+
+    #[test]
+    fn the_rollback_reason_is_numbers_only() {
+        let id = Uuid::nil();
+        assert_eq!(
+            rollback_reason(id, &s(200, 200, 30, 2)),
+            format!(
+                "auto-rollback by policy {id}: error rate on 15.00% vs off 1.00% \
+                 over 400 evaluations"
+            )
+        );
+        assert_eq!(
+            rollback_reason(id, &s(1000, 0, 50, 0)),
+            format!(
+                "auto-rollback by policy {id}: error rate on 5.00% vs off n/a \
+                 over 1000 evaluations"
+            )
+        );
     }
 
     #[test]

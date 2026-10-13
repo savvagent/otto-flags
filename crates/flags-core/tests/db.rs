@@ -1448,3 +1448,465 @@ async fn turning_an_environment_back_on_rearms_its_policy(pool: PgPool) {
     assert!(!tripped(&mut tx).await);
     tx.commit().await.unwrap();
 }
+
+// ---- the checker: acting on one flag
+
+use flags_core::entitlements::Entitlement;
+use flags_core::rollback::{check_flag, due_policies, Outcome as RollbackOutcome};
+
+fn on(enabled: bool) -> EnvPatch {
+    EnvPatch {
+        enabled: Some(enabled),
+        ..Default::default()
+    }
+}
+
+/// `policy_fixture` with the given environments switched on and a policy in
+/// `mode` on production.
+async fn checker_fixture(
+    db: &Db,
+    org: OrgId,
+    actor: UserId,
+    enabled: &[&str],
+    mode: Mode,
+) -> (
+    flags_core::apps::FlagApp,
+    flags_core::flags::FeatureFlag,
+    uuid::Uuid,
+) {
+    let (app, _) = policy_fixture(db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    for env in enabled {
+        tx.set_environment(&app, "f", env, on(true), meta(actor))
+            .await
+            .unwrap();
+    }
+    let flag = tx.require_flag(&app, "f").await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            mode,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    (app, flag, policy.policy.id)
+}
+
+/// Server-key telemetry on production that trips the default thresholds:
+/// 200 evaluations each side, 30 errors with the flag on, none off.
+async fn tripping_telemetry(db: &Db, org: OrgId, app: &flags_core::apps::FlagApp) {
+    let mut tx = db.begin(org).await.unwrap();
+    for enabled in [true, false] {
+        telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(200, enabled))
+            .await
+            .unwrap();
+    }
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(30, true, Some("production")),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+}
+
+#[derive(Debug)]
+struct CheckerState {
+    version: i32,
+    versions: i64,
+    production: bool,
+    staging: bool,
+    tripped: bool,
+    checked: bool,
+    events: Vec<(String, Option<i32>)>,
+}
+
+async fn checker_state(db: &Db, org: OrgId, app: &flags_core::apps::FlagApp) -> CheckerState {
+    let mut tx = db.begin(org).await.unwrap();
+    let flag = tx.require_flag(app, "f").await.unwrap();
+    let enabled = |env: &str| flag.environments[env]["enabled"].as_bool().unwrap_or(false);
+    let versions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM flag_versions WHERE org_id = $1 AND flag_id = $2")
+            .bind(org)
+            .bind(flag.id)
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    let (tripped, checked): (bool, bool) = sqlx::query_as(
+        "SELECT tripped_at IS NOT NULL, last_checked_at IS NOT NULL FROM rollback_policies \
+         WHERE org_id = $1 AND flag_id = $2 AND environment = 'production'",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    let events: Vec<(String, Option<i32>)> = sqlx::query_as(
+        "SELECT outcome, flag_version FROM rollback_events WHERE org_id = $1 ORDER BY id",
+    )
+    .bind(org)
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    let state = CheckerState {
+        version: flag.version,
+        versions,
+        production: enabled("production"),
+        staging: enabled("staging"),
+        tripped,
+        checked,
+        events,
+    };
+    tx.rollback().await.unwrap();
+    state
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_tripping_policy_disables_only_its_environment(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production", "staging"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+    assert!(before.production && before.staging);
+
+    let mut listener = sqlx::postgres::PgListener::connect_with(&pool)
+        .await
+        .unwrap();
+    listener.listen(flags_core::notify::CHANNEL).await.unwrap();
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.checked, 1);
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(after.version, before.version + 1);
+    assert_eq!(after.versions, before.versions + 1);
+    assert!(!after.production, "production must be off");
+    assert!(after.staging, "staging must be untouched");
+    assert!(after.tripped);
+    assert!(after.checked);
+    assert_eq!(
+        after.events,
+        vec![("rolled_back".to_string(), Some(after.version))]
+    );
+
+    let mut tx = db.begin(org).await.unwrap();
+    let (change, actor_id, reason): (String, Option<uuid::Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT change, actor_user_id, reason FROM flag_versions \
+         WHERE org_id = $1 AND flag_id = $2 AND version = $3",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .bind(after.version)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(change, "auto_rollback");
+    assert_eq!(actor_id, None);
+    let reason = reason.expect("an auto-rollback names its cause");
+    assert!(
+        reason.starts_with(&format!("auto-rollback by policy {policy}: ")),
+        "{reason}"
+    );
+    assert!(reason.contains("over 400 evaluations"), "{reason}");
+    let observed: serde_json::Value =
+        sqlx::query_scalar("SELECT observed FROM rollback_events WHERE org_id = $1")
+            .bind(org)
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_eq!(observed["sample"]["errorsOn"], 30);
+    assert_eq!(observed["decision"]["decision"], "trip");
+    tx.rollback().await.unwrap();
+
+    let note = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
+        .await
+        .expect("a change notification after commit")
+        .unwrap();
+    let change: serde_json::Value = serde_json::from_str(note.payload()).unwrap();
+    assert_eq!(change["key"], "f");
+    assert_eq!(change["version"], after.version);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_tripped_policy_does_not_act_again(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    let first = checker_state(&db, org, &app).await;
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.checked, 0);
+    assert!(report.outcomes.is_empty());
+    let second = checker_state(&db, org, &app).await;
+    assert_eq!(second.version, first.version);
+    assert_eq!(second.versions, first.versions);
+    assert_eq!(second.events.len(), 1);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn observe_mode_records_once_an_hour_and_changes_nothing(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Observe).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    for _ in 0..2 {
+        let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            report.outcomes,
+            vec![(policy, RollbackOutcome::WouldRollBack)]
+        );
+    }
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(after.version, before.version);
+    assert!(after.production);
+    assert!(!after.tripped);
+    assert!(after.checked);
+    assert_eq!(after.events, vec![("would_roll_back".to_string(), None)]);
+}
+
+async fn assert_suppressed(pool: PgPool, answer: Entitlement, outcome: RollbackOutcome) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    for _ in 0..2 {
+        let report = check_flag(&db, &answer, org, flag.id).await.unwrap();
+        assert_eq!(report.outcomes, vec![(policy, outcome)]);
+    }
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(after.version, before.version);
+    assert_eq!(after.versions, before.versions);
+    assert!(after.production);
+    assert!(!after.tripped);
+    assert!(after.checked);
+    assert_eq!(after.events, vec![(outcome.as_str().to_string(), None)]);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_unentitled_org_records_but_does_not_act(pool: PgPool) {
+    assert_suppressed(
+        pool,
+        Entitlement::Denied {
+            plan: "Free".into(),
+        },
+        RollbackOutcome::NotEntitled,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_unknown_entitlement_fails_closed(pool: PgPool) {
+    assert_suppressed(
+        pool,
+        Entitlement::Unknown,
+        RollbackOutcome::EntitlementUnknown,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_healthy_flag_only_advances_last_checked(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    // Plenty of traffic, errors at the same rate on both sides.
+    let mut tx = db.begin(org).await.unwrap();
+    for enabled in [true, false] {
+        telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(200, enabled))
+            .await
+            .unwrap();
+        telemetry::record_errors(
+            &mut tx,
+            app.id,
+            KeyKind::Server,
+            error_events(12, enabled, Some("production")),
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    let before = checker_state(&db, org, &app).await;
+    assert!(!before.checked);
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.checked, 1);
+    assert!(report.outcomes.is_empty());
+    let after = checker_state(&db, org, &app).await;
+    assert!(after.checked);
+    assert!(!after.tripped);
+    assert!(after.production);
+    assert_eq!(after.version, before.version);
+    assert!(after.events.is_empty());
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_already_disabled_environment_is_marked_tripped_without_a_version(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) = checker_fixture(&db, org, actor, &["staging"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+    assert!(!before.production);
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+    let after = checker_state(&db, org, &app).await;
+    assert!(after.tripped);
+    assert_eq!(after.version, before.version);
+    assert_eq!(after.versions, before.versions);
+    assert!(after.staging);
+    assert_eq!(after.events, vec![("rolled_back".to_string(), None)]);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn archived_flags_and_missing_environments_are_skipped(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    // Archived: skipped, no event, but checked.
+    let mut tx = db.begin(org).await.unwrap();
+    tx.set_archived(&app, "f", true, meta(actor)).await.unwrap();
+    tx.commit().await.unwrap();
+    let before = checker_state(&db, org, &app).await;
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert!(report.outcomes.is_empty());
+    let after = checker_state(&db, org, &app).await;
+    assert!(after.checked);
+    assert!(!after.tripped);
+    assert!(after.events.is_empty());
+    assert_eq!(after.version, before.version);
+
+    // Restored, but production is no longer one of the app's environments.
+    let mut tx = db.begin(org).await.unwrap();
+    tx.set_archived(&app, "f", false, meta(actor))
+        .await
+        .unwrap();
+    tx.set_app_environments(&app, &["staging".into()], actor)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE rollback_policies SET last_checked_at = NULL")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let before = checker_state(&db, org, &app).await;
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert!(report.outcomes.is_empty());
+    let after = checker_state(&db, org, &app).await;
+    assert!(after.checked);
+    assert!(!after.tripped);
+    assert!(after.production, "a missing environment is never patched");
+    assert!(after.events.is_empty());
+    assert_eq!(after.version, before.version);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn due_policies_sees_every_org_unpinned(pool: PgPool) {
+    let db = db(pool).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    let (_, flag_a, _) = checker_fixture(&db, a, actor, &[], Mode::Enforce).await;
+    let (_, flag_b, _) = checker_fixture(&db, b, actor, &[], Mode::Enforce).await;
+    let five_minutes = std::time::Duration::from_secs(300);
+
+    let due = due_policies(&db, five_minutes, 200).await.unwrap();
+    assert_eq!(due.len(), 2, "{due:?}");
+    assert!(due.contains(&(a, flag_a.id)) && due.contains(&(b, flag_b.id)));
+    assert_eq!(due_policies(&db, five_minutes, 1).await.unwrap().len(), 1);
+
+    // Checked just now: no longer due.
+    check_flag(&db, &Entitlement::Granted, a, flag_a.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        due_policies(&db, five_minutes, 200).await.unwrap(),
+        vec![(b, flag_b.id)]
+    );
+    // Unless the caller asks for anything older than nothing at all.
+    assert_eq!(
+        due_policies(&db, std::time::Duration::ZERO, 200)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Tripped policies are never due.
+    let mut tx = db.begin(b).await.unwrap();
+    sqlx::query("UPDATE rollback_policies SET tripped_at = now()")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(due_policies(&db, five_minutes, 200)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_deleted_org_is_not_checked(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "org.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    platform_events::apply(&db, &event).await.unwrap();
+
+    let err = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::AccessRevoked), "{err:?}");
+    assert_eq!(err.code(), "access_revoked");
+}
