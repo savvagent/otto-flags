@@ -10,9 +10,10 @@
 //! bounded by a 2 s timeout and must not be made while holding a pooled
 //! connection.
 
+use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use otto_resource::{PlatformClient, UsageStatus};
 use otto_tenant::ids::OrgId;
@@ -24,6 +25,8 @@ use crate::usage::plan_name;
 pub const AUTO_ROLLBACK: &str = "auto_rollback";
 
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a failed lookup is remembered (still fail closed).
+const UNKNOWN_TTL: Duration = Duration::from_secs(10);
 
 /// The platform's answer for one org and feature.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,11 +53,68 @@ impl EntitlementSource for Entitlement {
     }
 }
 
+/// Orgs whose last lookup failed, remembered briefly so an outage costs one
+/// timeout per org per [`UNKNOWN_TTL`] rather than one per call. The platform
+/// client caches successes but never failures.
+#[derive(Default)]
+struct NegativeCache {
+    until: Mutex<HashMap<OrgId, Instant>>,
+}
+
+impl NegativeCache {
+    fn is_unknown(&self, org: OrgId, now: Instant) -> bool {
+        self.until
+            .lock()
+            .ok()
+            .and_then(|m| m.get(&org).copied())
+            .is_some_and(|until| until > now)
+    }
+
+    /// Remember `org` as unknown until `now + UNKNOWN_TTL`, dropping expired
+    /// entries so the map stays bounded by the orgs failing right now.
+    fn mark(&self, org: OrgId, now: Instant) {
+        if let Ok(mut m) = self.until.lock() {
+            m.retain(|_, until| *until > now);
+            m.insert(org, now + UNKNOWN_TTL);
+        }
+    }
+}
+
+/// A coarse, body-free description of a platform failure for logs.
+fn failure_reason(e: &otto_resource::Error) -> (&'static str, Option<u16>) {
+    use otto_resource::Error as E;
+    match e {
+        E::Status { status, .. } => ("http_status", Some(*status)),
+        E::Transport(_) => ("transport", None),
+        E::Decode(_) => ("decode", None),
+        E::Unauthorized => ("unauthorized", None),
+        // The org is gone: deliberately Unknown, so it fails closed.
+        E::NotFound => ("not_found", None),
+        E::InvalidUrl(_) => ("invalid_url", None),
+    }
+}
+
+/// Turn an answer into the caller's `Result`.
+fn decide(answer: Entitlement, feature: &str, upgrade_url: &str) -> Result<()> {
+    match answer {
+        Entitlement::Granted => Ok(()),
+        Entitlement::Denied { plan } => Err(Error::FeatureNotInPlan {
+            feature: feature.to_string(),
+            plan,
+            upgrade_url: upgrade_url.to_string(),
+        }),
+        Entitlement::Unknown => Err(Error::EntitlementUnavailable {
+            feature: feature.to_string(),
+        }),
+    }
+}
+
 /// The platform-backed [`EntitlementSource`].
 #[derive(Clone)]
 pub struct Entitlements {
     platform: Arc<PlatformClient>,
     pub upgrade_url: String,
+    failed: Arc<NegativeCache>,
 }
 
 impl Entitlements {
@@ -62,23 +122,14 @@ impl Entitlements {
         Self {
             platform,
             upgrade_url: upgrade_url.into(),
+            failed: Arc::default(),
         }
     }
 
     /// Ok, or [`Error::FeatureNotInPlan`] / [`Error::EntitlementUnavailable`].
     /// For MCP tools, before a transaction opens.
     pub async fn require(&self, org: OrgId, feature: &str) -> Result<()> {
-        match self.check(org, feature).await {
-            Entitlement::Granted => Ok(()),
-            Entitlement::Denied { plan } => Err(Error::FeatureNotInPlan {
-                feature: feature.to_string(),
-                plan,
-                upgrade_url: self.upgrade_url.clone(),
-            }),
-            Entitlement::Unknown => Err(Error::EntitlementUnavailable {
-                feature: feature.to_string(),
-            }),
-        }
+        decide(self.check(org, feature).await, feature, &self.upgrade_url)
     }
 }
 
@@ -86,17 +137,21 @@ impl EntitlementSource for Entitlements {
     fn check(&self, org: OrgId, feature: &str) -> impl Future<Output = Entitlement> + Send {
         let feature = feature.to_string();
         async move {
-            let reason = match tokio::time::timeout(
+            if self.failed.is_unknown(org, Instant::now()) {
+                return Entitlement::Unknown;
+            }
+            let (reason, status) = match tokio::time::timeout(
                 LOOKUP_TIMEOUT,
                 self.platform.usage_status(org.as_uuid()),
             )
             .await
             {
                 Ok(Ok(status)) => return from_status(&status, &feature),
-                Ok(Err(e)) => e.to_string(),
-                Err(_) => "timed out".to_string(),
+                Ok(Err(e)) => failure_reason(&e),
+                Err(_) => ("timeout", None),
             };
-            tracing::warn!(org = %org, feature = %feature, reason = %reason,
+            self.failed.mark(org, Instant::now());
+            tracing::warn!(org = %org, feature = %feature, reason, status,
                 "could not confirm a plan feature with the platform; treating it as not granted");
             Entitlement::Unknown
         }
@@ -151,6 +206,92 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn a_platform_without_features_denies() {
+        let mut v = serde_json::json!({
+            "org_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+            "plan": "team",
+            "period_start": "2026-10-01",
+            "billable_count": 0,
+            "total_count": 0,
+            "included_ops": 100,
+            "hard_stop": false,
+        });
+        assert!(v.get("features").is_none());
+        let s: UsageStatus = serde_json::from_value(v.take()).expect("older body");
+        assert_eq!(
+            from_status(&s, AUTO_ROLLBACK),
+            Entitlement::Denied {
+                plan: "Team".into()
+            }
+        );
+    }
+
+    #[test]
+    fn decide_maps_each_answer() {
+        let url = "https://example.test/upgrade";
+        assert!(decide(Entitlement::Granted, AUTO_ROLLBACK, url).is_ok());
+        match decide(
+            Entitlement::Denied {
+                plan: "Free".into(),
+            },
+            AUTO_ROLLBACK,
+            url,
+        ) {
+            Err(Error::FeatureNotInPlan {
+                feature,
+                plan,
+                upgrade_url,
+            }) => {
+                assert_eq!(feature, AUTO_ROLLBACK);
+                assert_eq!(plan, "Free");
+                assert_eq!(upgrade_url, url);
+            }
+            other => panic!("expected FeatureNotInPlan, got {other:?}"),
+        }
+        assert!(matches!(
+            decide(Entitlement::Unknown, AUTO_ROLLBACK, url),
+            Err(Error::EntitlementUnavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn a_failure_is_remembered_for_the_ttl_then_forgotten() {
+        let cache = NegativeCache::default();
+        let org = OrgId::from(uuid::Uuid::from_u128(1));
+        let other = OrgId::from(uuid::Uuid::from_u128(2));
+        let t0 = Instant::now();
+        assert!(!cache.is_unknown(org, t0));
+        cache.mark(org, t0);
+        assert!(cache.is_unknown(org, t0 + UNKNOWN_TTL / 2));
+        assert!(!cache.is_unknown(other, t0));
+        assert!(!cache.is_unknown(org, t0 + UNKNOWN_TTL));
+    }
+
+    #[test]
+    fn marking_prunes_expired_entries() {
+        let cache = NegativeCache::default();
+        let t0 = Instant::now();
+        for i in 0..5 {
+            cache.mark(OrgId::from(uuid::Uuid::from_u128(i)), t0);
+        }
+        cache.mark(OrgId::from(uuid::Uuid::from_u128(99)), t0 + UNKNOWN_TTL * 2);
+        assert_eq!(cache.until.lock().expect("lock").len(), 1);
+    }
+
+    #[test]
+    fn failure_reasons_carry_no_body_text() {
+        let e = otto_resource::Error::Status {
+            status: 503,
+            body: "secret body".into(),
+        };
+        assert_eq!(failure_reason(&e), ("http_status", Some(503)));
+        assert_eq!(
+            failure_reason(&otto_resource::Error::NotFound),
+            ("not_found", None)
+        );
     }
 
     #[tokio::test]
