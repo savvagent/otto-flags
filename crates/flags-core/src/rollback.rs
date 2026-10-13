@@ -639,6 +639,45 @@ pub async fn armed(tx: &mut Tx<'_>, flags: &[FlagId]) -> Result<Vec<FlagId>> {
     .await?)
 }
 
+/// Clear `tripped_at` on the policies of every environment that went from off
+/// (or absent) to on between `before` and `after`, so a tripped policy guards
+/// the environment again once someone turns it back on. Runs inside the
+/// change's own transaction.
+pub(crate) async fn rearm(
+    tx: &mut Tx<'_>,
+    flag: FlagId,
+    before: &serde_json::Value,
+    after: &serde_json::Value,
+) -> Result<()> {
+    let enabled = |envs: &serde_json::Value, name: &str| {
+        envs.get(name)
+            .and_then(|e| e.get("enabled"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    let turned_on: Vec<String> = after
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(name, _)| enabled(after, name) && !enabled(before, name))
+        .map(|(name, _)| name.clone())
+        .collect();
+    if turned_on.is_empty() {
+        return Ok(());
+    }
+    let org = tx.org();
+    sqlx::query(
+        "UPDATE rollback_policies SET tripped_at = NULL, updated_at = now() \
+         WHERE org_id = $1 AND flag_id = $2 AND environment = ANY($3) AND tripped_at IS NOT NULL",
+    )
+    .bind(org)
+    .bind(flag)
+    .bind(&turned_on)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

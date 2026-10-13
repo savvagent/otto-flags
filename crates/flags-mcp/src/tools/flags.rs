@@ -150,7 +150,7 @@ pub struct RollbackArgs {
 
 fn meta(caller: &Principal, expected_version: Option<i32>, reason: Option<String>) -> ChangeMeta {
     ChangeMeta {
-        actor: caller.user_id,
+        actor: Some(caller.user_id),
         reason,
         expected_version,
     }

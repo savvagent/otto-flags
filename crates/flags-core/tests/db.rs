@@ -18,7 +18,7 @@ use sqlx::{PgPool, Postgres};
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
-        actor,
+        actor: Some(actor),
         reason: None,
         expected_version: None,
     }
@@ -1362,5 +1362,89 @@ async fn every_outcome_text_satisfies_the_events_check(pool: PgPool) {
     let mut want: Vec<_> = all.iter().map(|o| o.as_str()).collect();
     want.sort();
     assert_eq!(got, want);
+    tx.commit().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn turning_an_environment_back_on_rearms_its_policy(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let on = |enabled| EnvPatch {
+        enabled: Some(enabled),
+        ..Default::default()
+    };
+
+    let mut tx = db.begin(org).await.unwrap();
+    tx.set_policy(
+        &app,
+        &flag,
+        "production",
+        Mode::Enforce,
+        Thresholds::default(),
+        actor,
+    )
+    .await
+    .unwrap();
+    async fn tripped(tx: &mut otto_tenant::Tx<'_>) -> bool {
+        sqlx::query_scalar("SELECT tripped_at IS NOT NULL FROM rollback_policies")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap()
+    }
+    async fn trip(tx: &mut otto_tenant::Tx<'_>) {
+        sqlx::query("UPDATE rollback_policies SET tripped_at = now()")
+            .execute(tx.conn())
+            .await
+            .unwrap();
+    }
+
+    tx.set_environment(&app, "f", "production", on(true), meta(actor))
+        .await
+        .unwrap();
+    tx.set_environment(&app, "f", "production", on(false), meta(actor))
+        .await
+        .unwrap();
+    trip(&mut tx).await;
+
+    // Another environment going on does not re-arm production.
+    tx.set_environment(&app, "f", "staging", on(true), meta(actor))
+        .await
+        .unwrap();
+    assert!(tripped(&mut tx).await);
+
+    // A change that leaves `enabled` alone does not either.
+    tx.update_flag(
+        &app,
+        "f",
+        FlagPatch {
+            name: Some("renamed".into()),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    assert!(tripped(&mut tx).await);
+
+    // Turning production back on does.
+    let v = tx
+        .set_environment(&app, "f", "production", on(true), meta(actor))
+        .await
+        .unwrap()
+        .version;
+    assert!(!tripped(&mut tx).await);
+
+    // Trip again, then roll back to a version where production was on.
+    trip(&mut tx).await;
+    tx.set_environment(&app, "f", "production", on(false), meta(actor))
+        .await
+        .unwrap();
+    trip(&mut tx).await;
+    tx.rollback_flag(&app, "f", Some(v), meta(actor))
+        .await
+        .unwrap();
+    assert!(!tripped(&mut tx).await);
     tx.commit().await.unwrap();
 }
