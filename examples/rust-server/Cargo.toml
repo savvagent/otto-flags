@@ -1,6 +1,7 @@
-# A standalone crate, excluded from the server workspace in the root Cargo.toml. This empty
-# table makes it its own workspace root, so cargo stops here instead of walking up to an
-# enclosing Cargo.toml (in a git worktree under .claude/worktrees/, the main checkout's).
+# An empty [workspace] makes this standalone crate its own workspace root. Without it, cargo
+# searches parent directories for a workspace and can find an enclosing checkout's root
+# Cargo.toml whose `exclude` list does not match this path (for example, in a git worktree
+# nested inside the main checkout), and refuses to build.
 [workspace]
 
 [package]

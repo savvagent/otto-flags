@@ -78,12 +78,12 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - evidence: report pass counts per test binary; `cargo test` without `DATABASE_URL` panics ("DATABASE_URL must be set") rather than skipping, so a panic there is a missing variable, not a test failure; `DATABASE_URL` points only at the local Postgres on 15434, never at a Fly database
 
 The pnpm gate lists exactly the pnpm workspace members (the `packages/*` and `examples/*` dirs with
-a `package.json`); root `pnpm lint/build/test` cover `packages/*` only. Known-red gates pass on no new
-failures against an `origin/main` baseline; the PR that fixes one removes its entry. `ruff check`
-reports 23 existing errors in `packages/python-server` and is not part of its gate until #19. The
-Go, Java, and Swift gates are unverified here (no toolchain on the dev host). When a gate's
-toolchain is missing, do not install one: report the gate as not run, with the reason, in the PR
-body. `packages/android-sdk` has no gate (no Gradle wrapper; needs Gradle 8+ and an Android SDK),
+a `package.json`); root `pnpm lint/build/test` cover `packages/*` only. Known-red gates pass on no
+new failures against an `origin/main` baseline; the PR that fixes one removes its entry.
+`ruff check` reports 23 existing errors in `packages/python-server` and is not part of its gate
+until #19. The Go, Java, and Swift gates are unverified here (no toolchain on the dev host). When a
+gate's toolchain is missing, do not install one: report the gate as not run, with the reason, in the
+PR body. `packages/android-sdk` has no gate (no Gradle wrapper; needs Gradle 8+ and an Android SDK),
 nor do `examples/go-server`, `examples/java-server`, `examples/python-server`, `examples/ios-app`,
 and `examples/android-app`: verify those with their native tooling and record the gap in the PR
 body. The Playwright suite (`examples/e2e`, root `examples/package.json`) targets a retired API and
@@ -180,8 +180,8 @@ crate module docs.
 - Rust: stable toolchain (`rust-toolchain.toml`), MSRV 1.88, edition 2021. Workspace members are
   `crates/flags-{core,mcp,api,server}`; `packages/rust-server` and `examples/rust-server` are
   excluded standalone crates, each its own workspace root (an empty `[workspace]` table, so
-  cargo works on them in place, worktrees included). New dependencies go in
-  `[workspace.dependencies]`, committed with `Cargo.lock`.
+  cargo works on them in place, worktrees included) with its own `Cargo.lock`. Server
+  dependencies go in the root `[workspace.dependencies]`, committed with `Cargo.lock`.
 - Test placement: SQL and domain behavior in `crates/flags-core/tests/db.rs` with
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`; pure logic as unit tests beside the code;
   MCP, SDK API, and webhook behavior in `crates/flags-server/tests/e2e.rs` against its mock platform.
