@@ -9,7 +9,9 @@ use flags_core::flags::{ChangeMeta, EnvPatch, FlagPatch, FlagsExt, NewFlag};
 use flags_core::keys::KeyKind;
 use flags_core::platform_events::{self, begin_live, Outcome};
 use flags_core::rollback::{self, Mode, PolicyState, RollbackExt, Thresholds};
-use flags_core::telemetry::{self, ErrorEvent, EvalEvent};
+use flags_core::telemetry::{
+    self, ErrorEvent, EvalEvent, ERROR_RETENTION_DAYS, EVAL_RETENTION_DAYS,
+};
 use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -848,10 +850,10 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
         .unwrap();
     tx.commit().await.unwrap();
 
-    // One expired and one fresh row per swept table. ERROR_RETENTION_DAYS is
-    // 14, EVAL_RETENTION_DAYS is 90, and the platform sweep keeps 30 days.
-    for days in [15, 0] {
-        let hours = if days == 0 { 1 } else { days * 24 };
+    // One expired and one fresh row per swept table. The platform sweep's
+    // retention is the `keep_days` passed to it.
+    let keep_days = 30;
+    for hours in [(ERROR_RETENTION_DAYS + 1) * 24, 1] {
         sqlx::query(
             "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, \
              occurred_at, received_at) \
@@ -864,7 +866,7 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
         .await
         .unwrap();
     }
-    for days in [91, 0] {
+    for days in [EVAL_RETENTION_DAYS + 1, 0] {
         sqlx::query(
             "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
              VALUES ($1, $2, 'production', date_trunc('hour', now()) - make_interval(days => $3), true, 1, 1)",
@@ -876,7 +878,7 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
         .await
         .unwrap();
     }
-    for days in [91, 1] {
+    for days in [EVAL_RETENTION_DAYS + 1, 1] {
         sqlx::query(
             "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed, created_at) \
              VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb, now() - make_interval(days => $4))",
@@ -889,7 +891,7 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
         .await
         .unwrap();
     }
-    for days in [31, 1] {
+    for days in [keep_days + 1, 1] {
         sqlx::query(
             "INSERT INTO platform_events (event_id, org_id, kind, received_at) \
              VALUES ($1, $2, 'member.removed', now() - make_interval(days => $3))",
@@ -904,13 +906,13 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
 
     let app_db = otto_app_db(&pool).await;
     assert_eq!(telemetry::sweep(&app_db).await.unwrap(), 3);
-    assert_eq!(platform_events::sweep(&app_db, 30).await.unwrap(), 1);
+    assert_eq!(platform_events::sweep(&app_db, keep_days).await.unwrap(), 1);
 
     for (table, column, cutoff_days) in [
-        ("flag_errors", "received_at", 14),
-        ("flag_eval_hourly", "hour", 90),
-        ("rollback_events", "created_at", 90),
-        ("platform_events", "received_at", 30),
+        ("flag_errors", "received_at", ERROR_RETENTION_DAYS),
+        ("flag_eval_hourly", "hour", EVAL_RETENTION_DAYS),
+        ("rollback_events", "created_at", EVAL_RETENTION_DAYS),
+        ("platform_events", "received_at", keep_days),
     ] {
         let (total, expired): (i64, i64) = sqlx::query_as(&format!(
             "SELECT count(*), count(*) FILTER (WHERE {column} < now() - make_interval(days => {cutoff_days})) \
@@ -922,14 +924,55 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
         assert_eq!((total, expired), (1, 0), "{table}");
     }
 
-    // The new policies widen nothing pinned: another org's row stays hidden.
-    let (_, other_flag) = policy_fixture(&admin, other, actor).await;
+    // The new policies widen nothing pinned: a fresh row of the other org in
+    // every swept table must stay invisible to a transaction pinned to `org`.
+    let (other_app, other_flag) = policy_fixture(&admin, other, actor).await;
+    let mut tx = admin.begin(other).await.unwrap();
+    let other_policy = tx
+        .set_policy(
+            &other_app,
+            &other_flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
     sqlx::query(
         "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, occurred_at) \
          VALUES ($1, $2, true, 'e', 'm', now())",
     )
     .bind(other)
     .bind(other_flag.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
+         VALUES ($1, $2, 'production', date_trunc('hour', now()), true, 1, 1)",
+    )
+    .bind(other)
+    .bind(other_flag.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb)",
+    )
+    .bind(other)
+    .bind(other_policy.policy.id)
+    .bind(other_flag.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_events (event_id, org_id, kind) VALUES ($1, $2, 'member.removed')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(other)
     .execute(&pool)
     .await
     .unwrap();

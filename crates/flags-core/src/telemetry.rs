@@ -3,7 +3,8 @@
 //!
 //! Evaluations are folded into hourly buckets as they arrive (see the baseline
 //! migration for why raw rows are not kept). Errors are kept raw, truncated,
-//! for [`ERROR_RETENTION_DAYS`].
+//! for [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
+//! for [`EVAL_RETENTION_DAYS`]. [`sweep`] enforces all three.
 //!
 //! Telemetry names flags by key and the key resolves within the reporting
 //! app, so an app can only ever count against its own flags. Unknown keys are
@@ -427,8 +428,9 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
     }
 }
 
-/// Retention: drop old error reports, evaluation buckets, and rollback events. Unpinned, across
-/// every org (the tables' retention policies allow exactly this).
+/// Retention: drop old error reports, evaluation buckets, and rollback events.
+/// Unpinned, across every org (the tables' retention policies allow exactly
+/// this).
 pub async fn sweep(db: &Db) -> Result<u64> {
     let errors = sqlx::query(
         "DELETE FROM flag_errors WHERE received_at < now() - make_interval(days => $1)",
