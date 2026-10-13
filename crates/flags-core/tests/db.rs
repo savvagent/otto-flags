@@ -12,6 +12,7 @@ use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use serde_json::json;
+use sqlx::migrate::MigrateError;
 use sqlx::PgPool;
 
 fn meta(actor: UserId) -> ChangeMeta {
@@ -32,6 +33,49 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     let report = db.verify_tenant_isolation().await.expect("isolation");
     let summary = report.summary();
     assert!(summary.contains("otto_app"), "{summary}");
+}
+
+/// A rolled-back release must boot against a database that a newer
+/// release already migrated: the applied version it does not know is
+/// ignored (`ignore_missing`), see `flags_core::migrate`.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_release_boots_against_a_database_a_newer_release_migrated(pool: PgPool) {
+    let newest = flags_core::MIGRATOR
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .expect("migrations are embedded");
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations \
+         (version, description, success, checksum, execution_time) \
+         VALUES ($1, 'from a newer release', true, '\\xdeadbeef'::bytea, 0)",
+    )
+    .bind(newest + 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    flags_core::MIGRATOR.run(&pool).await.unwrap();
+    flags_core::migrate(&db(pool).await).await.unwrap();
+}
+
+/// Ignoring unknown versions must not disable integrity: a known
+/// migration whose applied checksum differs still refuses to boot.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_tampered_known_migration_still_refuses_to_boot(pool: PgPool) {
+    let tampered = sqlx::query(
+        "UPDATE _sqlx_migrations SET checksum = '\\xdeadbeef'::bytea WHERE version = 1",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tampered.rows_affected(), 1, "version 1 must exist");
+
+    let err = flags_core::MIGRATOR.run(&pool).await.unwrap_err();
+    assert!(
+        matches!(err, MigrateError::VersionMismatch(1)),
+        "expected VersionMismatch(1), got {err:?}"
+    );
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
