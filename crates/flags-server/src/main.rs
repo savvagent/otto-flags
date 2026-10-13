@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
 
-    let (hints, checker) = spawn_checker(
+    let (hints, mut checker) = spawn_checker(
         db.clone(),
         platform.clone(),
         &config,
@@ -99,7 +99,6 @@ async fn main() -> Result<()> {
     if let Err(e) = shipper.await {
         tracing::warn!(error = %e, "the usage shipper did not stop cleanly");
     }
-    let mut checker = checker;
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => tracing::warn!(error = %e, "the rollback checker did not stop cleanly"),

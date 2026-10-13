@@ -114,7 +114,10 @@ pub async fn evaluations(
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
     let recorded = telemetry::record_evaluations(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
     // One indexed SELECT in the transaction already open; the hint goes out
-    // only after commit and never waits on the checker or the platform.
+    // only after commit and never waits on the checker or the platform. A
+    // failure here fails the request like a failed insert would: a failed
+    // statement aborts the transaction, so swallowing it could not save the
+    // batch, only hide why it was lost.
     let armed = rollback::armed(&mut tx, &recorded.flags).await?;
     tx.commit().await?;
     state.hints.send(sdk.0.org_id, armed);
@@ -143,7 +146,10 @@ pub async fn errors(
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
     let recorded = telemetry::record_errors(&mut tx, sdk.0.app_id, sdk.0.kind, events).await?;
     // One indexed SELECT in the transaction already open; the hint goes out
-    // only after commit and never waits on the checker or the platform.
+    // only after commit and never waits on the checker or the platform. A
+    // failure here fails the request like a failed insert would: a failed
+    // statement aborts the transaction, so swallowing it could not save the
+    // batch, only hide why it was lost.
     let armed = rollback::armed(&mut tx, &recorded.flags).await?;
     tx.commit().await?;
     state.hints.send(sdk.0.org_id, armed);
