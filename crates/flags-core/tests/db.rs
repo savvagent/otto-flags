@@ -35,9 +35,9 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     assert!(summary.contains("otto_app"), "{summary}");
 }
 
-/// A rolled-back release must boot against a database that a newer
-/// release already migrated: the applied version it does not know is
-/// ignored (`ignore_missing`), see `flags_core::migrate`.
+/// A rolled-back release must migrate cleanly against a database that a
+/// newer release already migrated: the applied version it does not know is
+/// ignored (`ignore_missing`), see `flags_core::MIGRATOR`.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_release_boots_against_a_database_a_newer_release_migrated(pool: PgPool) {
     let newest = flags_core::MIGRATOR
@@ -62,9 +62,41 @@ async fn a_release_boots_against_a_database_a_newer_release_migrated(pool: PgPoo
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(rows, flags_core::MIGRATOR.iter().count() as i64 + 1);
+    let known = flags_core::MIGRATOR
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration())
+        .count();
+    assert_eq!(rows, i64::try_from(known).unwrap() + 1);
 
+    // The boot path (`flags_core::migrate`) uses the same migrator.
     flags_core::migrate(&db(pool).await).await.unwrap();
+}
+
+/// A newer release's migration recorded as failed still refuses to boot,
+/// even though this release does not know its version.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_failed_unknown_migration_still_refuses_to_boot(pool: PgPool) {
+    let newest = flags_core::MIGRATOR
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .expect("migrations are embedded");
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations \
+         (version, description, success, checksum, execution_time) \
+         VALUES ($1, 'failed in a newer release', false, '\\xdeadbeef'::bytea, 0)",
+    )
+    .bind(newest + 1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = flags_core::MIGRATOR.run(&pool).await.unwrap_err();
+    assert!(
+        matches!(err, MigrateError::Dirty(v) if v == newest + 1),
+        "expected Dirty({}), got {err:?}",
+        newest + 1
+    );
 }
 
 /// Ignoring unknown versions must not disable integrity: a known

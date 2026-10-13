@@ -84,10 +84,16 @@ row of any version still yields `Dirty` and fails boot, as today.
 
 ## 7. Invariants impact
 
-- **Append-only migrations:** strengthened in meaning. Checksums of known migrations are still
-  verified, so editing an applied migration still refuses to boot. A new bullet records the
-  consequence: migrations must stay compatible with the previous release after a rollback too,
-  because that release now runs against the newer schema rather than refusing to start.
+- **Append-only migrations:** a trade-off. Checksums of known migrations are still verified, so
+  editing an applied migration still refuses to boot. Deleting or renaming one is no longer
+  caught by sqlx (the old version is simply unknown); CI's `migrations-append-only` job and a
+  unit test that embedded versions run 1..=N with no gap catch it instead. The bullet's rationale
+  is corrected in `CLAUDE.md`, and it now also forbids reusing a version number, since a
+  rolled-back release leaves its applied rows behind.
+- **Rollback compatibility (new invariant):** migrations must stay compatible with the previous
+  release after a rollback too, because that release now runs against the newer schema rather
+  than refusing to start: additive only, covering its writes as well as its reads. This replaces
+  the "compatible during rollout" sentence in the append-only bullet, so the rule is stated once.
 - **Tenant isolation is RLS under `otto_app`, proven:** unaffected. The boot isolation proof runs
   after migration as before; a rolled-back release proves isolation against the newer schema, and
   `tenant_isolation_is_enforced_on_every_tenant_table` is unchanged.
@@ -122,8 +128,13 @@ Both tests live in `crates/flags-core/tests/db.rs` with
    with a version above every embedded one (`max + 1`, computed from `MIGRATOR.iter()`), any
    checksum, `success = true`; assert `flags_core::MIGRATOR.run(&pool)` and
    `flags_core::migrate(&db)` both return `Ok`. Fails today with `VersionMissing`.
+   It also asserts the unknown row survives the run.
 2. `a_tampered_known_migration_still_refuses_to_boot`: update version 1's checksum; assert
    `MIGRATOR.run(&pool)` returns `Err(MigrateError::VersionMismatch(1))`.
+3. `a_failed_unknown_migration_still_refuses_to_boot` (added in review): an unknown row with
+   `success = false` still yields `Dirty`.
+4. `versions_are_contiguous_from_one` (unit test in `migrate.rs`, added in review): embedded
+   versions run 1..=N, so a deleted or renumbered file fails `cargo test`.
 
 Gates: the section's test (with `DATABASE_URL`, serialized across worktrees per the section's
 Worktree notes), lint, format,
@@ -133,6 +144,8 @@ the migrations `extra` check, and the `podman build` gate (changed paths under `
 
 - sqlx's hidden fields could change in a future minor; mitigated by the lockfile pin and a
   compile error on bump.
+- Deletion or renaming of a migration is no longer caught at boot; CI and the contiguity unit
+  test are the guards, and the merge gate is agent-enforced (no required checks on `main`).
 - A future migration that is not backward compatible would now let a rolled-back release boot
   into a schema it misreads, instead of crash-looping. The new invariant is the mitigation;
   reviewers check it per migration.

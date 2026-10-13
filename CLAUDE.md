@@ -113,7 +113,7 @@ has reviewed or commented on any PR here (#3, #6, #8, #10).
 - version files: packages/*/package.json, packages/rust-server/Cargo.toml, packages/python-server/pyproject.toml, packages/java-server/pom.xml, packages/android-sdk/build.gradle.kts
 
 ### Out-of-band
-- Migrations (agent): apply at boot under an advisory lock; confirm in the boot logs. A failure crash-loops the new machine and the deploy rolls back. The previous release then boots against the migrated database: `MIGRATOR` ignores unknown versions (`crates/flags-core/src/migrate.rs`).
+- Migrations (agent): apply at boot under an advisory lock; confirm in the boot logs. A failure crash-loops the new machine and the deploy rolls back. The previous release then boots against whatever newer migrations were applied: `MIGRATOR` ignores unknown versions (`crates/flags-core/src/migrate.rs`).
 - New non-secret config key (agent, in the PR): `fly.toml` `[env]`, `.env.example`, and `crates/flags-server/src/config.rs`.
 - New secret (human: Rob, before merge): `fly secrets set -a otto-flags --stage NAME=…`; the PR updates `.env.example` and the secrets table in `docs/deploy/fly.md`.
 - New scope (human: Rob, before merge): the PR updates `flags_core::scopes::KNOWN`/`DEFAULT`; Rob re-runs the platform `otto-platform-server resource register …` from `docs/deploy/fly.md`.
@@ -135,12 +135,15 @@ Hand these to Rob with the exact command; never run them:
 Reviewers check every one. Details: `docs/deploy/fly.md`, `docs/SDK-DEVELOPER-GUIDE.md`, and the
 crate module docs.
 - **Append-only migrations.** A schema change is a new `crates/flags-core/migrations/NNNN_<name>.sql`.
-  Never modify, rename, or delete an existing one, not even a comment: sqlx checksums applied
-  migrations and the next deploy refuses to boot. Migrations must be compatible with the previous
-  release during rollout (additive first).
+  Never modify, rename, or delete an existing one, not even a comment, and never reuse a version
+  number, even one only a rolled-back release applied: sqlx checksums applied migrations and the
+  next deploy refuses to boot on a modified one. Deletes and renames are caught only by CI's
+  `migrations-append-only` job and the contiguity test in `crates/flags-core/src/migrate.rs`,
+  because `MIGRATOR` ignores unknown versions.
 - **Migrations must be compatible with the previous release during rollout AND after a rollback:**
-  the previous release runs against the newer schema (`ignore_missing`), so no drop or rename of
-  anything it reads.
+  the previous release runs against the newer schema (`ignore_missing`,
+  `crates/flags-core/src/migrate.rs`). Additive only: new columns nullable or defaulted; no drop,
+  rename, retype, or new constraint that its reads or writes would trip.
 - **Tenant isolation is RLS under `otto_app`, proven.** Tenant queries are extension-trait methods
   on `otto_tenant::Tx` in `flags-core`. Every new tenant table enables RLS, grants to `otto_app`,
   and is covered by `tenant_isolation_is_enforced_on_every_tenant_table`
