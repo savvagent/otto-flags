@@ -5,11 +5,13 @@
 use flags_core::apps::{FlagApp, IssuedKeys};
 use flags_core::eval::Evaluation;
 use flags_core::flags::{FeatureFlag, FlagVersion};
+use flags_core::rollback::{Event, Observation, PolicyView};
 use flags_core::telemetry::Health;
 use flags_core::usage::Status;
 use otto_tenant::ids::{OrgId, UserId};
 use schemars::JsonSchema;
 use serde::Serialize;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -148,4 +150,48 @@ pub struct TokenOut {
 #[serde(rename_all = "camelCase")]
 pub struct UsageOut {
     pub usage: Status,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyOut {
+    pub policy: PolicyView,
+    /// Set when the policy has a blind spot worth knowing about.
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PoliciesOut {
+    pub app: String,
+    pub policies: Vec<PolicyView>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedPolicyOut {
+    /// False when there was no such policy.
+    pub removed: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalOut {
+    pub key: String,
+    pub environment: String,
+    /// The existing policy the thresholds started from, if any.
+    pub policy_id: Option<Uuid>,
+    /// The current sample, the thresholds judged, and the decision.
+    pub observation: Observation,
+    pub would_trip: bool,
+    /// False when these thresholds can never trip on this sample's shape.
+    pub can_trip: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EventsOut {
+    /// Newest first. Numbers and ids only.
+    pub events: Vec<Event>,
 }
