@@ -115,6 +115,21 @@ impl Error {
         }
     }
 
+    /// Whether this failure is the kind that passes on its own: contention
+    /// (serialization failure, deadlock, a lock or statement timeout), a
+    /// connection or pool problem, or the platform being unreachable. Narrower
+    /// than [`Error::retriable`], which tells an agent any database error is
+    /// worth one more try: a background job retrying on a schedule must not
+    /// keep retrying a constraint violation or a missing table.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => db_is_transient(e),
+            Error::EntitlementUnavailable { .. } => true,
+            Error::Platform(p) => p.is_retriable(),
+            _ => false,
+        }
+    }
+
     /// Whether this is the server's fault (and its text must not reach a
     /// caller) rather than a description of the caller's request.
     pub fn is_internal(&self) -> bool {
@@ -129,10 +144,115 @@ impl Error {
     }
 }
 
+/// SQLSTATEs that a later attempt can avoid: serialization_failure,
+/// deadlock_detected, lock_not_available (`lock_timeout`), and query_canceled
+/// (`statement_timeout`).
+const TRANSIENT_SQLSTATES: &[&str] = &["40001", "40P01", "55P03", "57014"];
+
+fn db_is_transient(e: &sqlx::Error) -> bool {
+    match e {
+        sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => true,
+        sqlx::Error::Database(db) => db
+            .code()
+            .is_some_and(|code| TRANSIENT_SQLSTATES.contains(&code.as_ref())),
+        _ => false,
+    }
+}
+
 /// Map a unique violation on `constraint` to `to`, anything else to [`Error::Db`].
 pub(crate) fn on_unique(e: sqlx::Error, to: impl FnOnce() -> Error) -> Error {
     match &e {
         sqlx::Error::Database(db) if db.is_unique_violation() => to(),
         _ => Error::Db(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::borrow::Cow;
+
+    /// A database error with a chosen SQLSTATE: sqlx's own Postgres error
+    /// cannot be built outside sqlx.
+    #[derive(Debug)]
+    struct Sqlstate(&'static str);
+
+    impl std::fmt::Display for Sqlstate {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "sqlstate {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Sqlstate {}
+
+    impl sqlx::error::DatabaseError for Sqlstate {
+        fn message(&self) -> &str {
+            "test"
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn db(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(Sqlstate(code)))
+    }
+
+    #[test]
+    fn only_contention_cancellation_and_connection_failures_are_transient() {
+        let io = || std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        for transient in [
+            Error::Db(sqlx::Error::PoolTimedOut),
+            Error::Db(sqlx::Error::PoolClosed),
+            Error::Db(sqlx::Error::Io(io())),
+            // serialization_failure, deadlock_detected, lock_not_available,
+            // query_canceled (statement or lock timeout)
+            Error::Db(db("40001")),
+            Error::Db(db("40P01")),
+            Error::Db(db("55P03")),
+            Error::Db(db("57014")),
+            Error::Tenant(otto_tenant::Error::Db(sqlx::Error::PoolTimedOut)),
+            Error::Tenant(otto_tenant::Error::Db(db("40P01"))),
+            Error::EntitlementUnavailable {
+                feature: "auto_rollback".into(),
+            },
+        ] {
+            assert!(transient.is_transient(), "{transient:?}");
+        }
+        for permanent in [
+            // unique_violation, undefined_table, check_violation,
+            // insufficient_privilege
+            Error::Db(db("23505")),
+            Error::Db(db("42P01")),
+            Error::Db(db("23514")),
+            Error::Db(db("42501")),
+            Error::Db(sqlx::Error::RowNotFound),
+            Error::Db(sqlx::Error::Protocol("bad".into())),
+            Error::Tenant(otto_tenant::Error::Db(db("23505"))),
+            Error::Tenant(otto_tenant::Error::Invalid("bad".into())),
+            Error::AccessRevoked,
+            Error::Invalid("bad".into()),
+        ] {
+            assert!(!permanent.is_transient(), "{permanent:?}");
+        }
+    }
+
+    #[test]
+    fn retriable_keeps_its_meaning_for_mcp_callers() {
+        // Any database error is still "retry the call" to an agent.
+        assert!(Error::Db(db("23505")).retriable());
+        assert!(Error::Db(sqlx::Error::PoolTimedOut).retriable());
     }
 }

@@ -36,15 +36,23 @@
 //!
 //! A flag whose check fails never advances `last_checked_at`, so the backstop
 //! would keep returning it. A failure that retrying cannot fix (an org
-//! deleted but not yet purged, a stored environment the patch refuses) leaves
-//! the flag alone for [`FAILURE_COOLDOWN`]; a successful check clears that. A
-//! retriable failure (a pool timeout, a serialization failure, the platform
-//! unreachable) counts as a check, so the next hint or backstop pass retries
-//! it after the usual debounce: a telemetry burst, the likeliest time for a
-//! pool timeout, is also when a misbehaving flag most needs checking. If at least
-//! `backstop_limit` policies fail persistently they can still fill the
-//! backstop's slots; that is accepted, since hints still reach every other
-//! flag.
+//! deleted but not yet purged, a stored environment the patch refuses, a
+//! constraint violation) leaves the flag alone for [`FAILURE_COOLDOWN`]; a
+//! successful check clears that. A transient failure ([`Error::is_transient`]:
+//! a pool timeout, a serialization failure or deadlock, a lock or statement
+//! timeout, the platform unreachable) counts as a check, so the next hint or
+//! backstop pass retries it after the usual debounce: a telemetry burst, the
+//! likeliest time for a pool timeout, is also when a misbehaving flag most
+//! needs checking. If at least `backstop_limit` policies fail persistently
+//! they can still fill the backstop's slots; that is accepted, since hints
+//! still reach every other flag.
+//!
+//! Every check is bounded: its transactions wait at most 2 s for a row lock,
+//! and the whole check at most [`CheckerConfig::check_timeout`] (15 s), after
+//! which it is abandoned and retried. Within one check each policy acts inside
+//! its own savepoint, so a policy that fails changes nothing, is reported in
+//! [`CheckReport::failed`], and does not undo the others; the check is then
+//! judged by its worst failure.
 //!
 //! Flags are checked one at a time, and [`check_flag`] holds at most one
 //! pooled connection at a time, so the checker never holds more than one of
@@ -764,6 +772,33 @@ pub struct CheckReport {
     /// The outcome for each policy that still tripped once the entitlement was
     /// known, whether or not its (deduplicated) event was written this time.
     pub outcomes: Vec<(Uuid, Outcome)>,
+    /// Policies whose action failed. Each was rolled back to a savepoint, so
+    /// it changed nothing, and its `last_checked_at` was not advanced; the
+    /// other policies' actions stand.
+    pub failed: Vec<PolicyFailure>,
+}
+
+/// One policy whose action failed during a check.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PolicyFailure {
+    pub policy: Uuid,
+    /// [`Error::code`]; the error's text is not kept.
+    pub code: &'static str,
+    /// [`Error::is_transient`].
+    pub transient: bool,
+}
+
+/// How long the checker's transactions wait for a row lock (a flag held by a
+/// person's change, another checker) before failing with a transient error.
+const CHECK_LOCK_TIMEOUT: &str = "2s";
+
+/// Open a checker transaction: `begin_live`, with a bounded lock wait.
+async fn begin_check(db: &Db, org: OrgId) -> Result<Tx<'static>> {
+    let mut tx = begin_live(db, org, None).await?;
+    sqlx::query(&format!("SET LOCAL lock_timeout = '{CHECK_LOCK_TIMEOUT}'"))
+        .execute(tx.conn())
+        .await?;
+    Ok(tx)
 }
 
 /// Unpinned: armed policies whose `last_checked_at` is NULL or older than
@@ -822,11 +857,11 @@ pub async fn check_flag(
     flag: FlagId,
 ) -> Result<CheckReport> {
     // Transaction 1: sample without locking anything.
-    let mut tx = begin_live(db, org, None).await?;
+    let mut tx = begin_check(db, org).await?;
     let policies = armed_policies(&mut tx, flag).await?;
     let mut report = CheckReport {
         checked: policies.len(),
-        outcomes: Vec::new(),
+        ..CheckReport::default()
     };
     if policies.is_empty() {
         tx.commit().await?;
@@ -862,7 +897,7 @@ pub async fn check_flag(
     let entitlement = entitlements.check(org, AUTO_ROLLBACK).await;
 
     // Transaction 2: re-check under the flag's lock, then act.
-    let mut tx = begin_live(db, org, None).await?;
+    let mut tx = begin_check(db, org).await?;
     // Lock order: the flag row before any policy row. `commit_change` updates
     // rollback_policies (re-arming) while holding the flag lock, so touching a
     // policy first here could deadlock with a concurrent set_environment.
@@ -900,18 +935,50 @@ pub async fn check_flag(
             decision,
         };
         let outcome = match (&entitlement, policy.mode) {
-            (Entitlement::Granted, Mode::Enforce) => {
-                enforce(&mut tx, &app, &mut current, &policy, trigger, &observation).await?;
-                Outcome::RolledBack
-            }
+            (Entitlement::Granted, Mode::Enforce) => Outcome::RolledBack,
             (Entitlement::Granted, Mode::Observe) => Outcome::WouldRollBack,
             (Entitlement::Denied { .. }, _) => Outcome::NotEntitled,
             (Entitlement::Unknown, _) => Outcome::EntitlementUnknown,
         };
-        if outcome != Outcome::RolledBack {
-            record_suppressed(&mut tx, &policy, outcome, &observation).await?;
+        // Each policy acts inside its own savepoint, so one that fails (a
+        // stored environment the patch refuses, say) leaves no partial change
+        // and does not discard what the others did in this transaction.
+        sqlx::query("SAVEPOINT rollback_policy")
+            .execute(tx.conn())
+            .await?;
+        let before = current.clone();
+        let acted = match outcome {
+            Outcome::RolledBack => {
+                enforce(&mut tx, &app, &mut current, &policy, trigger, &observation).await
+            }
+            _ => record_suppressed(&mut tx, &policy, outcome, &observation).await,
+        };
+        match acted {
+            Ok(()) => {
+                sqlx::query("RELEASE SAVEPOINT rollback_policy")
+                    .execute(tx.conn())
+                    .await?;
+                report.outcomes.push((policy.id, outcome));
+            }
+            Err(e) => {
+                sqlx::query("ROLLBACK TO SAVEPOINT rollback_policy")
+                    .execute(tx.conn())
+                    .await?;
+                // The flag as it was before this policy's undone patch.
+                current = before;
+                checked.retain(|id| *id != policy.id);
+                report.failed.push(PolicyFailure {
+                    policy: policy.id,
+                    code: e.code(),
+                    transient: e.is_transient(),
+                });
+                // The code only: database text never reaches a log above debug.
+                tracing::warn!(%org, %flag, policy = %policy.id, code = e.code(),
+                    "auto-rollback could not act on a policy");
+                tracing::debug!(%org, %flag, policy = %policy.id, error = %e,
+                    "auto-rollback policy failure");
+            }
         }
-        report.outcomes.push((policy.id, outcome));
     }
     mark_checked(&mut tx, &checked).await?;
     tx.commit().await?;
@@ -1246,6 +1313,10 @@ pub struct CheckerConfig {
     pub backstop_limit: i64,
     /// Hints that can wait before new ones are dropped.
     pub channel_capacity: usize,
+    /// The longest one flag's check may take; a check still running then is
+    /// abandoned (its open transaction rolls back) and retried after the
+    /// debounce, so one stuck check cannot stall every other flag.
+    pub check_timeout: Duration,
 }
 
 impl Default for CheckerConfig {
@@ -1255,6 +1326,7 @@ impl Default for CheckerConfig {
             backstop_every: Duration::from_secs(300),
             backstop_limit: 200,
             channel_capacity: 1024,
+            check_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -1319,7 +1391,7 @@ async fn run<E: EntitlementSource>(
             return Exit::Requested;
         }
         for key in schedule.take_due(Instant::now()) {
-            let result = check_one(&db, &entitlements, key).await;
+            let result = check_one(&db, &entitlements, key, config.check_timeout).await;
             let now = Instant::now();
             match result {
                 Checked::Ok => schedule.checked(key, now),
@@ -1398,27 +1470,53 @@ enum Checked {
     GiveUp,
 }
 
-/// Whether a failed check is worth retrying soon.
+/// Whether a failed check is worth retrying soon: only for failures that
+/// pass on their own ([`Error::is_transient`]). Anything else (a constraint
+/// violation, a refused patch, a deleted org) would fail the same way again.
 fn classify(e: &Error) -> Checked {
-    if e.retriable() {
+    if e.is_transient() {
         Checked::Retry
     } else {
         Checked::GiveUp
     }
 }
 
-/// Check one flag and log what happened.
-async fn check_one(db: &Db, entitlements: &impl EntitlementSource, (org, flag): Key) -> Checked {
-    match check_flag(db, entitlements, org, flag).await {
+/// A check that completed, judged by its worst policy: any permanent failure
+/// gives up, else any transient one retries.
+fn classify_report(report: &CheckReport) -> Checked {
+    if report.failed.iter().any(|f| !f.transient) {
+        Checked::GiveUp
+    } else if report.failed.is_empty() {
+        Checked::Ok
+    } else {
+        Checked::Retry
+    }
+}
+
+/// Check one flag within `deadline` and log what happened. A check past its
+/// deadline is dropped, which rolls its open transaction back, and retried.
+async fn check_one(
+    db: &Db,
+    entitlements: &impl EntitlementSource,
+    (org, flag): Key,
+    deadline: Duration,
+) -> Checked {
+    let Ok(result) = tokio::time::timeout(deadline, check_flag(db, entitlements, org, flag)).await
+    else {
+        tracing::warn!(%org, %flag, timeout_ms = deadline.as_millis(), retry = true,
+            "auto-rollback check timed out");
+        return Checked::Retry;
+    };
+    match result {
         Ok(report) => {
-            for (policy, outcome) in report.outcomes {
-                if outcome == Outcome::RolledBack {
+            for (policy, outcome) in &report.outcomes {
+                if *outcome == Outcome::RolledBack {
                     tracing::info!(%org, %flag, %policy, "auto-rollback turned a flag's environment off");
                 } else {
                     tracing::debug!(%org, %flag, %policy, outcome = outcome.as_str(), "auto-rollback trip recorded, not acted on");
                 }
             }
-            Checked::Ok
+            classify_report(&report)
         }
         // A deleted org, not yet purged: expected, and nothing to do.
         Err(e @ Error::AccessRevoked) => {
@@ -1665,6 +1763,34 @@ mod tests {
             }),
             Checked::Retry
         );
+        // A database error that retrying cannot fix cools down.
+        assert_eq!(
+            classify(&Error::Db(sqlx::Error::RowNotFound)),
+            Checked::GiveUp
+        );
+        assert_eq!(
+            classify(&Error::Db(sqlx::Error::Protocol("bad".into()))),
+            Checked::GiveUp
+        );
+    }
+
+    fn failure(transient: bool) -> PolicyFailure {
+        PolicyFailure {
+            policy: Uuid::new_v4(),
+            code: "x",
+            transient,
+        }
+    }
+
+    #[test]
+    fn a_report_is_judged_by_its_worst_policy() {
+        let mut report = CheckReport::default();
+        assert_eq!(classify_report(&report), Checked::Ok);
+        report.failed.push(failure(true));
+        assert_eq!(classify_report(&report), Checked::Retry);
+        report.failed.push(failure(false));
+        report.failed.push(failure(true));
+        assert_eq!(classify_report(&report), Checked::GiveUp);
     }
 
     #[test]

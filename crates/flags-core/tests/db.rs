@@ -2629,3 +2629,187 @@ async fn two_tripping_policies_roll_back_both_environments_in_one_check(pool: Pg
     tx.rollback().await.unwrap();
     assert_eq!(armed, 0);
 }
+
+// ---- the checker's deadlines and per-policy isolation
+
+/// A check that meets the flag's row lock held by someone else gives up after
+/// the checker's lock timeout, as a transient error, instead of waiting.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_check_blocked_on_the_flag_lock_times_out_as_transient(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    // Holds the flag's row lock until it ends.
+    let mut writer = db.begin(org).await.unwrap();
+    writer
+        .set_environment(&app, "f", "staging", on(true), meta(actor))
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let err = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap_err();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    match &err {
+        Error::Db(e) => assert_eq!(sqlstate(e), "55P03", "{e:?}"),
+        other => panic!("expected a lock timeout, got {other:?}"),
+    }
+    assert!(err.is_transient());
+    writer.rollback().await.unwrap();
+
+    // Once the lock is gone the same check acts.
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+}
+
+/// Hangs on its first call, then grants.
+struct HangsOnce {
+    calls: AtomicUsize,
+}
+
+impl flags_core::entitlements::EntitlementSource for HangsOnce {
+    async fn check(&self, _org: OrgId, _feature: &str) -> Entitlement {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::future::pending::<()>().await;
+        }
+        Entitlement::Granted
+    }
+}
+
+/// A check that hangs is abandoned at the check deadline and retried, not
+/// left to block the checker or cooled down for an hour.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_hung_check_is_abandoned_and_retried(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let config = CheckerConfig {
+        debounce: std::time::Duration::from_millis(50),
+        backstop_every: std::time::Duration::from_secs(1),
+        check_timeout: std::time::Duration::from_millis(300),
+        ..CheckerConfig::default()
+    };
+    let (hints, task) = Checker::spawn(
+        db.clone(),
+        HangsOnce {
+            calls: AtomicUsize::new(0),
+        },
+        config,
+        shutdown,
+    );
+    hints.send(org, vec![flag.id]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !checker_state(&db, org, &app).await.tripped {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the hung check was never retried"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!checker_state(&db, org, &app).await.production);
+    stop.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .expect("the checker stops on shutdown")
+        .unwrap();
+}
+
+/// One policy whose action fails does not undo another policy's rollback in
+/// the same check, and is reported.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn one_policys_failure_does_not_undo_anothers_rollback(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, production) =
+        checker_fixture(&db, org, actor, &["production", "staging"], Mode::Enforce).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let staging = tx
+        .set_policy(
+            &app,
+            &flag,
+            "staging",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap()
+        .policy
+        .id;
+    for enabled in [true, false] {
+        let mut evals = eval_events(200, enabled);
+        for e in &mut evals {
+            e.environment = "staging".into();
+        }
+        telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, evals)
+            .await
+            .unwrap();
+    }
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(30, true, Some("staging")),
+    )
+    .await
+    .unwrap();
+    // Production still reads as on, but the patch refuses its stored config;
+    // production sorts first, so it fails before staging acts.
+    sqlx::query(
+        "UPDATE feature_flags \
+         SET environments = jsonb_set(environments, '{production,rules}', '\"not a list\"') \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.outcomes,
+        vec![(staging, RollbackOutcome::RolledBack)]
+    );
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert_eq!(report.failed[0].policy, production);
+    assert_eq!(report.failed[0].code, "invalid_argument");
+    assert!(!report.failed[0].transient);
+
+    let after = checker_state(&db, org, &app).await;
+    assert!(after.production, "the failed policy changed nothing");
+    assert!(!after.staging, "staging was rolled back");
+    assert_eq!(
+        auto_rollback_versions(&db, org).await,
+        vec![before.version + 1]
+    );
+    assert!(!after.tripped, "the failed policy is still armed");
+    assert!(
+        !after.checked,
+        "the failed policy is not marked checked, so it is retried"
+    );
+    assert_eq!(
+        after.events,
+        vec![("rolled_back".to_string(), Some(before.version + 1))]
+    );
+}

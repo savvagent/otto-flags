@@ -142,6 +142,11 @@ back.
    (a pool timeout during a telemetry burst) is retried after the normal debounce, so a passing
    blip never hides a failing flag for an hour (final review). Residual: at least
    `backstop_limit` persistently failing policies could still fill the backstop's slots.
+   PR review of #24 narrowed "retriable" to `Error::is_transient` (pool timeout or closed, I/O,
+   SQLSTATE 40001, 40P01, 55P03, 57014, the platform unreachable; any other database error
+   cools down), bounded each check (2 s lock timeout per transaction, 15 s per check, then
+   retried), and gave each policy's action its own savepoint so one failing policy does not
+   undo the others.
 14. **`propose_rollback` records no usage row** (unlike `evaluate_flag` and `flag_health`, which
    record a non-billable one). It is a dry run that commits nothing: its transaction is dropped,
    so a usage row would need a commit the tool otherwise never makes. Free tools' usage rows
