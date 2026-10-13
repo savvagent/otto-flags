@@ -229,8 +229,10 @@ CREATE TABLE rollback_policies (
 );
 
 CREATE INDEX rollback_policies_org_idx ON rollback_policies (org_id);
--- The checker's lookup: armed policies for a flag.
-CREATE INDEX rollback_policies_flag_idx ON rollback_policies (flag_id) WHERE tripped_at IS NULL;
+-- The checker's backstop: armed policies, least recently checked first. (Per-flag
+-- lookups use UNIQUE (flag_id, environment).)
+CREATE INDEX rollback_policies_due_idx ON rollback_policies (last_checked_at NULLS FIRST)
+  WHERE tripped_at IS NULL;
 
 -- What policies did, or would have done. Kept 90 days (the evaluation
 -- retention), swept unpinned like flag_errors.
@@ -252,7 +254,8 @@ CREATE TABLE rollback_events (
 );
 
 CREATE INDEX rollback_events_flag_idx ON rollback_events (flag_id, created_at DESC);
-CREATE INDEX rollback_events_org_idx ON rollback_events (org_id);
+-- Org purge, the policy FK cascade, and the per-(policy, outcome) hourly dedup.
+CREATE INDEX rollback_events_policy_idx ON rollback_events (org_id, policy_id, created_at DESC);
 CREATE INDEX rollback_events_created_idx ON rollback_events (created_at);
 
 -- Tenant isolation, as in the baseline: FORCE RLS and a policy named
