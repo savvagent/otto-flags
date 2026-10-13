@@ -125,7 +125,8 @@ Both tests live in `crates/flags-core/tests/db.rs` with
 2. `a_tampered_known_migration_still_refuses_to_boot`: update version 1's checksum; assert
    `MIGRATOR.run(&pool)` returns `Err(MigrateError::VersionMismatch(1))`.
 
-Gates: the section's test (with `DATABASE_URL`, serialized under the run's `flock`), lint, format,
+Gates: the section's test (with `DATABASE_URL`, serialized across worktrees per the section's
+Worktree notes), lint, format,
 the migrations `extra` check, and the `podman build` gate (changed paths under `crates/**`).
 
 ## 12. Risks and open questions

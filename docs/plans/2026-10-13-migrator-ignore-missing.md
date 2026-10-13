@@ -104,8 +104,8 @@ Model: sonnet
   ```
 
   (The `\\x` in a normal Rust string literal yields `\x` in SQL, the bytea hex form; a raw string
-  `r"..."` with a single backslash is equivalent. Check `rows_affected() == 1` on the UPDATE if it
-  helps make the test self-proving.)
+  `r"..."` with a single backslash is equivalent.) Assert `rows_affected() == 1` on the UPDATE so
+  the test proves version 1 was actually tampered with.
 
 - [ ] **Run, see the first fail** with `VersionMissing` and the second pass:
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1c1ca6c4-ca67-4c3f-8a81-2816918f1768/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- a_release_boots a_tampered_known`
@@ -138,8 +138,8 @@ Model: sonnet
   use a const block (`{ let mut m = sqlx::migrate!("./migrations"); m.ignore_missing = true; m }`)
   and record it.
 
-- [ ] **Run, see both pass** (same command), then the full gates: test, lint, format, extra (all
-  in Global Constraints).
+- [ ] **Run, see both pass** (same command), run `cargo fmt --all`, then the full gates: test,
+  lint, format, extra, and `podman build -t otto-flags:check .` (all in Global Constraints).
 
 - [ ] **Commit:**
   ```
@@ -168,3 +168,11 @@ Model: haiku
 - [ ] Gates: format and the migrations extra check (docs-only; no code changed).
 - [ ] **Commit:** `docs: say a rolled-back release tolerates newer migrations` with a why-body,
   ending `Refs #26`. No attribution.
+
+### Task 3: record as shipped (orchestrator, after the PR exists)
+
+Model: haiku
+
+- [ ] Final commit in the PR before merge: the spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)`
+  and this plan's boxes are ticked (`docs: record the rollback-safe migrator as shipped`,
+  `Refs #26`). Re-run the merge gate on the new head.
