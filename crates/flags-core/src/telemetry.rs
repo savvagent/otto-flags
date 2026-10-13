@@ -427,7 +427,7 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
     }
 }
 
-/// Retention: drop old error reports and evaluation buckets. Unpinned, across
+/// Retention: drop old error reports, evaluation buckets, and rollback events. Unpinned, across
 /// every org (the tables' retention policies allow exactly this).
 pub async fn sweep(db: &Db) -> Result<u64> {
     let errors = sqlx::query(
@@ -443,7 +443,15 @@ pub async fn sweep(db: &Db) -> Result<u64> {
             .execute(db.pool())
             .await?
             .rows_affected();
-    Ok(errors + evals)
+    // Rollback events are bounded at the evaluation retention.
+    let rollbacks = sqlx::query(
+        "DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => $1)",
+    )
+    .bind(EVAL_RETENTION_DAYS)
+    .execute(db.pool())
+    .await?
+    .rows_affected();
+    Ok(errors + evals + rollbacks)
 }
 
 #[cfg(test)]

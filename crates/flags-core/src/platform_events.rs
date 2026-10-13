@@ -191,6 +191,8 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
     // relies on the predicate alone.
     let mut deleted = serde_json::Map::new();
     for table in [
+        "rollback_events",
+        "rollback_policies",
         "flag_errors",
         "flag_eval_hourly",
         "flag_versions",

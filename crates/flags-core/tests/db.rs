@@ -693,6 +693,33 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         keys_issued.push(issued.server_key.unwrap());
     }
 
+    // The org has a rollback policy and an event; the purge must take both.
+    let mut tx = db.begin(org).await.unwrap();
+    let app = tx.list_apps().await.unwrap().remove(0);
+    let flag = tx.require_flag(&app, "f").await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb)",
+    )
+    .bind(org)
+    .bind(policy.policy.id)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
     let body = otto_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
@@ -700,14 +727,24 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         &json!({"org_id": org.as_uuid()}),
     );
     let event = otto_resource::webhook::parse(&body).unwrap();
-    assert!(matches!(
-        platform_events::apply(&db, &event).await.unwrap(),
-        Outcome::Applied { .. }
-    ));
+    let Outcome::Applied { detail } = platform_events::apply(&db, &event).await.unwrap() else {
+        panic!("first delivery should apply");
+    };
+    assert_eq!(detail["rollback_policies"], 1, "{detail}");
+    assert_eq!(detail["rollback_events"], 1, "{detail}");
     assert_eq!(
         platform_events::apply(&db, &event).await.unwrap(),
         Outcome::Duplicate
     );
+    for table in ["rollback_policies", "rollback_events"] {
+        let left: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE org_id = $1"))
+                .bind(org)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(left, 0, "{table}");
+    }
 
     assert!(keys::resolve(&db, &keys_issued[0]).await.unwrap().is_none());
     assert!(keys::resolve(&db, &keys_issued[1]).await.unwrap().is_some());
@@ -725,6 +762,50 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     let mut tx = begin_live(&db, other, None).await.unwrap();
     assert_eq!(tx.list_apps().await.unwrap().len(), 1);
     tx.rollback().await.unwrap();
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn old_rollback_events_are_swept(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&db, org, actor).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    for days in [91, 1] {
+        sqlx::query(
+            "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed, created_at) \
+             VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb, now() - make_interval(days => $4))",
+        )
+        .bind(org)
+        .bind(policy.policy.id)
+        .bind(flag.id)
+        .bind(days)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    assert_eq!(telemetry::sweep(&db).await.unwrap(), 1);
+    let ages: Vec<bool> = sqlx::query_scalar(
+        "SELECT created_at < now() - interval '2 days' FROM rollback_events WHERE org_id = $1",
+    )
+    .bind(org)
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(ages, vec![false]);
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
