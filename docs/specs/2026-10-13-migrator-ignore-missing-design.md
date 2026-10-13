@@ -134,7 +134,8 @@ Both tests live in `crates/flags-core/tests/db.rs` with
 3. `a_failed_unknown_migration_still_refuses_to_boot` (added in review): an unknown row with
    `success = false` still yields `Dirty`.
 4. `versions_are_contiguous_from_one` (unit test in `migrate.rs`, added in review): embedded
-   versions run 1..=N, so a deleted or renumbered file fails `cargo test`.
+   versions run 1..=N, so a gap or a duplicate number fails `cargo test` (deleting the newest
+   file leaves no gap; only CI catches that).
 
 Gates: the section's test (with `DATABASE_URL`, serialized across worktrees per the section's
 Worktree notes), lint, format,

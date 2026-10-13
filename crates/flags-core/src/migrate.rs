@@ -22,8 +22,9 @@ use sqlx::migrate::Migrator;
 /// `CLAUDE.md`).
 ///
 /// The cost: sqlx no longer notices an applied migration whose file was
-/// deleted or renamed. CI's `migrations-append-only` job and
-/// `versions_are_contiguous_from_one` below catch that instead.
+/// deleted or renamed. CI's `migrations-append-only` job catches any delete
+/// or rename; `versions_are_contiguous_from_one` below also catches a gap or
+/// a duplicate number.
 ///
 /// The struct-update form is needed because the only setter takes
 /// `&mut self` and this must be a `static`; the fields are public (and

@@ -137,9 +137,9 @@ crate module docs.
 - **Append-only migrations.** A schema change is a new `crates/flags-core/migrations/NNNN_<name>.sql`.
   Never modify, rename, or delete an existing one, not even a comment, and never reuse a version
   number, even one only a rolled-back release applied: sqlx checksums applied migrations and the
-  next deploy refuses to boot on a modified one. Deletes and renames are caught only by CI's
-  `migrations-append-only` job and the contiguity test in `crates/flags-core/src/migrate.rs`,
-  because `MIGRATOR` ignores unknown versions.
+  next deploy refuses to boot on a modified one. `MIGRATOR` ignores unknown versions, so only CI's
+  `migrations-append-only` job catches a delete or rename (the contiguity test in
+  `crates/flags-core/src/migrate.rs` also catches a gap or a duplicate number).
 - **Migrations must be compatible with the previous release during rollout AND after a rollback:**
   the previous release runs against the newer schema (`ignore_missing`,
   `crates/flags-core/src/migrate.rs`). Additive only: new columns nullable or defaulted; no drop,
