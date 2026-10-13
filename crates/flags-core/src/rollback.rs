@@ -1168,24 +1168,31 @@ struct Hint {
 /// SDK API's telemetry handlers.
 #[derive(Debug, Clone)]
 pub struct Hints {
-    tx: mpsc::Sender<Hint>,
+    /// `None` for [`Hints::detached`].
+    tx: Option<mpsc::Sender<Hint>>,
+    /// Hints dropped on a full channel.
     dropped: Arc<AtomicU64>,
+    /// Hints sent after the checker stopped.
+    closed: Arc<AtomicU64>,
 }
 
 impl Hints {
     fn channel(capacity: usize) -> (Self, mpsc::Receiver<Hint>) {
         let (tx, rx) = mpsc::channel(capacity);
         let hints = Self {
-            tx,
+            tx: Some(tx),
             dropped: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(AtomicU64::new(0)),
         };
         (hints, rx)
     }
 
     /// Tell the checker these flags of `org` just received telemetry.
     /// Synchronous and never blocks: a full channel drops the hint (the
-    /// backstop picks the flags up) and counts it; a stopped checker ignores
-    /// it. An empty `flags` sends nothing.
+    /// backstop picks the flags up) and counts it. A stopped checker cannot
+    /// be told anything: that is counted separately and logged at `error`
+    /// the first time, since no flag is then rolled back automatically. An
+    /// empty `flags` sends nothing.
     ///
     /// ```
     /// use flags_core::ids::FlagId;
@@ -1197,18 +1204,33 @@ impl Hints {
         if flags.is_empty() {
             return;
         }
-        match self.tx.try_send(Hint { org, flags }) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+        let Some(tx) = &self.tx else {
+            return;
+        };
+        match tx.try_send(Hint { org, flags }) {
+            Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                if self.closed.fetch_add(1, Ordering::Relaxed) == 0 {
+                    tracing::error!(
+                        "the auto-rollback checker is not running: telemetry hints go nowhere \
+                         and no flag will be rolled back automatically until restart"
+                    );
+                }
             }
         }
     }
 
-    /// Hints that go nowhere: for tests, and for routers built without a
-    /// checker.
+    /// Hints that go nowhere, silently: for tests, and for routers built
+    /// without a checker.
     pub fn detached() -> Self {
-        Self::channel(1).0
+        Self {
+            tx: None,
+            dropped: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(AtomicU64::new(0)),
+        }
     }
 }
 
@@ -1701,6 +1723,21 @@ mod tests {
         let hints = Hints::detached();
         hints.send(OrgId::new(), vec![FlagId::new()]);
         assert_eq!(hints.dropped.load(Ordering::Relaxed), 0);
+        assert_eq!(hints.closed.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn sending_after_the_checker_stopped_is_counted_apart_from_drops() {
+        let (hints, rx) = Hints::channel(4);
+        drop(rx);
+        let org = OrgId::new();
+        hints.send(org, vec![FlagId::new()]);
+        hints.send(org, vec![FlagId::new()]);
+        assert_eq!(hints.closed.load(Ordering::Relaxed), 2);
+        assert_eq!(hints.dropped.load(Ordering::Relaxed), 0);
+        // Clones share the counters.
+        hints.clone().send(org, vec![FlagId::new()]);
+        assert_eq!(hints.closed.load(Ordering::Relaxed), 3);
     }
 
     #[test]

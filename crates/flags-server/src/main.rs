@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use flags_core::notify::Listener;
 use flags_core::rollback::CheckerConfig;
 use flags_core::usage::ShipperConfig;
-use flags_server::{platform_client, router, spawn_checker, Config, LogFormat};
+use flags_server::{platform_client, router, spawn_checker, watch_checker, Config, LogFormat};
 use otto_tenant::Db;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
@@ -68,13 +68,18 @@ async fn main() -> Result<()> {
     ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
 
-    let (hints, mut checker) = spawn_checker(
+    let (hints, checker) = spawn_checker(
         db.clone(),
         platform.clone(),
         &config,
         CheckerConfig::default(),
         shutdown.clone(),
     );
+    // The watcher logs at error if the checker ends while still serving; on
+    // shutdown it is what is awaited, and the abort handle stops the checker
+    // itself if it does not stop in time.
+    let checker_abort = checker.abort_handle();
+    let mut checker = tokio::spawn(watch_checker(checker, shutdown.clone()));
 
     let app = router(db, platform, listener, hints, &config);
     let tcp = TcpListener::bind(config.bind)
@@ -100,10 +105,11 @@ async fn main() -> Result<()> {
         tracing::warn!(error = %e, "the usage shipper did not stop cleanly");
     }
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
-        Ok(Ok(())) => {}
+        Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::warn!(error = %e, "the rollback checker did not stop cleanly"),
         Err(_) => {
             tracing::warn!("the rollback checker did not stop within 5 s; aborting it");
+            checker_abort.abort();
             checker.abort();
         }
     }

@@ -89,6 +89,47 @@ pub fn spawn_checker(
     )
 }
 
+/// How the rollback checker's task ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckerEnd {
+    /// After shutdown was requested: expected.
+    Shutdown,
+    /// Before shutdown was requested, without panicking.
+    Early,
+    /// It panicked.
+    Panicked,
+    /// It was aborted.
+    Cancelled,
+}
+
+/// Wait for the checker task to end and say how. Ending while the server is
+/// still serving is logged at `error`: from then on no flag is rolled back
+/// automatically, and nothing else would notice.
+pub async fn watch_checker(task: JoinHandle<()>, shutdown: watch::Receiver<bool>) -> CheckerEnd {
+    let ended = task.await;
+    let requested = *shutdown.borrow();
+    let end = match ended {
+        Ok(()) if requested => CheckerEnd::Shutdown,
+        Ok(()) => CheckerEnd::Early,
+        Err(e) if e.is_panic() => CheckerEnd::Panicked,
+        Err(_) => CheckerEnd::Cancelled,
+    };
+    match end {
+        CheckerEnd::Shutdown => {}
+        CheckerEnd::Cancelled if requested => {}
+        CheckerEnd::Early | CheckerEnd::Cancelled => tracing::error!(
+            ?end,
+            "the auto-rollback checker stopped while the server is running; no flag will be \
+             rolled back automatically until restart"
+        ),
+        CheckerEnd::Panicked => tracing::error!(
+            "the auto-rollback checker panicked; no flag will be rolled back automatically \
+             until restart"
+        ),
+    }
+    end
+}
+
 fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Config {
     let mut mcp = flags_mcp::Config::new(
         platform,
@@ -187,6 +228,31 @@ mod tests {
         assert!(challenge.contains(
             "resource_metadata=\"https://flags.example.com/.well-known/oauth-protected-resource\""
         ));
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_ends_before_shutdown_is_reported() {
+        let (_stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(async {});
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Early);
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_panics_is_reported() {
+        let (_stop, shutdown) = watch::channel(false);
+        let task = tokio::spawn(async { panic!("boom") });
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Panicked);
+    }
+
+    #[tokio::test]
+    async fn a_checker_that_ends_on_shutdown_is_not_an_error() {
+        let (stop, shutdown) = watch::channel(false);
+        let mut rx = shutdown.clone();
+        let task = tokio::spawn(async move {
+            let _ = rx.changed().await;
+        });
+        stop.send(true).unwrap();
+        assert_eq!(watch_checker(task, shutdown).await, CheckerEnd::Shutdown);
     }
 
     #[tokio::test]
