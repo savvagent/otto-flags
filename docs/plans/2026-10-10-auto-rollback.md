@@ -137,8 +137,15 @@ back.
    (`FAILURE_COOLDOWN`, added after code review of Task 8). A check that always fails (a
    tombstoned org not yet purged, an environment the patch rejects) never advances
    `last_checked_at`, so without this it would head every backstop pass. Hints during the
-   cooldown are deferred to its end, not dropped; a successful check clears it. Residual: at
-   least `backstop_limit` persistently failing policies could still fill the backstop's slots.
+   cooldown are deferred to its end, not dropped; a successful check clears it. Only a
+   non-retriable error (a deleted org, a refused patch) starts the cooldown; a retriable one
+   (a pool timeout during a telemetry burst) is retried after the normal debounce, so a passing
+   blip never hides a failing flag for an hour (final review). Residual: at least
+   `backstop_limit` persistently failing policies could still fill the backstop's slots.
+14. **`propose_rollback` records no usage row** (unlike `evaluate_flag` and `flag_health`, which
+   record a non-billable one). It is a dry run that commits nothing: its transaction is dropped,
+   so a usage row would need a commit the tool otherwise never makes. Free tools' usage rows
+   are for visibility only; nothing is lost but a count of dry runs.
 
 ## File Structure
 
