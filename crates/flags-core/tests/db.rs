@@ -14,6 +14,7 @@ use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use serde_json::json;
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres};
 
 fn meta(actor: UserId) -> ChangeMeta {
@@ -806,6 +807,148 @@ async fn old_rollback_events_are_swept(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(ages, vec![false]);
+}
+
+/// A `Db` whose every connection runs as `otto_app`, so unpinned statements
+/// are subject to RLS (the test pool's superuser bypasses it). `Db::begin`
+/// still pins and works. Close `.pool()` before the test returns so sqlx can
+/// drop the test database.
+async fn otto_app_db(pool: &PgPool) -> Db {
+    let app_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE otto_app").execute(conn).await?;
+                Ok(())
+            })
+        })
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    Db::from_pool(app_pool)
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
+    let admin = db(pool.clone()).await;
+    let (org, other) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&admin, org, actor).await;
+    let mut tx = admin.begin(org).await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // One expired and one fresh row per swept table. ERROR_RETENTION_DAYS is
+    // 14, EVAL_RETENTION_DAYS is 90, and the platform sweep keeps 30 days.
+    for days in [15, 0] {
+        let hours = if days == 0 { 1 } else { days * 24 };
+        sqlx::query(
+            "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, \
+             occurred_at, received_at) \
+             VALUES ($1, $2, true, 'e', 'm', now(), now() - make_interval(hours => $3))",
+        )
+        .bind(org)
+        .bind(flag.id)
+        .bind(hours)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for days in [91, 0] {
+        sqlx::query(
+            "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
+             VALUES ($1, $2, 'production', date_trunc('hour', now()) - make_interval(days => $3), true, 1, 1)",
+        )
+        .bind(org)
+        .bind(flag.id)
+        .bind(days)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for days in [91, 1] {
+        sqlx::query(
+            "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed, created_at) \
+             VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb, now() - make_interval(days => $4))",
+        )
+        .bind(org)
+        .bind(policy.policy.id)
+        .bind(flag.id)
+        .bind(days)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for days in [31, 1] {
+        sqlx::query(
+            "INSERT INTO platform_events (event_id, org_id, kind, received_at) \
+             VALUES ($1, $2, 'member.removed', now() - make_interval(days => $3))",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(org)
+        .bind(days)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let app_db = otto_app_db(&pool).await;
+    assert_eq!(telemetry::sweep(&app_db).await.unwrap(), 3);
+    assert_eq!(platform_events::sweep(&app_db, 30).await.unwrap(), 1);
+
+    for (table, column, cutoff_days) in [
+        ("flag_errors", "received_at", 14),
+        ("flag_eval_hourly", "hour", 90),
+        ("rollback_events", "created_at", 90),
+        ("platform_events", "received_at", 30),
+    ] {
+        let (total, expired): (i64, i64) = sqlx::query_as(&format!(
+            "SELECT count(*), count(*) FILTER (WHERE {column} < now() - make_interval(days => {cutoff_days})) \
+             FROM {table}"
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((total, expired), (1, 0), "{table}");
+    }
+
+    // The new policies widen nothing pinned: another org's row stays hidden.
+    let (_, other_flag) = policy_fixture(&admin, other, actor).await;
+    sqlx::query(
+        "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, occurred_at) \
+         VALUES ($1, $2, true, 'e', 'm', now())",
+    )
+    .bind(other)
+    .bind(other_flag.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = app_db.begin(org).await.unwrap();
+    for table in [
+        "flag_errors",
+        "flag_eval_hourly",
+        "rollback_events",
+        "platform_events",
+    ] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "{table} pinned to the first org");
+    }
+    tx.rollback().await.unwrap();
+
+    app_db.pool().close().await;
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
