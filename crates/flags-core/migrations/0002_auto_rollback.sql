@@ -118,23 +118,34 @@ CREATE POLICY rollback_policies_tenant_isolation ON rollback_policies
 -- The checker's backstop finds due policies across every org, unpinned, then
 -- pins per org (begin_live) to act. Policies are permissive and OR together, so
 -- this adds exactly one thing: an unpinned SELECT. A pinned transaction still
--- sees only its own org's policies, and nothing unpinned can write them. Same
--- shape as the baseline's unpinned retention policies (flag_errors_retention
--- and its siblings in 0001_baseline.sql).
+-- sees only its own org's policies, and nothing unpinned can write them.
+--
+-- Unpinned alone is not enough (#27): a request path that forgot to pin also
+-- has current_org() NULL. Every unpinned policy added here and in 0003 also
+-- needs the transaction-local marker app.maintenance = 'on', which only
+-- flags-core's background maintenance helper (maintenance::begin) sets. The
+-- baseline's DELETE-only retention policies cannot be edited, but a sweep's
+-- WHERE reads columns and so needs one of these SELECT policies too.
 CREATE POLICY rollback_policies_checker ON rollback_policies
-  FOR SELECT USING (current_org() IS NULL);
+  FOR SELECT USING (current_org() IS NULL
+                    AND current_setting('app.maintenance', true) = 'on');
 
 ALTER TABLE rollback_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rollback_events FORCE ROW LEVEL SECURITY;
 CREATE POLICY rollback_events_tenant_isolation ON rollback_events
   USING (org_id = current_org()) WITH CHECK (org_id = current_org());
+-- Marked like the read below, so an unmarked unpinned DELETE (with no WHERE,
+-- which needs no SELECT policy) cannot empty the table either.
 CREATE POLICY rollback_events_retention ON rollback_events
-  FOR DELETE USING (current_org() IS NULL);
+  FOR DELETE USING (current_org() IS NULL
+                    AND current_setting('app.maintenance', true) = 'on');
 -- Postgres also applies SELECT policies to a DELETE whose WHERE reads columns,
 -- so a DELETE-only policy would let an otto_app sweep delete nothing: the
--- sweep's `WHERE created_at < ...` needs an unpinned read as well (#12).
+-- sweep's `WHERE created_at < ...` needs an unpinned read as well (#12),
+-- behind the same marker (#27).
 CREATE POLICY rollback_events_retention_read ON rollback_events
-  FOR SELECT USING (current_org() IS NULL);
+  FOR SELECT USING (current_org() IS NULL
+                    AND current_setting('app.maintenance', true) = 'on');
 
 -- Grants: the baseline's ALTER DEFAULT PRIVILEGES already covers tables and
 -- sequences the migrating role creates later. Grant explicitly anyway, guarded

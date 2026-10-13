@@ -440,31 +440,35 @@ pub(crate) fn assess(evals: &Counts, errors: &Counts, on: Option<f64>, off: Opti
 }
 
 /// Retention: drop old error reports, evaluation buckets, and rollback events.
-/// Unpinned, across every org (the tables' retention policies allow exactly
-/// this).
+/// Unpinned, across every org: each DELETE runs in its own maintenance
+/// transaction ([`crate::maintenance`]), which the tables' retention policies
+/// require.
 pub async fn sweep(db: &Db) -> Result<u64> {
-    let errors = sqlx::query(
-        "DELETE FROM flag_errors WHERE received_at < now() - make_interval(days => $1)",
-    )
-    .bind(ERROR_RETENTION_DAYS)
-    .execute(db.pool())
-    .await?
-    .rows_affected();
-    let evals =
-        sqlx::query("DELETE FROM flag_eval_hourly WHERE hour < now() - make_interval(days => $1)")
-            .bind(EVAL_RETENTION_DAYS)
-            .execute(db.pool())
+    let mut swept = 0;
+    for (statement, days) in [
+        (
+            "DELETE FROM flag_errors WHERE received_at < now() - make_interval(days => $1)",
+            ERROR_RETENTION_DAYS,
+        ),
+        (
+            "DELETE FROM flag_eval_hourly WHERE hour < now() - make_interval(days => $1)",
+            EVAL_RETENTION_DAYS,
+        ),
+        // Rollback events are bounded at the evaluation retention.
+        (
+            "DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => $1)",
+            EVAL_RETENTION_DAYS,
+        ),
+    ] {
+        let mut tx = crate::maintenance::begin(db).await?;
+        swept += sqlx::query(statement)
+            .bind(days)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
-    // Rollback events are bounded at the evaluation retention.
-    let rollbacks = sqlx::query(
-        "DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => $1)",
-    )
-    .bind(EVAL_RETENTION_DAYS)
-    .execute(db.pool())
-    .await?
-    .rows_affected();
-    Ok(errors + evals + rollbacks)
+        tx.commit().await?;
+    }
+    Ok(swept)
 }
 
 #[cfg(test)]

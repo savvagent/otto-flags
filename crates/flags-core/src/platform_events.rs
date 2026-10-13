@@ -105,22 +105,26 @@ async fn exclude_requests(tx: &mut Tx<'_>, org: OrgId) -> Result<()> {
 }
 
 /// Housekeeping: forget dedupe markers older than `keep_days` and expired
-/// removed-member tombstones.
+/// removed-member tombstones. Unpinned, in a maintenance transaction
+/// ([`crate::maintenance`]), which `platform_events`' retention policies
+/// require.
 pub async fn sweep(db: &Db, keep_days: i32) -> Result<u64> {
+    let mut tx = crate::maintenance::begin(db).await?;
     let events = sqlx::query(
         "DELETE FROM platform_events WHERE received_at < now() - make_interval(days => $1)",
     )
     .bind(keep_days)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     let tombstones = sqlx::query(
         "DELETE FROM removed_members WHERE removed_at < now() - make_interval(secs => $1)",
     )
     .bind((REMOVED_MEMBER_TTL_SECS * 2) as f64)
-    .execute(db.pool())
+    .execute(&mut *tx)
     .await?
     .rows_affected();
+    tx.commit().await?;
     Ok(events + tombstones)
 }
 

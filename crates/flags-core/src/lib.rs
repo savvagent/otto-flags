@@ -22,6 +22,7 @@ pub mod eval;
 pub mod flags;
 pub mod ids;
 pub mod keys;
+mod maintenance;
 pub mod migrate;
 pub mod notify;
 pub mod platform_events;

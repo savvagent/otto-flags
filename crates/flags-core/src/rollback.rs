@@ -973,8 +973,9 @@ async fn begin_check(db: &Db, org: OrgId) -> Result<Tx<'static>> {
 ///
 /// The one statement the checker runs without pinning an org: the
 /// `rollback_policies_checker` row-level policy allows exactly this SELECT
-/// when `current_org()` is NULL. Acting on a pair goes through [`check_flag`],
-/// which pins the org.
+/// when `current_org()` is NULL and the transaction is a maintenance one
+/// (`crate::maintenance`). Acting on a pair goes through [`check_flag`], which
+/// pins the org.
 pub async fn due_policies(
     db: &Db,
     older_than: Duration,
@@ -982,7 +983,9 @@ pub async fn due_policies(
 ) -> Result<Vec<(OrgId, FlagId)>> {
     // The inner scan walks rollback_policies_due_idx in order and stops at
     // `limit`; the outer query only folds a flag's environments together.
-    Ok(sqlx::query_as(
+    // rollback_policies_checker allows it only in a maintenance transaction.
+    let mut tx = crate::maintenance::begin(db).await?;
+    let due = sqlx::query_as(
         "SELECT org_id, flag_id FROM ( \
            SELECT org_id, flag_id, last_checked_at FROM rollback_policies \
            WHERE tripped_at IS NULL \
@@ -996,8 +999,10 @@ pub async fn due_policies(
     )
     .bind(older_than.as_secs_f64())
     .bind(limit.max(0))
-    .fetch_all(db.pool())
-    .await?)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(due)
 }
 
 /// Check every armed policy of one flag and act on the ones that trip

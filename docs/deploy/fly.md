@@ -121,7 +121,11 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   so going back that far means rolling forward instead. `0002` and `0003` are additive, so the
   older release's writes still satisfy them.
 - Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
-  non-exempt pool role.
+  non-exempt pool role. Every unpinned policy added by `0002` and `0003` also requires the
+  transaction-local marker `app.maintenance = 'on'` (#27), which only the background sweeps and
+  the checker's backstop set, so a request path that forgot to pin an org reads nothing. Ad-hoc
+  diagnostics as a non-exempt role need `SET LOCAL app.maintenance = 'on'` in their
+  transaction to see across orgs.
 
 Diagnostics (SELECT-only):
 

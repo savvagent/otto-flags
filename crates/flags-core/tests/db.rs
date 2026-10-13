@@ -70,6 +70,17 @@ async fn as_app_unpinned(pool: &PgPool) -> sqlx::Transaction<'static, Postgres> 
     tx
 }
 
+/// [`as_app_unpinned`] with the maintenance marker set, as the background
+/// sweeps and the checker's backstop set it.
+async fn as_app_maintenance(pool: &PgPool) -> sqlx::Transaction<'static, Postgres> {
+    let mut tx = as_app_unpinned(pool).await;
+    sqlx::query("SET LOCAL app.maintenance = 'on'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx
+}
+
 /// The auto-rollback tables are tenant tables: pinned transactions see only
 /// their own org, composite foreign keys stop cross-org references, and the
 /// unpinned policies grant exactly a read of policies and a read+delete of
@@ -150,8 +161,29 @@ async fn auto_rollback_tables_are_tenant_isolated(pool: PgPool) {
     }
     drop(tx);
 
-    // Unpinned otto_app, the succeeding statements, rolled back at the end.
+    // Unpinned otto_app without the maintenance marker reads nothing (#27).
     let mut tx = as_app_unpinned(db.pool()).await;
+    for table in ["rollback_policies", "rollback_events"] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{table} is readable unpinned without the marker");
+    }
+    let swept = sqlx::query("DELETE FROM rollback_events")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        swept.rows_affected(),
+        0,
+        "unmarked code cannot delete events"
+    );
+    tx.rollback().await.unwrap();
+
+    // Unpinned otto_app with the marker, the succeeding statements, rolled
+    // back at the end.
+    let mut tx = as_app_maintenance(db.pool()).await;
     let n: i64 = sqlx::query_scalar("SELECT count(*) FROM rollback_policies")
         .fetch_one(&mut *tx)
         .await
@@ -944,6 +976,87 @@ async fn otto_app_db(pool: &PgPool) -> Db {
         .await
         .unwrap();
     Db::from_pool(app_pool)
+}
+
+/// The unpinned read policies need the maintenance marker as well as an
+/// unpinned transaction: a request path that forgot to pin (current_org()
+/// NULL) still reads nothing from any of these tables (#27).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unpinned_reads_need_the_maintenance_marker(pool: PgPool) {
+    let admin = db(pool.clone()).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag) = policy_fixture(&admin, org, actor).await;
+    let mut tx = admin.begin(org).await.unwrap();
+    let policy = tx
+        .set_policy(
+            &app,
+            &flag,
+            "production",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap();
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, eval_events(1, true))
+        .await
+        .unwrap();
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(1, true, Some("production")),
+    )
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb)",
+    )
+    .bind(org)
+    .bind(policy.policy.id)
+    .bind(flag.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO platform_events (event_id, org_id, kind) VALUES ($1, $2, 'member.removed')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(org)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let tables = [
+        "rollback_policies",
+        "rollback_events",
+        "flag_errors",
+        "flag_eval_hourly",
+        "platform_events",
+    ];
+    let count = |table: &'static str, marked: bool| {
+        let pool = pool.clone();
+        async move {
+            let mut tx = if marked {
+                as_app_maintenance(&pool).await
+            } else {
+                as_app_unpinned(&pool).await
+            };
+            let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.rollback().await.unwrap();
+            n
+        }
+    };
+    for table in tables {
+        assert_eq!(count(table, false).await, 0, "{table} without the marker");
+        assert_eq!(count(table, true).await, 1, "{table} with the marker");
+    }
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
