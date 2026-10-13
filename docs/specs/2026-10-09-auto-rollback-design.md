@@ -103,7 +103,8 @@ paid capability (risk scoring, rollout velocity) will reuse.
    table (`0001_baseline.sql`, grants block): the append-only trail is deleted only by the exempt
    pool role, by design. A SELECT policy would change nothing for `otto_app` (the delete is
    refused outright, not silently empty). Whether the purge should survive a non-exempt pool role
-   is a separate question, filed as a follow-up; §3a covers #12's three tables.
+   is a separate question, filed as [#21](https://github.com/savvagent/otto-flags/issues/21); §3a
+   covers #12's three tables.
 
 ## Scope
 
@@ -274,6 +275,10 @@ CREATE POLICY rollback_events_tenant_isolation ON rollback_events
   USING (org_id = current_org()) WITH CHECK (org_id = current_org());
 CREATE POLICY rollback_events_retention ON rollback_events
   FOR DELETE USING (current_org() IS NULL);
+-- Postgres applies SELECT policies to a DELETE whose WHERE reads columns, so the
+-- sweep's `WHERE created_at < ...` needs an unpinned read too (see §3a, #12).
+CREATE POLICY rollback_events_retention_read ON rollback_events
+  FOR SELECT USING (current_org() IS NULL);
 
 -- Grants: the baseline's ALTER DEFAULT PRIVILEGES already covers tables and
 -- sequences the migrating role creates later. Grant explicitly anyway, guarded

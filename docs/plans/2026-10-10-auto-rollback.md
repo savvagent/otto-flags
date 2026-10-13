@@ -78,8 +78,9 @@ rmcp 2.0.0, tokio (mpsc, time, watch); `otto-tenant` / `otto-resource` pinned to
   transactions).
 - **Bucketing (`flags_core::eval`) is not touched.**
 - **Commits:** conventional (`feat: …`, `build: …`, `test: …`, `docs: …`), lower-case,
-  imperative, a why-body, last line `Fixes #11` on the commit that completes the issue and
-  `Refs #11` on the others. **No attribution of any kind** — no `Co-Authored-By`, no
+  imperative, a why-body, last line `Fixes #11` on the commit that completes the issue,
+  `Fixes #12` on Task 10b's commit, and `Refs #11` on the others. The PR body contains both
+  `Fixes #11` and `Fixes #12`. **No attribution of any kind** — no `Co-Authored-By`, no
   "Generated with", no 🤖, in commits, code comments, docs, or the PR body.
 
 ## Plan-level decisions (beyond the spec)
@@ -608,7 +609,7 @@ impl Schedule { fn hint(&mut self, key: (OrgId, FlagId), now: Instant);  fn next
       connections) over `pool.connect_options()` whose `after_connect` runs `SET ROLE otto_app`,
       wrapped in `Db::from_pool`. Unpinned statements on it are subject to RLS; `Db::begin`
       still pins and works. Add
-      `async fn unpinned_sweeps_and_the_purge_delete_as_otto_app(pool: PgPool)`: with the
+      `async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool)`: with the
       superuser `db(pool.clone())`, arrange in one org an expired and a fresh row in each of
       `flag_errors` (`received_at` 15 days / 1 hour old), `flag_eval_hourly` (`hour` 91 days /
       this hour), `rollback_events` (`created_at` 91 days / 1 day), and `platform_events`
@@ -618,7 +619,9 @@ impl Schedule { fn hint(&mut self, key: (OrgId, FlagId), now: Instant);  fn next
       exactly the expired rows are gone. Then arrange one fresh `flag_errors` row in a second
       org and assert that a pinned transaction on the `otto_app` Db for the first org
       (`db.begin(org)`) counts only the first org's rows (the new policies widen nothing
-      pinned).
+      pinned). Do **not** exercise the `org.deleted` purge here: its `audit_events` delete is
+      refused for `otto_app` by design (spec premise 7, #21). Close the `otto_app` pool
+      (`.close().await`) before the test returns, so sqlx can drop the test database.
 - [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db unpinned_sweeps` → fails (expired rows remain).
 - [ ] Write `0003_unpinned_sweep_reads.sql` exactly as spec §3a, with a leading comment: why
       (Postgres applies SELECT policies to a `DELETE` whose `WHERE` reads columns), that each
