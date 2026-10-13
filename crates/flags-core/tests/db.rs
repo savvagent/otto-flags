@@ -56,6 +56,14 @@ async fn a_release_boots_against_a_database_a_newer_release_migrated(pool: PgPoo
     .unwrap();
 
     flags_core::MIGRATOR.run(&pool).await.unwrap();
+
+    // The newer release's row is left alone, not removed or re-applied.
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, flags_core::MIGRATOR.iter().count() as i64 + 1);
+
     flags_core::migrate(&db(pool).await).await.unwrap();
 }
 
