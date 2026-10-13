@@ -57,7 +57,7 @@
 //! still reach every other flag.
 //!
 //! Every check is bounded: its transactions wait at most 2 s for a row lock,
-//! and the whole check at most [`CheckerConfig::check_timeout`] (15 s), after
+//! run no statement longer than 10 s, and the whole check at most [`CheckerConfig::check_timeout`] (15 s), after
 //! which it is abandoned and retried. Within one check each policy acts inside
 //! its own savepoint, so a policy that fails changes nothing, is reported in
 //! [`CheckReport::failed`], and does not undo the others. The flag cools
@@ -943,12 +943,20 @@ pub struct PolicyFailure {
 /// person's change, another checker) before failing with a transient error.
 const CHECK_LOCK_TIMEOUT: &str = "2s";
 
-/// Open a checker transaction: `begin_live`, with a bounded lock wait.
+/// The longest any one checker statement may run; a slow sample fails with
+/// `query_canceled` (transient) rather than holding a pooled connection.
+const CHECK_STATEMENT_TIMEOUT: &str = "10s";
+
+/// Open a checker transaction: `begin_live`, with a bounded lock wait and
+/// statement time.
 async fn begin_check(db: &Db, org: OrgId) -> Result<Tx<'static>> {
     let mut tx = begin_live(db, org, None).await?;
-    sqlx::query(&format!("SET LOCAL lock_timeout = '{CHECK_LOCK_TIMEOUT}'"))
-        .execute(tx.conn())
-        .await?;
+    for setting in [
+        format!("SET LOCAL lock_timeout = '{CHECK_LOCK_TIMEOUT}'"),
+        format!("SET LOCAL statement_timeout = '{CHECK_STATEMENT_TIMEOUT}'"),
+    ] {
+        sqlx::query(&setting).execute(tx.conn()).await?;
+    }
     Ok(tx)
 }
 
@@ -1112,9 +1120,14 @@ pub async fn check_flag(
                 report.outcomes.push((policy.id, outcome));
             }
             Err(e) => {
-                sqlx::query("ROLLBACK TO SAVEPOINT rollback_policy")
-                    .execute(tx.conn())
-                    .await?;
+                // ROLLBACK TO keeps the savepoint; release it too, so
+                // savepoints do not stack up across a flag's policies.
+                for statement in [
+                    "ROLLBACK TO SAVEPOINT rollback_policy",
+                    "RELEASE SAVEPOINT rollback_policy",
+                ] {
+                    sqlx::query(statement).execute(tx.conn()).await?;
+                }
                 // The flag as it was before this policy's undone patch.
                 current = before;
                 checked.retain(|id| *id != policy.id);
