@@ -81,6 +81,7 @@ use crate::entitlements::{Entitlement, EntitlementSource, AUTO_ROLLBACK};
 use crate::error::{Error, Result};
 use crate::flags::{self, ChangeMeta, EnvPatch, FeatureFlag, FlagStatus};
 use crate::ids::{FlagAppId, FlagId};
+use crate::keys::KeyKind;
 use crate::platform_events::begin_live;
 use otto_tenant::audit::Entry;
 
@@ -398,6 +399,9 @@ pub struct Observation {
     pub rate_on: Option<f64>,
     pub rate_off: Option<f64>,
     pub thresholds: Thresholds,
+    /// Flattened: `"decision": "trip", "trigger": "errorRatio"` sit beside
+    /// the numbers rather than in a nested object.
+    #[serde(flatten)]
     pub decision: Decision,
 }
 
@@ -706,19 +710,24 @@ impl RollbackExt for Tx<'_> {
     }
 }
 
-/// Of `flags`, those with an armed (untripped) policy, deduplicated. One
-/// indexed SELECT, for use inside the telemetry transaction.
-pub async fn armed(tx: &mut Tx<'_>, flags: &[FlagId]) -> Result<Vec<FlagId>> {
+/// Of `flags`, those with an armed (untripped) policy that counts telemetry
+/// from `reporter` (every policy counts a server key; only
+/// `include_client_reports` policies count a client key), deduplicated. One
+/// indexed SELECT, for use inside the telemetry transaction, so public-key
+/// telemetry cannot wake the checker for policies that ignore it.
+pub async fn armed(tx: &mut Tx<'_>, flags: &[FlagId], reporter: KeyKind) -> Result<Vec<FlagId>> {
     if flags.is_empty() {
         return Ok(Vec::new());
     }
     let org = tx.org();
     Ok(sqlx::query_scalar(
         "SELECT DISTINCT flag_id FROM rollback_policies \
-         WHERE org_id = $1 AND flag_id = ANY($2) AND tripped_at IS NULL",
+         WHERE org_id = $1 AND flag_id = ANY($2) AND tripped_at IS NULL \
+           AND (include_client_reports OR $3 = 'server')",
     )
     .bind(org)
     .bind(flags)
+    .bind(reporter.as_str())
     .fetch_all(tx.conn())
     .await?)
 }

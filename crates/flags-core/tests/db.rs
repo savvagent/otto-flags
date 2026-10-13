@@ -1559,11 +1559,33 @@ async fn armed_lists_only_flags_with_an_untripped_policy(pool: PgPool) {
         .execute(tx.conn())
         .await
         .unwrap();
-    let got = rollback::armed(&mut tx, &[flag.id, other.id, none.id, flag.id])
+    let all = [flag.id, other.id, none.id, flag.id];
+    let got = rollback::armed(&mut tx, &all, KeyKind::Server)
         .await
         .unwrap();
     assert_eq!(got, vec![flag.id]);
-    assert!(rollback::armed(&mut tx, &[]).await.unwrap().is_empty());
+    assert!(rollback::armed(&mut tx, &[], KeyKind::Server)
+        .await
+        .unwrap()
+        .is_empty());
+    // Client-key telemetry hints only flags whose armed policy counts it.
+    assert!(rollback::armed(&mut tx, &all, KeyKind::Client)
+        .await
+        .unwrap()
+        .is_empty());
+    let counts_clients = Thresholds {
+        include_client_reports: true,
+        ..Thresholds::default()
+    };
+    tx.set_policy(&app, &flag, "staging", Mode::Enforce, counts_clients, actor)
+        .await
+        .unwrap();
+    assert_eq!(
+        rollback::armed(&mut tx, &all, KeyKind::Client)
+            .await
+            .unwrap(),
+        vec![flag.id]
+    );
     tx.commit().await.unwrap();
 }
 
@@ -1966,7 +1988,8 @@ async fn a_tripping_policy_disables_only_its_environment(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(observed["sample"]["errorsOn"], 30);
-    assert_eq!(observed["decision"]["decision"], "trip");
+    assert_eq!(observed["decision"], "trip");
+    assert_eq!(observed["trigger"], "offHasNoErrors");
     tx.rollback().await.unwrap();
 
     let note = tokio::time::timeout(std::time::Duration::from_secs(5), listener.recv())
