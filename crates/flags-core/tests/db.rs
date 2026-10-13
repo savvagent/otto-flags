@@ -12,7 +12,7 @@ use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use serde_json::json;
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres};
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
@@ -32,6 +32,221 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     let report = db.verify_tenant_isolation().await.expect("isolation");
     let summary = report.summary();
     assert!(summary.contains("otto_app"), "{summary}");
+    for name in ["rollback_policies", "rollback_events"] {
+        let table = report
+            .tables
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} is missing from the isolation report"));
+        assert!(table.rls_enabled, "{name}: RLS not enabled");
+        assert!(table.rls_forced, "{name}: RLS not forced");
+    }
+}
+
+/// The SQLSTATE of a failed statement.
+fn sqlstate(err: &sqlx::Error) -> String {
+    err.as_database_error()
+        .and_then(|e| e.code())
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|| format!("not a database error: {err}"))
+}
+
+/// A transaction as `otto_app` with no org pinned, so `current_org()` is NULL.
+/// This is what background code (the checker, the retention sweep) sees. The
+/// test pool connects as a superuser, which bypasses RLS, so a plain pool
+/// query would prove nothing about the unpinned policies.
+async fn as_app_unpinned(pool: &PgPool) -> sqlx::Transaction<'static, Postgres> {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL ROLE otto_app")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx
+}
+
+/// The auto-rollback tables are tenant tables: pinned transactions see only
+/// their own org, composite foreign keys stop cross-org references, and the
+/// unpinned policies grant exactly a read of policies and a read+delete of
+/// events. Postgres aborts a transaction on its first error, so every
+/// expected failure runs in its own transaction.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn auto_rollback_tables_are_tenant_isolated(pool: PgPool) {
+    let db = db(pool).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+
+    // Arrange, then commit before anything is allowed to fail.
+    let mut tx = db.begin(a).await.unwrap();
+    let (app_a, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let flag_a = tx
+        .create_flag(
+            &app_a,
+            NewFlag {
+                key: "checkout".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    let policy: (uuid::Uuid,) = sqlx::query_as(
+        "INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) \
+         VALUES ($1, $2, $3, 'production') RETURNING id",
+    )
+    .bind(a)
+    .bind(app_a.id)
+    .bind(flag_a.id)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'would_roll_back', '{}')",
+    )
+    .bind(a)
+    .bind(policy.0)
+    .bind(flag_a.id)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(b).await.unwrap();
+    let (app_b, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // Org A sees exactly its own rows.
+    let mut tx = db.begin(a).await.unwrap();
+    for table in ["rollback_policies", "rollback_events"] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "org A must see its own {table} row");
+    }
+    drop(tx);
+
+    // Org B sees neither row.
+    let mut tx = db.begin(b).await.unwrap();
+    for table in ["rollback_policies", "rollback_events"] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "org B must not see org A's {table}");
+    }
+    drop(tx);
+
+    // Unpinned otto_app, the succeeding statements, rolled back at the end.
+    let mut tx = as_app_unpinned(db.pool()).await;
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM rollback_policies")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "rollback_policies_checker lets the checker read");
+    let updated = sqlx::query("UPDATE rollback_policies SET mode = 'observe'")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(updated.rows_affected(), 0, "unpinned code cannot write");
+    let deleted = sqlx::query("DELETE FROM rollback_policies")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(
+        deleted.rows_affected(),
+        0,
+        "unpinned code cannot delete policies"
+    );
+    // The sweep's real statement: needs the DELETE and the SELECT policy.
+    let swept = sqlx::query(
+        "DELETE FROM rollback_events WHERE created_at < now() - make_interval(days => 0)",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(swept.rows_affected(), 1, "the retention sweep deletes");
+    tx.rollback().await.unwrap();
+
+    // Each expected failure in a fresh transaction.
+    // Org B's own app, org A's flag: only the composite flag FK can refuse.
+    // 'staging', not 'production': org A's policy already holds (flag, 'production'),
+    // and the unique index would fire first (23505) and hide the FK.
+    let mut tx = db.begin(b).await.unwrap();
+    let err = sqlx::query(
+        "INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) \
+         VALUES ($1, $2, $3, 'staging')",
+    )
+    .bind(b)
+    .bind(app_b.id)
+    .bind(flag_a.id)
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "23503");
+    drop(tx);
+
+    let mut tx = db.begin(a).await.unwrap();
+    let err = sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'bogus', '{}')",
+    )
+    .bind(a)
+    .bind(policy.0)
+    .bind(flag_a.id)
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "23514");
+    drop(tx);
+
+    let mut tx = db.begin(a).await.unwrap();
+    let err = sqlx::query(
+        "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, \
+         occurred_at, reporter) VALUES ($1, $2, true, 'e', 'm', now(), 'browser')",
+    )
+    .bind(a)
+    .bind(flag_a.id)
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "23514");
+    drop(tx);
+
+    let mut tx = as_app_unpinned(db.pool()).await;
+    let err = sqlx::query(
+        "INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) \
+         VALUES ($1, $2, $3, 'staging')",
+    )
+    .bind(a)
+    .bind(app_a.id)
+    .bind(flag_a.id)
+    .execute(&mut *tx)
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501");
+    drop(tx);
+
+    let mut tx = as_app_unpinned(db.pool()).await;
+    let err = sqlx::query(
+        "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed) \
+         VALUES ($1, $2, $3, 'production', 'would_roll_back', '{}')",
+    )
+    .bind(a)
+    .bind(policy.0)
+    .bind(flag_a.id)
+    .execute(&mut *tx)
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501");
+    drop(tx);
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
