@@ -14,6 +14,11 @@ nothing to install: the client is sent to the otto platform to sign in (one acco
 covers every otto service), then calls tools such as `create_flag`,
 `set_flag_environment`, `flag_health`, and `rollback_flag`. Call `whoami` first.
 
+**Auto-rollback** (paid plans) turns a flag off in one environment when the errors reported
+behind it say it is hurting the app. Manage it with `set_rollback_policy`,
+`remove_rollback_policy`, `list_rollback_policies`, `propose_rollback` (a dry run of what the
+checker would judge now), and `rollback_events` (what it did).
+
 **Running apps** evaluate flags through the SDKs below, pointed at
 `https://otto-flags.savvagent.com` with the app's key: the public client key (`sdk_…`)
 in browsers and mobile apps, the secret server key (`srv_…`) on servers. An agent

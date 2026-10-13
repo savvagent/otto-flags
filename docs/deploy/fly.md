@@ -81,6 +81,40 @@ Every push to `main` that passes CI deploys (`.github/workflows/ci.yml`, job `de
 `FLY_API_TOKEN` a deploy token scoped to this app (`fly tokens create deploy -a otto-flags`).
 A hand deploy is `fly deploy -a otto-flags --remote-only`.
 
+## Auto-rollback
+
+A policy per (flag, environment) disables that environment as an ordinary flag version (change
+`auto_rollback`, no user actor) when the error rate with the flag on exceeds the rate with it off.
+It shows in `flag_history` and is undone with `rollback_flag` or `set_flag_environment`; turning
+the environment back on re-arms the policy. Defaults: 100 evaluations, 10 errors, on-rate more
+than 2x the off-rate (or errors only with it on), over this hour so far (`windowHours` 1-24).
+Mode `observe` records what would have happened without changing the flag.
+
+- **Plan-gated.** Every paid plan (team, business, enterprise) includes `auto_rollback` through
+  the platform's `plans.features` (otto-platform 0.5.0); free does not. The answer is cached for
+  60 s and fails closed: a timeout or platform error means no rollback, recorded as
+  `entitlement_unknown`. Creating or changing a policy is billed; removing, listing,
+  `propose_rollback`, and `rollback_events` are free.
+- **When it checks.** When SDK telemetry arrives, plus a 5-minute pass while the machine is
+  awake. That works with `auto_stop_machines = "suspend"` and changes no cost. Detection latency
+  is bounded by the SDKs' telemetry flush intervals.
+- **Outcomes** in `rollback_events`: `rolled_back`, `would_roll_back` (observe), `not_entitled`,
+  `entitlement_unknown`. Suppressed outcomes are recorded at most once per hour per policy.
+  Events are kept 90 days.
+- **No new secret, env var, scope, or recurring cost.**
+- **Rolling the image back.** Migrations `0002` (auto-rollback) and `0003` are applied. sqlx
+  refuses a database holding a migration the image does not know, so `fly deploy` of an older
+  image will not boot. Recovery is roll-forward.
+- Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
+  non-exempt pool role.
+
+Diagnostics (SELECT-only):
+
+```sql
+SELECT outcome, count(*) FROM rollback_events GROUP BY 1;
+SELECT count(*) FILTER (WHERE tripped_at IS NULL), count(*) FROM rollback_policies;
+```
+
 ## Checking it
 
 ```bash

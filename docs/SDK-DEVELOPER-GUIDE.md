@@ -383,6 +383,11 @@ Authorization: Bearer sdk_xxx
 }
 ```
 
+**Auto-rollback:** telemetry reported with the server key (`srv_`) drives auto-rollback. Reports
+made with the client key (`sdk_`) count only for policies that opt in (`includeClientReports`),
+because the client key is public and anyone holding it can send reports. Error reports without
+an `environment` count toward `production`. This needs no wire change.
+
 ---
 
 ## Backend Performance Features
