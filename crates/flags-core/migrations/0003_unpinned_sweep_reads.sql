@@ -9,7 +9,14 @@
 -- Each policy adds only an unpinned read: current_org() IS NULL never holds
 -- inside a pinned transaction, so no tenant sees anything new. Additive and
 -- policy-only; no table, column, or data changes. audit_events is excluded on
--- purpose (otto_app has DELETE revoked on it; tracked as #21).
+-- purpose: it has no retention sweep and otto_app has DELETE revoked on it.
+-- #21 covers purging an org's audit rows on org.deleted, not retention.
+
+-- CREATE POLICY takes a lock that conflicts with every telemetry write on
+-- these tables: fail fast rather than queue behind a long query. sqlx runs
+-- each migration in its own transaction, so SET LOCAL ends with it.
+SET LOCAL lock_timeout = '3s';
+
 CREATE POLICY flag_errors_retention_read ON flag_errors
   FOR SELECT USING (current_org() IS NULL);
 CREATE POLICY flag_eval_hourly_retention_read ON flag_eval_hourly

@@ -182,6 +182,12 @@ MCP tools and the background checker.
 New file `crates/flags-core/migrations/0002_auto_rollback.sql`. Nothing in `0001_baseline.sql`
 changes (Rule 6).
 
+The migration as shipped differs from this sketch after review of #24: it opens with
+`SET LOCAL lock_timeout = '3s'`; the two CHECKs on existing tables are added `NOT VALID` (no
+validation scan under ACCESS EXCLUSIVE), and `server_count` is also checked `<= count`;
+`rollback_policies_org_idx` is dropped (`UNIQUE (org_id, id)` covers it). `0002_auto_rollback.sql`
+is authoritative.
+
 ```sql
 -- Which kind of SDK key reported an error. Auto-rollback counts only server
 -- reports unless a policy opts in: a client key is public, so anyone can
@@ -413,7 +419,7 @@ For one flag, in this order:
 2. If `decide` does not trip: update `last_checked_at`, commit, done.
 3. If it trips: **commit and drop the transaction**, then check the entitlement (network; no
    pooled connection held across it, as `Meter::warm` does).
-4. Reopen `begin_live`, lock the flag (`lock`, `FOR UPDATE`), re-read the policy (still armed?
+4. Reopen `begin_live`, lock the flag (`lock`, `FOR NO KEY UPDATE`), re-read the policy (still armed?
    still this mode?) and re-run `decide` on a fresh sample; the world may have moved during the
    network call.
 5. Then by outcome:

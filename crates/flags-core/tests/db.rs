@@ -225,6 +225,38 @@ async fn auto_rollback_tables_are_tenant_isolated(pool: PgPool) {
     assert_eq!(sqlstate(&err), "23514");
     drop(tx);
 
+    // The server share of a bucket can never exceed its total.
+    let mut tx = db.begin(a).await.unwrap();
+    let err = sqlx::query(
+        "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
+         VALUES ($1, $2, 'production', date_trunc('hour', now()), true, 1, 2)",
+    )
+    .bind(a)
+    .bind(flag_a.id)
+    .execute(tx.conn())
+    .await
+    .unwrap_err();
+    assert_eq!(sqlstate(&err), "23514");
+    drop(tx);
+
+    // Both checks on the existing tables are added NOT VALID, so adding them
+    // scans nothing under the table lock; they still check every new row.
+    let unvalidated: Vec<String> = sqlx::query_scalar(
+        "SELECT conname::text FROM pg_constraint \
+         WHERE conname IN ('flag_errors_reporter_check', 'flag_eval_hourly_server_count_check') \
+           AND NOT convalidated ORDER BY 1",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(
+        unvalidated,
+        [
+            "flag_errors_reporter_check",
+            "flag_eval_hourly_server_count_check"
+        ]
+    );
+
     let mut tx = as_app_unpinned(db.pool()).await;
     let err = sqlx::query(
         "INSERT INTO rollback_policies (org_id, app_id, flag_id, environment) \

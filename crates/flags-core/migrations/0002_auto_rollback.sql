@@ -10,20 +10,34 @@
 -- flag_eval_hourly without server_count (stays 0, treated as client), and it
 -- never touches the new tables.
 
+-- Fail fast rather than queue: ALTER TABLE on flag_errors and flag_eval_hourly
+-- takes ACCESS EXCLUSIVE, and a lock request waiting behind a long query
+-- blocks every telemetry insert queued behind it. sqlx runs each migration in
+-- its own transaction, so SET LOCAL ends with it; a timeout fails the boot and
+-- the deploy rolls back, to be retried.
+SET LOCAL lock_timeout = '3s';
+
 -- Which kind of SDK key reported an error. Auto-rollback counts only server
 -- reports unless a policy opts in: a client key is public, so anyone can
 -- report anything with it. NULL for rows written before this column existed,
 -- treated as client.
-ALTER TABLE flag_errors ADD COLUMN reporter text
-  CHECK (reporter IN ('client', 'server'));
+ALTER TABLE flag_errors ADD COLUMN reporter text;
 
 -- How many of a bucket's evaluations a server key reported (count stays the
 -- total). A column rather than a primary-key change, so the release still
 -- running during a rolling deploy keeps working: its INSERT ... ON CONFLICT
 -- leaves server_count at 0 (counted as client), and the new release adds
 -- EXCLUDED.server_count in the same upsert.
-ALTER TABLE flag_eval_hourly ADD COLUMN server_count bigint NOT NULL DEFAULT 0
-  CHECK (server_count >= 0);
+ALTER TABLE flag_eval_hourly ADD COLUMN server_count bigint NOT NULL DEFAULT 0;
+
+-- The checks are added NOT VALID: validating would scan every existing row
+-- while ACCESS EXCLUSIVE is held, and those rows cannot fail them (reporter is
+-- NULL, server_count 0). NOT VALID constraints still check every row written
+-- from now on.
+ALTER TABLE flag_errors ADD CONSTRAINT flag_errors_reporter_check
+  CHECK (reporter IN ('client', 'server')) NOT VALID;
+ALTER TABLE flag_eval_hourly ADD CONSTRAINT flag_eval_hourly_server_count_check
+  CHECK (server_count >= 0 AND server_count <= count) NOT VALID;
 
 CREATE TYPE rollback_mode AS ENUM ('enforce', 'observe');
 
@@ -42,8 +56,10 @@ CREATE TABLE rollback_policies (
   max_error_rate         double precision CHECK (max_error_rate > 0 AND max_error_rate <= 1),
   window_hours           integer       NOT NULL DEFAULT 1    CHECK (window_hours BETWEEN 1 AND 24),
   include_client_reports boolean       NOT NULL DEFAULT false,
-  -- Set when the policy trips; cleared when the environment is turned back on.
-  -- A tripped policy does not act again, so a rollback cannot flap.
+  -- Set only when an enforcing policy turned the environment off (or found it
+  -- already off); observe, not-entitled, and unknown-entitlement trips leave
+  -- the policy armed. Cleared when the environment is turned back on. A
+  -- tripped policy does not act again, so a rollback cannot flap.
   tripped_at             timestamptz,
   last_checked_at        timestamptz,
   created_by             uuid,
@@ -55,7 +71,8 @@ CREATE TABLE rollback_policies (
   FOREIGN KEY (org_id, flag_id) REFERENCES feature_flags (org_id, id) ON DELETE CASCADE
 );
 
-CREATE INDEX rollback_policies_org_idx ON rollback_policies (org_id);
+-- No separate org_id index: UNIQUE (org_id, id) leads with org_id and serves
+-- org-wide lookups and the org purge.
 -- The backstop's lookup: armed policies, least recently checked first.
 CREATE INDEX rollback_policies_due_idx ON rollback_policies (last_checked_at NULLS FIRST) WHERE tripped_at IS NULL;
 
@@ -72,7 +89,9 @@ CREATE TABLE rollback_events (
                 CHECK (outcome IN ('rolled_back', 'would_roll_back', 'not_entitled', 'entitlement_unknown')),
   -- The numbers the decision was made on: counts, rates, thresholds.
   observed      jsonb       NOT NULL,
-  -- The flag version the rollback created (rolled_back only).
+  -- The flag version the rollback created. NULL for every outcome but
+  -- rolled_back, and for rolled_back when the environment was already off
+  -- (nothing to turn off, so no version).
   flag_version  integer,
   created_at    timestamptz NOT NULL DEFAULT now(),
   FOREIGN KEY (org_id, policy_id) REFERENCES rollback_policies (org_id, id) ON DELETE CASCADE,
@@ -95,7 +114,8 @@ CREATE POLICY rollback_policies_tenant_isolation ON rollback_policies
 -- pins per org (begin_live) to act. Policies are permissive and OR together, so
 -- this adds exactly one thing: an unpinned SELECT. A pinned transaction still
 -- sees only its own org's policies, and nothing unpinned can write them. Same
--- shape as the baseline's unpinned retention policies (flag_errors_retention and its siblings in 0001_baseline.sql).
+-- shape as the baseline's unpinned retention policies (flag_errors_retention
+-- and its siblings in 0001_baseline.sql).
 CREATE POLICY rollback_policies_checker ON rollback_policies
   FOR SELECT USING (current_org() IS NULL);
 
