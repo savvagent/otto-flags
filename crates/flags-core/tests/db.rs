@@ -1617,7 +1617,9 @@ async fn a_tripping_policy_disables_only_its_environment(pool: PgPool) {
     assert_eq!(actor_id, None);
     let reason = reason.expect("an auto-rollback names its cause");
     assert!(
-        reason.starts_with(&format!("auto-rollback by policy {policy}: ")),
+        reason.starts_with(&format!(
+            "auto-rollback by policy {policy} (offHasNoErrors): error rate on 15.00% vs off 0.00%"
+        )),
         "{reason}"
     );
     assert!(reason.contains("over 400 evaluations"), "{reason}");
@@ -1759,9 +1761,13 @@ async fn a_healthy_flag_only_advances_last_checked(pool: PgPool) {
     let before = checker_state(&db, org, &app).await;
     assert!(!before.checked);
 
-    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
-        .await
-        .unwrap();
+    let platform = Scripted::new(&db, org, &app, During::Nothing);
+    let report = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert_eq!(
+        platform.calls(),
+        0,
+        "a healthy flag never asks the platform"
+    );
     assert_eq!(report.checked, 1);
     assert!(report.outcomes.is_empty());
     let after = checker_state(&db, org, &app).await;
@@ -1909,4 +1915,298 @@ async fn a_deleted_org_is_not_checked(pool: PgPool) {
         .unwrap_err();
     assert!(matches!(err, Error::AccessRevoked), "{err:?}");
     assert_eq!(err.code(), "access_revoked");
+}
+
+// ---- the checker's re-check under the flag lock
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// What happens while the checker waits on the platform.
+enum During {
+    Nothing,
+    /// Another checker checks the same flag and acts first.
+    NestedCheck,
+    /// A person turns production off.
+    DisableProduction,
+    /// The production policy is switched to observe.
+    SwitchToObserve,
+    /// The production policy is removed.
+    RemovePolicy,
+}
+
+/// An `EntitlementSource` that does something to the database between the
+/// checker's two transactions, then answers `Granted`, and counts its calls.
+struct Scripted {
+    db: Db,
+    org: OrgId,
+    app: flags_core::apps::FlagApp,
+    actor: UserId,
+    during: During,
+    calls: AtomicUsize,
+}
+
+impl Scripted {
+    fn new(db: &Db, org: OrgId, app: &flags_core::apps::FlagApp, during: During) -> Self {
+        Self {
+            db: db.clone(),
+            org,
+            app: app.clone(),
+            actor: UserId::new(),
+            during,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl flags_core::entitlements::EntitlementSource for Scripted {
+    async fn check(&self, _org: OrgId, _feature: &str) -> Entitlement {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let (db, org, app, actor) = (&self.db, self.org, &self.app, self.actor);
+        match self.during {
+            During::Nothing => {}
+            During::NestedCheck => {
+                let mut tx = db.begin(org).await.unwrap();
+                let flag = tx.require_flag(app, "f").await.unwrap();
+                tx.rollback().await.unwrap();
+                let inner = check_flag(db, &Entitlement::Granted, org, flag.id)
+                    .await
+                    .unwrap();
+                assert_eq!(inner.outcomes.len(), 1, "the nested check acts");
+            }
+            During::DisableProduction => {
+                let mut tx = db.begin(org).await.unwrap();
+                tx.set_environment(app, "f", "production", on(false), meta(actor))
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            }
+            During::SwitchToObserve => {
+                let mut tx = db.begin(org).await.unwrap();
+                let flag = tx.require_flag(app, "f").await.unwrap();
+                tx.set_policy(
+                    app,
+                    &flag,
+                    "production",
+                    Mode::Observe,
+                    Thresholds::default(),
+                    actor,
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            }
+            During::RemovePolicy => {
+                let mut tx = db.begin(org).await.unwrap();
+                let flag = tx.require_flag(app, "f").await.unwrap();
+                assert!(tx.remove_policy(&flag, "production", actor).await.unwrap());
+                tx.commit().await.unwrap();
+            }
+        }
+        Entitlement::Granted
+    }
+}
+
+/// The versions of flag `f` recorded with change `auto_rollback`.
+async fn auto_rollback_versions(db: &Db, org: OrgId) -> Vec<i32> {
+    let mut tx = db.begin(org).await.unwrap();
+    let v = sqlx::query_scalar(
+        "SELECT version FROM flag_versions WHERE org_id = $1 AND change = 'auto_rollback' \
+         ORDER BY version",
+    )
+    .bind(org)
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    v
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn two_checkers_roll_back_at_most_once(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+
+    let platform = Scripted::new(&db, org, &app, During::NestedCheck);
+    let outer = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert_eq!(platform.calls(), 1);
+    // The nested checker tripped the policy; the outer one finds it no longer armed.
+    assert!(outer.outcomes.is_empty(), "{outer:?}");
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(auto_rollback_versions(&db, org).await, vec![after.version]);
+    assert_eq!(
+        after.events,
+        vec![("rolled_back".to_string(), Some(after.version))]
+    );
+    assert!(after.tripped);
+    assert!(!after.production);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_person_turning_it_off_meanwhile_leaves_no_auto_version(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    let platform = Scripted::new(&db, org, &app, During::DisableProduction);
+    let report = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+    let after = checker_state(&db, org, &app).await;
+    // Only the person's version.
+    assert_eq!(after.version, before.version + 1);
+    assert!(auto_rollback_versions(&db, org).await.is_empty());
+    assert!(after.tripped);
+    assert!(!after.production);
+    assert_eq!(after.events, vec![("rolled_back".to_string(), None)]);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_policy_switched_to_observe_meanwhile_only_records(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    let platform = Scripted::new(&db, org, &app, During::SwitchToObserve);
+    let report = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert_eq!(
+        report.outcomes,
+        vec![(policy, RollbackOutcome::WouldRollBack)]
+    );
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(after.version, before.version);
+    assert!(after.production);
+    assert!(!after.tripped);
+    assert_eq!(after.events, vec![("would_roll_back".to_string(), None)]);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_policy_removed_meanwhile_does_nothing(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    let platform = Scripted::new(&db, org, &app, During::RemovePolicy);
+    let report = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert!(report.outcomes.is_empty());
+    let mut tx = db.begin(org).await.unwrap();
+    let (events, versions, enabled): (i64, i32, bool) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM rollback_events WHERE org_id = $1), \
+                version, (environments->'production'->>'enabled')::boolean \
+         FROM feature_flags WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(events, 0);
+    assert_eq!(versions, before.version);
+    assert!(enabled);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn two_tripping_policies_roll_back_both_environments_in_one_check(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let (app, flag, production) =
+        checker_fixture(&db, org, actor, &["production", "staging"], Mode::Enforce).await;
+    let mut tx = db.begin(org).await.unwrap();
+    let staging = tx
+        .set_policy(
+            &app,
+            &flag,
+            "staging",
+            Mode::Enforce,
+            Thresholds::default(),
+            actor,
+        )
+        .await
+        .unwrap()
+        .policy
+        .id;
+    // The same tripping telemetry, in staging too.
+    let in_staging = |mut evals: Vec<EvalEvent>| {
+        for e in &mut evals {
+            e.environment = "staging".into();
+        }
+        evals
+    };
+    for enabled in [true, false] {
+        telemetry::record_evaluations(
+            &mut tx,
+            app.id,
+            KeyKind::Server,
+            in_staging(eval_events(200, enabled)),
+        )
+        .await
+        .unwrap();
+    }
+    telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        error_events(30, true, Some("staging")),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    tripping_telemetry(&db, org, &app).await;
+    let before = checker_state(&db, org, &app).await;
+
+    let platform = Scripted::new(&db, org, &app, During::Nothing);
+    let mut report = check_flag(&db, &platform, org, flag.id).await.unwrap();
+    assert_eq!(platform.calls(), 1, "one platform call per flag");
+    assert_eq!(report.checked, 2);
+    report.outcomes.sort_by_key(|(id, _)| *id);
+    let mut want = vec![
+        (production, RollbackOutcome::RolledBack),
+        (staging, RollbackOutcome::RolledBack),
+    ];
+    want.sort_by_key(|(id, _)| *id);
+    assert_eq!(report.outcomes, want);
+
+    let after = checker_state(&db, org, &app).await;
+    assert_eq!(
+        auto_rollback_versions(&db, org).await,
+        vec![before.version + 1, before.version + 2]
+    );
+    assert!(!after.production && !after.staging);
+    let mut events = after.events.clone();
+    events.sort();
+    assert_eq!(
+        events,
+        vec![
+            ("rolled_back".to_string(), Some(before.version + 1)),
+            ("rolled_back".to_string(), Some(before.version + 2)),
+        ]
+    );
+    let mut tx = db.begin(org).await.unwrap();
+    let armed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM rollback_policies WHERE org_id = $1 AND tripped_at IS NULL",
+    )
+    .bind(org)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(armed, 0);
 }

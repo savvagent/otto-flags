@@ -136,7 +136,7 @@ pub struct ChangeMeta {
     pub expected_version: Option<i32>,
 }
 
-pub(crate) const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
+const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
                     variations, configuration, version, created_at, updated_at, archived_at";
 
 const MAX_DESCRIPTION: usize = 2_000;
@@ -509,6 +509,19 @@ pub(crate) async fn apply_env_patch(
         None => flag.environments = serde_json::json!({ environment: value }),
     }
     commit_change(tx, flag, change, meta).await
+}
+
+/// Read a flag by id without locking it (the rollback checker's first,
+/// read-only transaction). `None` if it no longer exists.
+pub(crate) async fn get_by_id(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<FeatureFlag>> {
+    let org = tx.org();
+    Ok(sqlx::query_as(&format!(
+        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND id = $2"
+    ))
+    .bind(org)
+    .bind(flag)
+    .fetch_optional(tx.conn())
+    .await?)
 }
 
 /// Lock a flag by id (the rollback checker has no app/key in hand). `None` if

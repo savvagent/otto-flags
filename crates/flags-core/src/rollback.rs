@@ -778,9 +778,8 @@ pub async fn check_flag(
         }
         done.push(policy.id);
     }
-    // Only policy rows are written here, never the flag row, so this cannot
-    // deadlock with a change holding the flag lock.
-    mark_checked(&mut tx, &done).await?;
+    // No flag lock is held here, so take only policy rows nobody else holds.
+    mark_checked_unlocked(&mut tx, &done).await?;
     tx.commit().await?;
     if tripped.is_empty() {
         return Ok(report);
@@ -816,9 +815,9 @@ pub async fn check_flag(
         let t = &policy.thresholds;
         let (window_start, sample) = tx.sample(flag, &policy.environment, t).await?;
         let decision = decide(&sample, t);
-        if !matches!(decision, Decision::Trip(_)) {
+        let Decision::Trip(trigger) = decision else {
             continue;
-        }
+        };
         let observation = Observation {
             window_start,
             rate_on: sample.rate_on(),
@@ -829,30 +828,7 @@ pub async fn check_flag(
         };
         let outcome = match (&entitlement, policy.mode) {
             (Entitlement::Granted, Mode::Enforce) => {
-                let version = if env_enabled(&current, &policy.environment) {
-                    current = flags::apply_env_patch(
-                        &mut tx,
-                        &app,
-                        &current.key,
-                        &policy.environment,
-                        EnvPatch {
-                            enabled: Some(false),
-                            ..Default::default()
-                        },
-                        &ChangeMeta {
-                            actor: None,
-                            reason: Some(rollback_reason(policy.id, &observation.sample)),
-                            expected_version: None,
-                        },
-                        "auto_rollback",
-                    )
-                    .await?;
-                    Some(current.version)
-                } else {
-                    None
-                };
-                mark_tripped(&mut tx, policy.id).await?;
-                record_event(&mut tx, &policy, Outcome::RolledBack, &observation, version).await?;
+                enforce(&mut tx, &app, &mut current, &policy, trigger, &observation).await?;
                 Outcome::RolledBack
             }
             (Entitlement::Granted, Mode::Observe) => Outcome::WouldRollBack,
@@ -869,6 +845,45 @@ pub async fn check_flag(
     Ok(report)
 }
 
+/// Act on an enforcing policy that tripped with the entitlement granted: turn
+/// its environment off as an `auto_rollback` version (unless it already is
+/// off), mark the policy tripped, and record `rolled_back` with the version
+/// (NULL when there was nothing to turn off). `flag` is the locked flag and is
+/// replaced by the new version.
+async fn enforce(
+    tx: &mut Tx<'_>,
+    app: &FlagApp,
+    flag: &mut FeatureFlag,
+    policy: &Policy,
+    trigger: Trigger,
+    observation: &Observation,
+) -> Result<()> {
+    let version = if env_enabled(flag, &policy.environment) {
+        *flag = flags::apply_env_patch(
+            tx,
+            app,
+            &flag.key,
+            &policy.environment,
+            EnvPatch {
+                enabled: Some(false),
+                ..Default::default()
+            },
+            &ChangeMeta {
+                actor: None,
+                reason: Some(rollback_reason(policy.id, trigger, &observation.sample)),
+                expected_version: None,
+            },
+            "auto_rollback",
+        )
+        .await?;
+        Some(flag.version)
+    } else {
+        None
+    };
+    mark_tripped(tx, policy.id).await?;
+    record_event(tx, policy, Outcome::RolledBack, observation, version).await
+}
+
 /// A policy can act only on an active flag, in an environment its app still has.
 fn can_act(flag: &FeatureFlag, app: &FlagApp, policy: &Policy) -> bool {
     flag.status == FlagStatus::Active && app.environments.contains(&policy.environment)
@@ -882,28 +897,33 @@ fn env_enabled(flag: &FeatureFlag, environment: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The version's reason: numbers and an id only, never reported text.
-fn rollback_reason(policy: Uuid, s: &Sample) -> String {
+/// A trigger's wire name (camelCase, as `Trigger` serializes).
+fn trigger_name(t: Trigger) -> &'static str {
+    match t {
+        Trigger::MaxErrorRate => "maxErrorRate",
+        Trigger::ErrorRatio => "errorRatio",
+        Trigger::OffHasNoErrors => "offHasNoErrors",
+    }
+}
+
+/// The version's reason: an id, a trigger name, and numbers only, never
+/// reported text.
+fn rollback_reason(policy: Uuid, trigger: Trigger, s: &Sample) -> String {
     let on = s.rate_on().unwrap_or(0.0) * 100.0;
     let off = s
         .rate_off()
         .map_or_else(|| "n/a".to_string(), |r| format!("{:.2}%", r * 100.0));
     let n = s.evals_on + s.evals_off;
-    format!("auto-rollback by policy {policy}: error rate on {on:.2}% vs off {off} over {n} evaluations")
+    format!(
+        "auto-rollback by policy {policy} ({}): error rate on {on:.2}% vs off {off} \
+         over {n} evaluations",
+        trigger_name(trigger)
+    )
 }
 
 /// The flag (unlocked) and its app, for transaction 1.
 async fn flag_and_app(tx: &mut Tx<'_>, flag: FlagId) -> Result<Option<(FeatureFlag, FlagApp)>> {
-    let org = tx.org();
-    let found: Option<FeatureFlag> = sqlx::query_as(&format!(
-        "SELECT {} FROM feature_flags WHERE org_id = $1 AND id = $2",
-        flags::COLS
-    ))
-    .bind(org)
-    .bind(flag)
-    .fetch_optional(tx.conn())
-    .await?;
-    let Some(found) = found else {
+    let Some(found) = flags::get_by_id(tx, flag).await? else {
         return Ok(None);
     };
     Ok(tx.get_app(found.app_id).await?.map(|app| (found, app)))
@@ -937,6 +957,35 @@ async fn armed_policy(tx: &mut Tx<'_>, id: Uuid) -> Result<Option<Policy>> {
     .await?)
 }
 
+/// Advance `last_checked_at` in transaction 1, which holds no flag lock.
+/// Only armed rows nobody else holds are touched (`SKIP LOCKED`), so this
+/// never waits on a row lock and cannot close a lock cycle with a concurrent
+/// checker's transaction 2 or a re-arm, which take policy rows in a different
+/// order. A skipped row is just picked up again sooner by the backstop.
+async fn mark_checked_unlocked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let org = tx.org();
+    sqlx::query(
+        "UPDATE rollback_policies SET last_checked_at = now() \
+         WHERE org_id = $1 AND id IN ( \
+           SELECT id FROM rollback_policies \
+           WHERE org_id = $1 AND id = ANY($2) AND tripped_at IS NULL \
+           FOR UPDATE SKIP LOCKED)",
+    )
+    .bind(org)
+    .bind(ids)
+    .execute(tx.conn())
+    .await?;
+    Ok(())
+}
+
+/// Advance `last_checked_at` in transaction 2, under the flag's row lock.
+/// This one may wait: every writer that takes several of a flag's policy rows
+/// at once (re-arming, another checker's transaction 2) holds the same flag
+/// lock and so runs strictly before or after, and transaction 1 never waits,
+/// so a wait here cannot be part of a cycle.
 async fn mark_checked(tx: &mut Tx<'_>, ids: &[Uuid]) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
@@ -1046,19 +1095,30 @@ mod tests {
     fn the_rollback_reason_is_numbers_only() {
         let id = Uuid::nil();
         assert_eq!(
-            rollback_reason(id, &s(200, 200, 30, 2)),
+            rollback_reason(id, Trigger::ErrorRatio, &s(200, 200, 30, 2)),
             format!(
-                "auto-rollback by policy {id}: error rate on 15.00% vs off 1.00% \
+                "auto-rollback by policy {id} (errorRatio): error rate on 15.00% vs off 1.00% \
                  over 400 evaluations"
             )
         );
         assert_eq!(
-            rollback_reason(id, &s(1000, 0, 50, 0)),
+            rollback_reason(id, Trigger::MaxErrorRate, &s(1000, 0, 50, 0)),
             format!(
-                "auto-rollback by policy {id}: error rate on 5.00% vs off n/a \
+                "auto-rollback by policy {id} (maxErrorRate): error rate on 5.00% vs off n/a \
                  over 1000 evaluations"
             )
         );
+    }
+
+    #[test]
+    fn trigger_names_match_their_wire_form() {
+        for t in [
+            Trigger::MaxErrorRate,
+            Trigger::ErrorRatio,
+            Trigger::OffHasNoErrors,
+        ] {
+            assert_eq!(serde_json::to_value(t).unwrap(), trigger_name(t));
+        }
     }
 
     #[test]
