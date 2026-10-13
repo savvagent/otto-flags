@@ -2,8 +2,10 @@
 
 **Spec:** [`docs/specs/2026-10-09-auto-rollback-design.md`](../specs/2026-10-09-auto-rollback-design.md)
 (approved, 2 critique rounds).
-**Plan status:** Approved (plan critique, 2 rounds), 2026-10-10. Not yet implemented.
-**Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11). Platform side done:
+**Plan status:** Approved (plan critique, 2 rounds), 2026-10-10. Amended 2026-10-13 to fold in
+#12 (Task 10b). Not yet implemented.
+**Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11), plus
+[#12](https://github.com/savvagent/otto-flags/issues/12) (Task 10b). Platform side done:
 savvagent/otto-platform#30 → PR #31, released as **0.5.0 at `fa1ae08c8d5760c1df9752281a078192032e7d24`**
 (tag `v0.5.0`), deployed, migration 0016 verified in production on 2026-10-10.
 **Branch / worktree:** `feat/auto-rollback`, `.claude/worktrees/feat-auto-rollback`.
@@ -119,7 +121,12 @@ back.
    local Postgres 16 (`DELETE 0` with the `WHERE`, `DELETE 1` without). Production's pool role
    bypasses RLS, which hides this today; the new table should not depend on that. The
    baseline's `flag_errors` / `flag_eval_hourly` / `platform_events` retention policies have
-   the same gap — [#12](https://github.com/savvagent/otto-flags/issues/12), not widened here (see Known Plan Gaps).
+   the same gap — [#12](https://github.com/savvagent/otto-flags/issues/12), fixed in this PR by Task 10b
+   (spec §3a). `audit_events` is excluded (spec premise 7).
+11. **#12's test drives the real code as `otto_app`.** A `Db::from_pool` over a pool whose
+   `after_connect` runs `SET ROLE otto_app` makes every `db.pool()` statement unpinned and
+   subject to RLS, so the test calls `telemetry::sweep` and `platform_events::sweep`
+   themselves rather than copies of their SQL.
 
 ## File Structure
 
@@ -128,6 +135,7 @@ back.
 | **Modify.** `Cargo.toml` | Pin both otto-platform crates to `fa1ae08…` (0.5.0). |
 | **Modify.** `Cargo.lock` | Follows the pin. |
 | **Create.** `crates/flags-core/migrations/0002_auto_rollback.sql` | `flag_errors.reporter`, `flag_eval_hourly.server_count`, `rollback_mode`, `rollback_policies`, `rollback_events`, RLS, unpinned checker/retention policies, grants. |
+| **Create.** `crates/flags-core/migrations/0003_unpinned_sweep_reads.sql` | #12: unpinned SELECT companions for `flag_errors`, `flag_eval_hourly`, `platform_events`. |
 | **Create.** `crates/flags-core/src/rollback.rs` | Decision rule (`decide`), thresholds, policy/event types, `RollbackExt` (policy CRUD, events, sample), `armed`, `rearm`, `check_flag`, `due_policies`, `Schedule`, `Hints`, `Checker`. |
 | **Create.** `crates/flags-core/src/entitlements.rs` | `AUTO_ROLLBACK`, `Entitlement`, `EntitlementSource`, `Entitlements` (`check`, `require`). |
 | **Modify.** `crates/flags-core/src/lib.rs` | `pub mod entitlements; pub mod rollback;` and the module-doc list. |
@@ -136,7 +144,7 @@ back.
 | **Modify.** `crates/flags-core/src/telemetry.rs` | `record_*` take a `KeyKind` and return `Recorded { receipt, flags }`; `server_count` and `reporter` written; `assess` delegates to `rollback::decide`; `sweep` deletes old `rollback_events`. |
 | **Modify.** `crates/flags-core/src/platform_events.rs` | Purge list gains `rollback_events`, `rollback_policies` before `flag_errors`. |
 | **Modify.** `crates/flags-core/src/audit.rs` | Two new actions. |
-| **Modify.** `crates/flags-core/tests/db.rs` | `meta()` uses `Some(actor)`; new tests (Tasks 2, 3, 5, 6, 8, 10). |
+| **Modify.** `crates/flags-core/tests/db.rs` | `meta()` uses `Some(actor)`; new tests (Tasks 2, 3, 5, 6, 8, 10, 10b). |
 | **Modify.** `crates/flags-api/src/lib.rs` | `AppState.hints: rollback::Hints`; `AppState::new` takes it. |
 | **Modify.** `crates/flags-api/src/telemetry.rs` | Pass `sdk.0.kind`; ask `armed` before commit; `hints.send` after commit; return `recorded.receipt`. |
 | **Create.** `crates/flags-mcp/src/tools/rollback.rs` | The five tools. |
@@ -160,7 +168,8 @@ back.
 `reporter`/`server_count`). 4 (pure rule) is independent but must precede 5 and 8. 5 (policy
 domain) before 6 (re-arm needs the table and the CRUD to test with). 7 (entitlements) before 8
 (checker) and 11 (MCP). 8 (check one flag) before 9 (the loop that calls it). 10 (purge/sweep)
-once events can be written. 11 (MCP) and 12 (wiring) before 13 (e2e, which needs both). 14
+once events can be written. 10b (#12) after 10, so its sweep test also covers
+`rollback_events`. 11 (MCP) and 12 (wiring) before 13 (e2e, which needs both). 14
 docs last.
 
 ---
@@ -590,6 +599,37 @@ impl Schedule { fn hint(&mut self, key: (OrgId, FlagId), now: Instant);  fn next
 - [ ] Commit: `feat: purge and expire rollback data` — why: org.deleted must leave nothing
       behind; events are bounded at the evaluation retention. `Refs #11`.
 
+### Task 10b: Unpinned retention sweeps work under `otto_app` (#12)
+
+**Files:** Create `crates/flags-core/migrations/0003_unpinned_sweep_reads.sql`. Modify `crates/flags-core/tests/db.rs`.
+
+- [ ] **Failing test first.** In `db.rs` add a helper
+      `async fn otto_app_db(pool: &PgPool) -> Db`: a new `PgPoolOptions` pool (max 2
+      connections) over `pool.connect_options()` whose `after_connect` runs `SET ROLE otto_app`,
+      wrapped in `Db::from_pool`. Unpinned statements on it are subject to RLS; `Db::begin`
+      still pins and works. Add
+      `async fn unpinned_sweeps_and_the_purge_delete_as_otto_app(pool: PgPool)`: with the
+      superuser `db(pool.clone())`, arrange in one org an expired and a fresh row in each of
+      `flag_errors` (`received_at` 15 days / 1 hour old), `flag_eval_hourly` (`hour` 91 days /
+      this hour), `rollback_events` (`created_at` 91 days / 1 day), and `platform_events`
+      (`received_at` older / newer than the `keep_days` passed); use the existing helpers for
+      app, flag, and policy, and raw SQL for backdating. Then, on `otto_app_db(&pool)`, call
+      `telemetry::sweep` and `platform_events::sweep` and assert (via the superuser pool) that
+      exactly the expired rows are gone. Then arrange one fresh `flag_errors` row in a second
+      org and assert that a pinned transaction on the `otto_app` Db for the first org
+      (`db.begin(org)`) counts only the first org's rows (the new policies widen nothing
+      pinned).
+- [ ] Run `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db unpinned_sweeps` → fails (expired rows remain).
+- [ ] Write `0003_unpinned_sweep_reads.sql` exactly as spec §3a, with a leading comment: why
+      (Postgres applies SELECT policies to a `DELETE` whose `WHERE` reads columns), that each
+      policy adds only an unpinned read, and that it is additive. Do not touch `0001` or `0002`.
+- [ ] Run the db tests (`tenant_isolation_is_enforced_on_every_tenant_table` must still pass),
+      then the three gates and the append-only check.
+- [ ] Commit: `fix: let unpinned retention sweeps delete under otto_app` — why: the
+      DELETE-only retention policies match nothing for a role subject to RLS, because the
+      `WHERE` clauses need a SELECT policy; production works only because its pool role is
+      exempt. Body ends `Fixes #12`.
+
 ### Task 11: MCP tools
 
 **Files:** Create `crates/flags-mcp/src/tools/rollback.rs`. Modify `crates/flags-mcp/src/tools/{mod.rs,out.rs}`, `crates/flags-mcp/src/server.rs`, `crates/flags-mcp/src/lib.rs`, `crates/flags-core/src/usage.rs`.
@@ -734,6 +774,7 @@ pub fn spawn_checker(db: Db, platform: Arc<PlatformClient>, config: &Config, che
 - **otto-platform pin:** both crates → `fa1ae08` (Task 1). Platform 0.5.0 is already deployed
   (2026-10-10), so the merge is deploy-safe: entitlement answers carry `features` from the
   first request.
+- **Migration `0003`** (#12): policy-only, additive; boots with `0002`.
 - **Migration `0002`:** runs at boot. Confirm `applying migrations` in the boot logs and that the isolation
   summary's tenant-table count is 2 higher than the previous release's (the summary prints
   counts, not names; the per-table proof is Task 2's test). Additive, so the old
@@ -746,10 +787,5 @@ pub fn spawn_checker(db: Db, platform: Arc<PlatformClient>, config: &Config, che
 
 ## Known Plan Gaps
 
-- **Baseline retention policies are DELETE-only** (`0001_baseline.sql`: `flag_errors_retention`,
-  `flag_eval_hourly_retention`, `platform_events_retention`). Under `otto_app` their sweeps'
-  `WHERE` clauses make them delete nothing; production works only because its pool role
-  bypasses RLS. Fixing them is a new migration outside this issue's scope — tracked as
-  [#12](https://github.com/savvagent/otto-flags/issues/12). This plan does not repeat the gap for
-  `rollback_events` (decision 10).
+- None. The baseline retention gap (#12) is now Task 10b.
 

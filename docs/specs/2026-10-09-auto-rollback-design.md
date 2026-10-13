@@ -1,7 +1,8 @@
 # Auto-rollback, gated by the plan — Design
 
 **Status:** Approved (spec critique, 2 rounds), 2026-10-09. Planned: [the plan](../plans/2026-10-10-auto-rollback.md).
-**Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11). Depends on
+**Issue:** [#11](https://github.com/savvagent/otto-flags/issues/11), and folds in
+[#12](https://github.com/savvagent/otto-flags/issues/12) (§3a). Depends on
 [savvagent/otto-platform#30](https://github.com/savvagent/otto-platform/issues/30).
 **Builds on:** [the product design](2026-09-15-otto-flags-design.md) §4, §5, §10 step 4, and
 [the v1 plan](../plans/2026-10-09-build-and-deploy.md).
@@ -96,6 +97,13 @@ paid capability (risk scoring, rollout velocity) will reuse.
    NULL environment as `"production"`, mirroring the evaluation default: counting NULL everywhere
    would let staging errors trip a production policy, and ignoring NULL would mean a default
    server-SDK setup never trips.
+7. **#12 does not extend to `audit_events`.** The `org.deleted` purge also deletes
+   `audit_events` unpinned (`crates/flags-core/src/platform_events.rs:181`) under a DELETE-only
+   policy (`0001_baseline.sql:345-346`), but `otto_app` has `UPDATE, DELETE` revoked on that
+   table (`0001_baseline.sql`, grants block): the append-only trail is deleted only by the exempt
+   pool role, by design. A SELECT policy would change nothing for `otto_app` (the delete is
+   refused outright, not silently empty). Whether the purge should survive a non-exempt pool role
+   is a separate question, filed as a follow-up; §3a covers #12's three tables.
 
 ## Scope
 
@@ -112,6 +120,9 @@ paid capability (risk scoring, rollout velocity) will reuse.
   checker after a telemetry commit.
 - `flags-server`: spawn the checker; a periodic pass while awake as a backstop.
 - Org-deleted purge of the new tables.
+- #12: a separate migration `0003_unpinned_sweep_reads.sql` giving `flag_errors`,
+  `flag_eval_hourly`, and `platform_events` a companion `FOR SELECT USING (current_org() IS NULL)`
+  policy beside their retention DELETE policies (§3a).
 
 **Out:**
 - Reverting one environment to an earlier version's state (only "disable" in v1 of this feature).
@@ -295,6 +306,33 @@ exactly that unpinned delete.
 `rollback_policies` before `flag_errors` in that list. The cascades would also remove them, but
 the list is how the purge reports what it deleted.
 
+## 3a. Unpinned deletes under `otto_app` (#12)
+
+Postgres applies a table's SELECT policies to a `DELETE` whose `WHERE` reads columns. Every
+retention sweep has such a `WHERE` (`received_at < …`, `hour < …`), so a
+DELETE-only `current_org() IS NULL` policy deletes 0 rows for any role subject to RLS. Production
+hides it today: `db.pool()` connects as the attach role, which bypasses RLS (tenant transactions
+`SET LOCAL ROLE otto_app`; unpinned statements do not). Retention and the purge should not depend
+on that role staying exempt (#12).
+
+New file `crates/flags-core/migrations/0003_unpinned_sweep_reads.sql` (a separate file, so each
+migration has one concern; `0001` is not touched):
+
+```sql
+CREATE POLICY flag_errors_retention_read ON flag_errors
+  FOR SELECT USING (current_org() IS NULL);
+CREATE POLICY flag_eval_hourly_retention_read ON flag_eval_hourly
+  FOR SELECT USING (current_org() IS NULL);
+CREATE POLICY platform_events_retention_read ON platform_events
+  FOR SELECT USING (current_org() IS NULL);
+```
+
+Policies are permissive and OR together, so each adds exactly one thing: an unpinned read. A
+pinned transaction (every request path, via `begin_live`) never has `current_org()` NULL and
+still sees only its own org. Nothing unpinned gains a write. This is the same shape as
+`rollback_policies_checker` and `rollback_events_retention_read` in `0002`. Additive and
+policy-only: the previous release is unaffected during rollout.
+
 ## 4. The checker
 
 ### Decision rule (pure)
@@ -450,6 +488,11 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
   environment; a tripped policy does not act again; turning the environment back on re-arms it;
   observe mode writes `would_roll_back` once per hour and never changes the flag; `org.deleted`
   purges the new tables; the 90-day sweep removes old events.
+- **#12 (`db.rs`):** with a `Db` whose pool connections run as `otto_app` (session
+  `SET ROLE otto_app`, unpinned), the real `telemetry::sweep` and `platform_events::sweep`
+  delete expired `flag_errors`, `flag_eval_hourly`, `rollback_events`, and `platform_events`
+  rows and keep fresh ones; a pinned `otto_app` transaction still sees only its own org. The
+  test fails before `0003`.
 - **E2E (`crates/flags-server/tests/e2e.rs`, mock platform):** the mock's `usage-status` gains
   `features`. An org without `auto_rollback` gets `feature_not_in_plan` from
   `set_rollback_policy`; with it, the agent sets a policy, an app reports server-key errors over
@@ -529,6 +572,8 @@ Outputs reuse `out.rs` envelopes (an object root, never a bare array). `rollback
 
 - **otto-platform 0.5.0** (otto-platform#30) released and deployed before the otto-flags PR
   merges; the otto-flags PR bumps the pin to that rev in a separate commit.
+- **Migrations `0002` and `0003`** apply at boot under the advisory lock; confirm in the boot
+  logs.
 - **No new Fly secret or env var, no new scope, no platform re-registration.**
 - **No SDK package change, no changeset.**
 - **Docs:** `docs/deploy/fly.md` gains a short "Auto-rollback" note (plan gating, the
