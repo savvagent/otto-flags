@@ -20,17 +20,17 @@ under `.claude/worktrees/`, so the Rust SDK gates in `CLAUDE.md` drop the temp-c
 
 ### Task 1: empty `[workspace]` tables and in-place gates
 
-- [ ] **Failing check first:** in the worktree, `cd packages/rust-server && cargo locate-project
+- [x] **Failing check first:** in the worktree, `cd packages/rust-server && cargo locate-project
   --workspace` (and the same in `examples/rust-server`) fails with cargo's "current package
   believes it's in a workspace when it's not".
-- [ ] Add an empty `[workspace]` table, with a comment saying why, to
+- [x] Add an empty `[workspace]` table, with a comment saying why, to
   `packages/rust-server/Cargo.toml` and `examples/rust-server/Cargo.toml`.
-- [ ] Re-run: each prints its own manifest; at the repo root it still prints the root manifest and
+- [x] Re-run: each prints its own manifest; at the repo root it still prints the root manifest and
   `cargo metadata --no-deps` lists only the four `crates/flags-*` members.
-- [ ] `CLAUDE.md`: the five Rust SDK/example gates run in place (`cd <crate> && cargo …`); drop the
+- [x] `CLAUDE.md`: the five Rust SDK/example gates run in place (`cd <crate> && cargo …`); drop the
   sentence explaining the temp copy and #14; the Notes line says the crates are their own
   workspace roots.
-- [ ] Run every gate above; compare the known-red gates with the `origin/main` baseline (run
+- [x] Run every gate above; compare the known-red gates with the `origin/main` baseline (run
   there from a temp copy, since the baseline lacks the fix).
-- [ ] Commit: `fix: make the standalone rust crates their own workspace roots`, body explaining
+- [x] Commit: `fix: make the standalone rust crates their own workspace roots`, body explaining
   why, ending `Fixes #14`.
