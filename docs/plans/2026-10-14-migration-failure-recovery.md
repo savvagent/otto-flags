@@ -234,6 +234,14 @@ async fn migration_checksums_are_the_sha384_of_their_files(pool: PgPool) {
     flags_core::MIGRATOR.run(&pool).await.unwrap();
 ```
 
+- [ ] **Step 4b: Run migrators on one closed session.** (Spec critique.) Add a helper
+  `async fn boot_migrate(migrator: &Migrator, pool: &PgPool) -> Result<(), MigrateError>` that
+  acquires a connection, `detach()`es it, runs the migrator on it, and `close()`s it (import
+  `sqlx::Connection`); replace every `newer_release.run(&pool)` and
+  `flags_core::MIGRATOR.run(&pool)` in the two tests above with it. `run_direct` returns on a
+  migration error without releasing its advisory lock, which would otherwise block the next
+  migrator on another pooled connection.
+
 - [ ] **Step 5: Prove each test can fail.** Temporarily invert one assertion per test (e.g.
   `assert_eq!(rows, 1, …)`, `sqlstate "23505"`, compare `digest` against an empty slice, drop the
   `DELETE`), run, see each FAIL, then restore. Run:
@@ -271,13 +279,16 @@ runbook never proposes editing a migration.
 - [ ] **Step 1: Write the section** in `docs/deploy/fly.md`, following the spec's section 6,
   items 1-6, in the doc's existing style (prose plus `bash`/`sql` blocks). It must contain:
   the boot-log signature (`applying migrations`, `migrations failed`,
-  `while executing migration <N>: …`); that nothing is recorded and the previous release keeps
+  `while executing migration <N>: error returned from database: <message>`, which carries the
+  message but not the SQLSTATE); a pointer to `fly status` for machines left on the failed
+  release; that nothing is recorded and the previous release keeps
   serving, citing `a_failed_migration_leaves_nothing_and_the_previous_release_boots`; that later
   pushes to `main` also fail to deploy until recovery; the read-only diagnostics (`fly logs`,
   `fly releases`, `fly status`, then Rob's `SELECT … FROM _sqlx_migrations ORDER BY version` and a
-  `pg_stat_activity` SELECT, via `fly postgres connect -a otto-db -d otto_flags`, which is
+  `pg_stat_activity` SELECT filtered to `datname = 'otto_flags'`, via `fly postgres connect -a otto-db -d otto_flags`, which is
   interactive and hangs when run non-interactively); the three recovery paths with their exact
-  human-only statements and ordering (transient: re-run the CI deploy; data: fix the data, or
+  human-only statements and ordering (transient: re-run the `deploy` job of the newest `main` CI
+  run, since each run deploys its own SHA; data: fix the data, or
   merge a converging `N+1` and only then record `N` with `sha384sum` from `git show`; `Dirty`:
   the `DELETE`); the "never" list; the note distinguishing `refusing to serve: …`; the
   `-- no-transaction` sentence; and "afterwards, verify per `CLAUDE.md` Ship > verify".

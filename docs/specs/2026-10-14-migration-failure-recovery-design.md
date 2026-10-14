@@ -56,9 +56,10 @@ Read against sqlx 0.8.6 (`Cargo.lock`), `sqlx-postgres/src/migrate.rs` and
   (interactive; it hangs when run non-interactively, so an agent cannot use it). Every write in
   the runbook is marked human-only, per the Human-only list. Agents diagnose from `fly logs`,
   `fly releases`, and `fly status`, which need no database session.
-- **Re-running the CI `deploy` job** for the same merge SHA (`gh run rerun <id> --failed`) is the
-  retry path after a transient failure. It deploys a commit CI already deployed, the same path as
-  every push to `main`; it is not a hand `fly deploy`, which stays Rob's.
+- **Re-running the CI `deploy` job of the newest `main` CI run** (`gh run rerun <id> --failed`) is
+  the retry path. The `deploy` job deploys its own run's SHA, so re-running an older run would
+  deploy an older commit; every later push failed the same way, so the newest run is the one to
+  re-run. It is the same path as every push to `main`, not a hand `fly deploy`, which stays Rob's.
 - **The description column is cosmetic:** sqlx validates only version and checksum
   (`validate_applied_migrations` and the checksum compare in `run_direct`). The runbook still
   gives the value sqlx would write (the file name without version and `.sql`, `_` as spaces).
@@ -98,10 +99,11 @@ against production; the `fly postgres connect` non-interactive hang (a flyctl be
 No code path changes. The runbook section covers, in order:
 
 1. **What a failure looks like.** Boot log: `applying migrations`, then the process exits with
-   `migrations failed` and `while executing migration <N>: error returned from database: <text>`
-   (the `ExecuteMigration` display string). The new machine never binds a port, `/readyz` fails,
-   the deploy fails and rolls back (as `CLAUDE.md` Ship > verify already says). The previous
-   release keeps serving: no row was written. Later pushes to `main` fail the same way until
+   `migrations failed`, whose cause chain includes
+   `while executing migration <N>: error returned from database: <message>` (sqlx's displays; the
+   message, not the SQLSTATE). The new machine never binds a port and `/readyz` fails; the deploy
+   fails, and `CLAUDE.md` Ship > verify says it rolls back, but `fly status` is the check for any
+   machine left on the failed release. The previous release keeps serving: no row was written. Later pushes to `main` fail the same way until
    recovery; they are merged, not live.
 2. **Diagnose (read-only).** `fly logs -a otto-flags --no-tail` (version and SQLSTATE),
    `fly releases -a otto-flags`, `fly status -a otto-flags`; then Rob, in `fly postgres connect`:
@@ -109,14 +111,15 @@ No code path changes. The runbook section covers, in order:
    SELECT version, description, success, encode(checksum, 'hex') AS checksum, installed_on
    FROM _sqlx_migrations ORDER BY version;
    ```
-   and, for a lock wait, a `pg_stat_activity` SELECT for long transactions on `otto_flags`.
+   and, for a lock wait, a `pg_stat_activity` SELECT for long transactions, filtered to
+   `datname = 'otto_flags'` (the instance also hosts `otto_platform` and `otto_factory`).
 3. **Recover by cause.**
    - *Transient* (`55P03` lock timeout: migrations set `SET LOCAL lock_timeout`, as `0002` and
      `0003` do; a dropped connection; a stopped machine): nothing to clear. Re-run the CI deploy.
      Ending a blocking session (`pg_terminate_backend`) is human-only.
    - *The SQL fails on production data* (a constraint, a duplicate): preferred, Rob fixes the data
      so `N` applies as written (the statement is the fix PR author's, with the SELECT that shows
-     the offending rows; run in a transaction), then re-run the deploy. When `N` must never run as
+     the offending rows; run in a transaction), then re-run the newest deploy. When `N` must never run as
      written: merge `N+1`, written to converge both states (databases where `N` ran, such as CI and
      local, and production where it did not), and only then Rob records `N` as applied:
      ```sql
@@ -126,8 +129,8 @@ No code path changes. The runbook section covers, in order:
      with `<hex>` from `git show <sha>:crates/flags-core/migrations/<file> | sha384sum`. Then
      re-run the deploy. Recording `N` before `N+1` is deployable would let a restart boot the new
      code against a schema without `N`.
-   - *A `success = false` row (`Dirty`)*: every release, old and new, refuses to boot, so it is an
-     outage. Confirm nothing of `N` is half applied, then Rob runs
+   - *A `success = false` row (`Dirty`)*: every release, old and new, refuses to boot; machines
+     already running keep serving only until they restart or resume from suspend. Confirm nothing of `N` is half applied, then Rob runs
      `DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false;`.
 4. **Never:** edit, rename, delete, or renumber the failed file, or reuse its number (checksums,
    CI's `migrations-append-only`, the contiguity test, and databases that already applied it);
@@ -152,6 +155,10 @@ Tests in `crates/flags-core/tests/db.rs` (`#[sqlx::test(migrator = "flags_core::
   checksum.
 - `a_failed_unknown_migration_still_refuses_to_boot` gains the runbook's `DELETE`, after which
   `MIGRATOR.run` succeeds.
+- Every migrator in these tests runs through a `boot_migrate` helper on one detached connection
+  that is closed afterwards: `run_direct` returns a migration error without `unlock()`, so on a
+  pooled connection the session-level advisory lock would outlive the call and block the next
+  migrator on another connection. In production the process exits, which ends the session.
 
 ## 7. Invariants impact
 
