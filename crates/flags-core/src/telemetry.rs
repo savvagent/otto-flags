@@ -2,14 +2,16 @@
 //! and the health summary agents read from them.
 //!
 //! Evaluations are folded into hourly buckets as they arrive (see the baseline
-//! migration for why raw rows are not kept). Errors are kept raw, truncated,
-//! for [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
+//! migration for why raw rows are not kept). Errors are kept as reported, one
+//! row each, truncated and with NUL replaced (see `stored`), for
+//! [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
 //! for [`EVAL_RETENTION_DAYS`]. [`sweep`] enforces all three.
 //!
 //! Telemetry names flags by key and the key resolves within the reporting
 //! app, so an app can only ever count against its own flags. Unknown keys are
 //! dropped and counted in the receipt rather than failing the batch: an SDK
 //! that evaluated a flag since deleted should not have its whole batch refused.
+//! A key that cannot be a flag key at all (one containing NUL) is unknown too.
 
 use std::collections::{BTreeMap, HashMap};
 

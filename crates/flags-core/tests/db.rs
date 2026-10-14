@@ -1132,6 +1132,25 @@ async fn telemetry_text_with_nul_is_stored_replaced(pool: PgPool) {
         )]
     );
 
+    // A batch naming only NUL keys is all unknown and writes nothing.
+    let recorded =
+        telemetry::record_errors(&mut tx, app.id, KeyKind::Server, vec![error("f\0", true)])
+            .await
+            .unwrap();
+    assert_eq!(
+        recorded.receipt,
+        telemetry::Receipt {
+            accepted: 0,
+            unknown_flags: 1
+        }
+    );
+    assert!(recorded.flags.is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM flag_errors")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
     let now = Utc::now();
     let eval = |key: &str| EvalEvent {
         flag_key: key.into(),
@@ -1140,29 +1159,40 @@ async fn telemetry_text_with_nul_is_stored_replaced(pool: PgPool) {
         environment: "stag\0ing".into(),
         at: now,
     };
+    // Replaced, not dropped: a plain "staging" / "vone" event keeps its own
+    // bucket rather than merging with the malformed one.
+    let plain = EvalEvent {
+        environment: "staging".into(),
+        variation: Some("vone".into()),
+        ..eval("f")
+    };
     let recorded = telemetry::record_evaluations(
         &mut tx,
         app.id,
         KeyKind::Server,
-        vec![eval("f"), eval("f"), eval("f\0")],
+        vec![eval("f"), eval("f"), eval("f\0"), plain],
     )
     .await
     .unwrap();
     assert_eq!(
         recorded.receipt,
         telemetry::Receipt {
-            accepted: 2,
+            accepted: 3,
             unknown_flags: 1
         }
     );
-    let rows: Vec<(String, String, i64)> =
-        sqlx::query_as("SELECT environment, variation, count FROM flag_eval_hourly")
-            .fetch_all(tx.conn())
-            .await
-            .unwrap();
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT environment, variation, count FROM flag_eval_hourly ORDER BY count DESC",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
     assert_eq!(
         rows,
-        vec![("stag\u{FFFD}ing".to_string(), "v\u{FFFD}one".to_string(), 2)]
+        vec![
+            ("stag\u{FFFD}ing".to_string(), "v\u{FFFD}one".to_string(), 2),
+            ("staging".to_string(), "vone".to_string(), 1),
+        ]
     );
     tx.commit().await.unwrap();
 }

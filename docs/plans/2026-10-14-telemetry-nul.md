@@ -113,8 +113,8 @@ together.
   in `report`: `flag_key`, `result`, `environment`, `variation`, `timestamp`); assert OK and
   `{"accepted": 1, "unknown_flags": 1}`. Run it:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e telemetry_with_nul`
-  To confirm it tests the fix, temporarily revert `stored`'s replacement with `git stash`-free means
-  (e.g. comment out the `.map`), see the test fail with a non-200, and restore it; record both runs.
+  To confirm it tests the fix, temporarily comment out the `.map` in `stored` and the `retain` in
+  `flag_ids`, see the test fail with a non-200, and restore both; record both runs.
 - [ ] **Step 7: Run every gate** (Global Constraints) and report pass counts per test binary.
 - [ ] **Step 8: Commit** the three files with exactly this message (no trailers of any kind):
 

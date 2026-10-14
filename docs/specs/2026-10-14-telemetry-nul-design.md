@@ -31,7 +31,7 @@ From #38 (found by the database review of #37 (#23); the behaviour predates it):
   one event's `flag_key` fails that lookup and with it the whole batch, so "every SDK-reported text
   field" must include it. It is handled differently from the stored fields (§6): a flag key can
   never contain NUL (`validate_key` in `crates/flags-core/src/flags.rs` allows only ASCII letters,
-  digits, `-`, `_`, `.`), and Postgres `text` could not store one whatever path created the
+  digits, `-`, `_`, `.`; and Postgres `text` could not store one whatever path created the
   flag), so such an event names no flag of this app and is counted as unknown,
   exactly as any other unknown key is.
 

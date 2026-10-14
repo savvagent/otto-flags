@@ -881,14 +881,15 @@ async fn report(s: &Server, sdk_key: &str, key: &str, on: usize, off: usize, err
 async fn telemetry_with_nul_text_is_accepted(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool, &url).await;
-    let (_, _, server_key, _) = org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;
+    // The public client key: anyone can send this.
+    let (_, _, _, client_key) = org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;
     let now = chrono::Utc::now().timestamp();
 
     let (status, r) = sdk(
         &s.app,
         "POST",
         "/api/telemetry/errors",
-        &server_key,
+        &client_key,
         Some(json!({"errors": [
             {"flag_key": "checkout", "flag_enabled": true, "environment": "prod\u{0}x",
              "error_type": "Type\u{0}Error", "error_message": "bad\u{0}message",
@@ -905,7 +906,7 @@ async fn telemetry_with_nul_text_is_accepted(pool: PgPool) {
         &s.app,
         "POST",
         "/api/telemetry/evaluations",
-        &server_key,
+        &client_key,
         Some(json!({"evaluations": [
             {"flag_key": "checkout", "result": true, "environment": "stag\u{0}ing",
              "variation": "v\u{0}one", "timestamp": now},
