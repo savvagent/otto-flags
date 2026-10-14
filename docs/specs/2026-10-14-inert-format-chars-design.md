@@ -53,7 +53,8 @@ From #47 (found by the security review of #46 (#38); the behaviour predates it):
   read an error message. A fixed table is used, not a dependency: Rust's standard library exposes no
   general-category lookup, and a new crate for one 21-range table is not worth the review cost.
   U+2065 (unassigned, inside the bidi block) is included so U+2060..U+206F is one range.
-- **Variation selectors too** (§2). The cost is that an emoji in an error message loses its
+- **Variation selectors too** (§2), including the Mongolian free variation selectors
+  (U+180B..U+180D, U+180F), which join the Cf U+180E into one range. The cost is that an emoji in an error message loses its
   presentation selector and may render as text style; the message is still legible.
 - **Replace with a space, then flatten.** As the issue specifies: a format character becomes a
   space, so `split_whitespace` folds it with its neighbours. A zero-width space between two words
@@ -103,7 +104,7 @@ names, descriptions, rollback reasons are written by authenticated agents, not p
 `crates/flags-core/src/telemetry.rs`:
 
 - New private `fn hidden(c: char) -> bool`: true for `char::is_control` (Cc), every Cf range of
-  Unicode 16.0, and the two variation-selector ranges, as one `matches!` over `char` ranges.
+  Unicode 16.0, and the variation-selector ranges, as one `matches!` over `char` ranges.
 - `inert` (`telemetry.rs:401`) maps `c` to `' '` when `hidden(c)` instead of when `c.is_control()`.
   Its doc comment says what is replaced and why.
 - `health` (`telemetry.rs:325-331`) keys `variations` by `inert(&variation, MAX_VARIATION)` and skips

@@ -404,7 +404,9 @@ pub async fn health(
 }
 
 /// True for a character `inert` replaces: control characters (Cc), format
-/// characters (Cf, Unicode 16.0), and variation selectors. None has a glyph of
+/// characters (Cf, Unicode 16.0), and variation selectors (including the
+/// Mongolian ones, U+180B..U+180D and U+180F, which with the Cf U+180E make one
+/// range). None has a glyph of
 /// its own. Format characters reorder text (bidi overrides and isolates) or
 /// hide it (zero-width characters, tag characters); variation selectors, like
 /// tag characters, can carry arbitrary bytes a model reads and a person never
@@ -422,7 +424,7 @@ fn hidden(c: char) -> bool {
                 | '\u{070F}'
                 | '\u{0890}'..='\u{0891}'
                 | '\u{08E2}'
-                | '\u{180E}'
+                | '\u{180B}'..='\u{180F}'
                 | '\u{200B}'..='\u{200F}'
                 | '\u{202A}'..='\u{202E}'
                 | '\u{2060}'..='\u{206F}'
@@ -610,7 +612,7 @@ mod tests {
         assert_eq!(inert("\u{FEFF}start", 300), "start");
         assert_eq!(inert("a\u{00AD}b", 300), "a b");
         assert_eq!(inert("ok\u{E0001}\u{E0069}\u{E0067}", 300), "ok");
-        assert_eq!(inert("x\u{FE0F}y\u{E0100}z", 300), "x y z");
+        assert_eq!(inert("x\u{FE0F}y\u{E0100}z\u{180B}", 300), "x y z");
         assert_eq!(inert("\u{200B}\u{200C}\u{200D}\u{2060}", 300), "");
         // A combining accent is visible and part of ordinary text.
         assert_eq!(inert("cafe\u{0301}", 300), "cafe\u{0301}");
