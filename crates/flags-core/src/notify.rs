@@ -92,7 +92,9 @@ impl Listener {
                 let mut listener = match PgListener::connect_with(&pool).await {
                     Ok(l) => l,
                     Err(e) => {
-                        tracing::warn!(error = %e, "could not open the flag-change listener; retrying");
+                        let reason = crate::error::db_failure_reason(&e);
+                        tracing::warn!(reason, "could not open the flag-change listener; retrying");
+                        tracing::debug!(reason, error = %e, "could not open the flag-change listener; retrying");
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(5)) => continue,
                             _ = shutdown.changed() => return,
@@ -100,7 +102,9 @@ impl Listener {
                     }
                 };
                 if let Err(e) = listener.listen(CHANNEL).await {
-                    tracing::warn!(error = %e, "could not LISTEN for flag changes; retrying");
+                    let reason = crate::error::db_failure_reason(&e);
+                    tracing::warn!(reason, "could not LISTEN for flag changes; retrying");
+                    tracing::debug!(reason, error = %e, "could not LISTEN for flag changes; retrying");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
@@ -111,10 +115,15 @@ impl Listener {
                             Ok(n) => match serde_json::from_str::<FlagChange>(n.payload()) {
                                 // No receivers is fine: nobody is streaming.
                                 Ok(change) => { let _ = sender.send(change); }
-                                Err(e) => tracing::warn!(error = %e, "unreadable flag-change notification"),
+                                Err(e) => {
+                                    tracing::warn!(reason = "decode", "unreadable flag-change notification");
+                                    tracing::debug!(reason = "decode", error = %e, "unreadable flag-change notification");
+                                }
                             },
                             Err(e) => {
-                                tracing::warn!(error = %e, "flag-change listener lost its connection");
+                                let reason = crate::error::db_failure_reason(&e);
+                                tracing::warn!(reason, "flag-change listener lost its connection");
+                                tracing::debug!(reason, error = %e, "flag-change listener lost its connection");
                                 break;
                             }
                         },
