@@ -59,7 +59,7 @@ One task: one function and the tests that prove it.
 - Modify: `crates/flags-core/src/platform_events.rs`
 - Modify: `crates/flags-core/tests/db.rs`
 
-- [ ] **Step 1: Write the DB test** `member_removed_after_org_deleted_writes_no_audit_row` in
+- [x] **Step 1: Write the DB test** `member_removed_after_org_deleted_writes_no_audit_row` in
   `crates/flags-core/tests/db.rs`, directly after `a_removed_member_is_refused_but_others_are_not`,
   with `#[sqlx::test(migrator = "flags_core::MIGRATOR")]` and a doc comment citing #41:
   - `let db = db(pool.clone()).await;` `let org = OrgId::new();` create an app in `org` with
@@ -78,15 +78,15 @@ One task: one function and the tests that prove it.
   - Apply the same `member.removed` again; assert `Outcome::Duplicate` and
     `audit_rows(&pool, org).await == 0`.
   - `app_db.pool().close().await;` at the end (see `otto_app_db`'s doc).
-- [ ] **Step 2: Extend** `a_removed_member_is_refused_but_others_are_not`: assert the `apply` result
+- [x] **Step 2: Extend** `a_removed_member_is_refused_but_others_are_not`: assert the `apply` result
   equals `Outcome::Applied { detail: json!({}) }`, and that
   `SELECT count(*) FROM audit_events WHERE org_id = $1 AND action = 'platform.member.removed'`
   (on the test pool; the test takes `pool`, so use `db(pool.clone())` and keep `pool`) equals 1.
-- [ ] **Step 3: Run and see the new test fail** (the outcome is `Applied`, not `Ignored`):
+- [x] **Step 3: Run and see the new test fail** (the outcome is `Applied`, not `Ignored`):
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db member_removed_after_org_deleted`
   and see the extended test pass already:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db a_removed_member`
-- [ ] **Step 4: Implement** in `crates/flags-core/src/platform_events.rs`, in `member_removed`:
+- [x] **Step 4: Implement** in `crates/flags-core/src/platform_events.rs`, in `member_removed`:
   - After `let first = first_delivery(...)`, add
     `let deleted = revoked_on(tx.conn(), org, None).await?;` with a comment: under the exclusive
     lifecycle lock, so a tombstone committed before this point is seen; one committed later is
@@ -99,9 +99,9 @@ One task: one function and the tests that prove it.
     `Outcome::Applied { detail: json!({}) }`.
   - Module doc table, `member.removed` row: append "For an org already deleted, nothing is written
     but the dedupe marker and the short-lived removed-member tombstone (#41)."
-- [ ] **Step 5: Run and see both tests pass** (same two commands as Step 3).
-- [ ] **Step 6: Run every gate** (Global Constraints) and report pass counts per test binary.
-- [ ] **Step 7: Commit** the two files with exactly this message (no trailers of any kind):
+- [x] **Step 5: Run and see both tests pass** (same two commands as Step 3).
+- [x] **Step 6: Run every gate** (Global Constraints) and report pass counts per test binary.
+- [x] **Step 7: Commit** the two files with exactly this message (no trailers of any kind):
 
   ```
   fix(core): skip the audit write for a member removed from a deleted org

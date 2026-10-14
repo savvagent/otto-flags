@@ -1,6 +1,6 @@
 # Skip the audit write for a member removed from a deleted org
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#48)
 **Issue:** #41
 
 ## 1. Brief
