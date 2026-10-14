@@ -101,6 +101,154 @@ Every push to `main` that passes CI deploys (`.github/workflows/ci.yml`, job `de
 `FLY_API_TOKEN` a deploy token scoped to this app (`fly tokens create deploy -a otto-flags`).
 A hand deploy is `fly deploy -a otto-flags --remote-only`.
 
+## When a migration fails
+
+Migrations run at boot, before the server binds its port (`crates/flags-server/src/main.rs`),
+under sqlx's advisory lock. This section is about a boot that stops there. A boot that gets past
+migrations and then logs `refusing to serve: …` is a different failure: the tenant-isolation
+proof or the audit purge check (see Infrastructure).
+
+Every production write below is **human-only (Rob)**: an agent stops at the read-only
+diagnostics and hands over the exact statement. Rob runs SQL through
+`fly postgres connect -a otto-db -d otto_flags`, which is interactive (it hangs when run
+non-interactively, so an agent cannot use it). Never practise these steps on production; the
+tests named below run them against a scratch database.
+
+### What a failure leaves behind
+
+sqlx runs each migration and its `_sqlx_migrations` row in one transaction (none of ours starts
+with `-- no-transaction`). A failure rolls back both, so:
+
+- **Nothing is recorded and nothing is half applied.** sqlx never writes a `success = false`
+  row on Postgres, so a real failure does not produce `Dirty`.
+- **The previous release boots normally.** It does not know the failed version and there is no
+  row for it (`ignore_missing`, `crates/flags-core/src/migrate.rs`).
+- **The new release retries the migration from scratch on every boot** and fails the same way
+  until the cause is gone.
+- **Every later push to `main` fails to deploy the same way**: its image carries the same failed
+  migration first in line. Those changes are merged, not live, until recovery.
+
+`a_failed_migration_leaves_nothing_and_the_previous_release_boots`
+(`crates/flags-core/tests/db.rs`) pins all of this.
+
+The new machine's log shows `applying migrations`, then the process exits with
+`migrations failed`, whose cause chain includes
+`while executing migration <N>: error returned from database: <message>`. The log carries the
+database's message, not its SQLSTATE. The machine never binds a port, so `/readyz` fails and the
+deploy fails.
+
+### Diagnose (read-only)
+
+```bash
+fly logs -a otto-flags --no-tail    # the version <N> and the database's message
+fly releases -a otto-flags          # which release failed
+fly status -a otto-flags            # is any machine still on the failed release?
+```
+
+Do not assume the deploy rolled back: check `fly status` for a machine left on the failed
+release.
+
+Rob, in `fly postgres connect`:
+
+```sql
+SELECT version, description, success, encode(checksum, 'hex') AS checksum, installed_on
+FROM _sqlx_migrations ORDER BY version;
+
+-- For a lock wait: open transactions on this database. otto-db also hosts otto_platform and
+-- otto_factory; never touch their sessions.
+SELECT pid, usename, state, now() - xact_start AS xact_age, wait_event_type, left(query, 80)
+FROM pg_stat_activity
+WHERE datname = 'otto_flags' AND xact_start IS NOT NULL
+ORDER BY xact_start;
+```
+
+After a real failure, `<N>` has no row and no row has `success = false`.
+
+### Recover
+
+Match the cause from the log's message.
+
+**A transient cause** (`canceling statement due to lock timeout`, a dropped connection, a machine
+stopped mid-boot): there is nothing to clear. Migrations that take strong locks set
+`SET LOCAL lock_timeout` (as `0002` and `0003` do) so a lock wait fails the boot quickly instead
+of queueing every query behind it. If one session keeps blocking, ending it
+(`SELECT pg_terminate_backend(<pid>);`, only for a pid on `otto_flags`) is Rob's call. Then re-run
+the deploy: re-run the `deploy` job of the **newest** CI run on `main`, since each run deploys
+its own commit and an older one would deploy older code:
+
+```bash
+gh run list -R savvagent/otto-flags --workflow CI --branch main --event push --limit 1 \
+  --json databaseId,headSha
+gh run rerun <databaseId> -R savvagent/otto-flags --failed
+```
+
+**The SQL fails on production data** (a constraint the rows violate, a duplicate): two ways out.
+
+1. *Preferred: fix the data so `<N>` applies as written.* The fix PR's author writes the
+   statement and the SELECT that shows the offending rows; Rob runs them in a transaction
+   (`BEGIN; …; COMMIT;`). Then re-run the newest deploy. Every database then has the same
+   history.
+2. *When `<N>` must never run as written:* record `<N>` as applied without running it, and ship
+   the corrected change as the next migration, `<N+1>`. `<N+1>` must converge both states:
+   databases where `<N>` did run (CI, local, any fresh database) and production, where it did
+   not. Use `IF EXISTS` / `IF NOT EXISTS` guards and data statements that are correct either way.
+   Order matters:
+   1. Merge the PR with `<N+1>`. Its deploy fails on `<N>` like the others.
+   2. Rob records `<N>` as applied:
+
+      ```bash
+      git show origin/main:crates/flags-core/migrations/<NNNN>_<name>.sql | sha384sum
+      ```
+
+      ```sql
+      INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+      VALUES (<N>, '<name with _ as spaces>', true, decode('<sha384sum hex>', 'hex'), -1);
+      ```
+
+      sqlx compares only the version and the checksum (SHA-384 of the file's bytes, which
+      `migration_checksums_are_the_sha384_of_their_files` pins); the description is cosmetic.
+   3. Re-run the newest deploy. It skips `<N>` and applies `<N+1>`.
+
+   Recording `<N>` before `<N+1>` is merged would let a restarting machine boot code that
+   expects `<N>`'s schema against a database without it.
+
+**A `success = false` row (`Dirty`)**: sqlx does not write one, but a hand-written row or another
+tool can. Every release, old and new, then refuses to boot with
+`migration <N> is partially applied`; machines already running keep serving only until they
+restart or resume from suspend. Confirm nothing of `<N>` is half applied (compare the schema
+with the file), then Rob clears it, and the next boot runs `<N>` again:
+
+```sql
+DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false;
+```
+
+`a_failed_unknown_migration_still_refuses_to_boot` pins both the refusal and the statement.
+
+### Never
+
+- **Edit, rename, delete, or renumber the failed migration, or reuse its number.** sqlx
+  checksums applied migrations, CI and local databases may already have applied it, CI's
+  `migrations-append-only` job refuses the change, and `versions_are_contiguous_from_one`
+  refuses a gap. The fix is always data, a recorded row, or a new migration.
+- **Run a migration's SQL by hand** to get past it. Objects it creates belong to whoever runs it
+  (`0004`'s `purge_deleted_org_audit` must be owned by an RLS-exempt role, and the boot check
+  refuses otherwise), and its row still has to be recorded with the right checksum.
+- **Change the migrating role** (the superuser attach role) as part of a recovery: see
+  Infrastructure.
+- **Boot the new release with `FLAGS_RUN_MIGRATIONS=false`** against a schema without `<N>`: its
+  code expects `<N>`'s schema.
+
+A `-- no-transaction` migration (none exists yet) would differ: a failure part-way leaves its
+earlier statements applied and no row, and the next boot re-runs it from the top, so such a
+migration must be safe to re-run.
+
+### Afterwards
+
+Verify as for any deploy (`CLAUDE.md`, Ship > verify): `fly status` shows every `app` machine on
+the new release, `/readyz` returns `{"status":"ready"}`, and the boot log shows
+`applying migrations`, `tenant isolation enforced as role "otto_app"`, and
+`the otto platform accepted this service's credential`.
+
 ## Auto-rollback
 
 A policy per (flag, environment) disables that environment as an ordinary flag version (change

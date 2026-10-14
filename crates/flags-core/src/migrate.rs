@@ -17,9 +17,12 @@ use sqlx::migrate::Migrator;
 /// refuse with `VersionMissing` and crash-loop every machine. Only unknown
 /// versions are ignored: a known migration whose applied checksum differs
 /// still fails with `VersionMismatch`, and a migration recorded as failed,
-/// known or not, with `Dirty`. Each migration must therefore stay readable
-/// and writable by the previous release (the rollback invariant in
-/// `CLAUDE.md`).
+/// known or not, with `Dirty`. sqlx never records a failed migration itself
+/// on Postgres: a migration and its row commit in one transaction, so a
+/// failure leaves neither and the previous release still boots. Recovery is
+/// in `docs/deploy/fly.md`, "When a migration fails". Each migration must
+/// stay readable and writable by the previous release (the rollback
+/// invariant in `CLAUDE.md`).
 ///
 /// The cost: sqlx no longer notices an applied migration whose file was
 /// deleted or renamed. CI's `migrations-append-only` job catches any delete

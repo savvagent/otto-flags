@@ -113,7 +113,7 @@ has reviewed or commented on any PR here (#3, #6, #8, #10).
 - version files: packages/*/package.json, packages/rust-server/Cargo.toml, packages/python-server/pyproject.toml, packages/java-server/pom.xml, packages/android-sdk/build.gradle.kts
 
 ### Out-of-band
-- Migrations (agent): apply at boot under an advisory lock; confirm in the boot logs. A failure crash-loops the new machine and the deploy rolls back. The previous release then boots against whatever newer migrations were applied: `MIGRATOR` ignores unknown versions (`crates/flags-core/src/migrate.rs`).
+- Migrations (agent): apply at boot under an advisory lock; confirm in the boot logs. A failure crash-loops the new machine and the deploy rolls back. The previous release then boots against whatever newer migrations were applied: `MIGRATOR` ignores unknown versions (`crates/flags-core/src/migrate.rs`). Recovery from a failed one: `docs/deploy/fly.md` (When a migration fails).
 - New non-secret config key (agent, in the PR): `fly.toml` `[env]`, `.env.example`, and `crates/flags-server/src/config.rs`.
 - New secret (human: Rob, before merge): `fly secrets set -a otto-flags --stage NAME=…`; the PR updates `.env.example` and the secrets table in `docs/deploy/fly.md`.
 - New scope (human: Rob, before merge): the PR updates `flags_core::scopes::KNOWN`/`DEFAULT`; Rob re-runs the platform `otto-platform-server resource register …` from `docs/deploy/fly.md`.
