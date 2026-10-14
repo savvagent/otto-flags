@@ -9,14 +9,38 @@
 //!   `data.retriable` answers the only question that has to be resolved before
 //!   the next action.
 //! - Server-side failures (database, platform) never put their own text on the
-//!   wire: it can carry schema details and is no use to an agent anyway.
+//!   wire: it can carry schema details and is no use to an agent anyway. Logs
+//!   follow the same rule: the failure's code and reason at error, its text
+//!   only at debug.
 
 use flags_core::Error;
 use rmcp::model::{ErrorCode, ErrorData};
 
+/// Logs a server-side failure: the wire code and a text-free reason (see
+/// [`Error::failure_reason`]) at error, the text only at debug. Server-side
+/// text can carry SQL, schema names, response bodies, and URLs, which must not
+/// reach the default log level. At debug both events appear, on purpose.
+pub(crate) fn log_server_failure(
+    what: &'static str,
+    code: &'static str,
+    (reason, status): (&'static str, Option<u16>),
+    detail: &dyn std::fmt::Display,
+) {
+    tracing::error!(code, reason, status, "{what}");
+    tracing::debug!(code, reason, error = %detail, "{what}");
+}
+
+const SURFACED: &str = "server-side failure surfaced to an MCP caller";
+
 pub fn from_core(e: &Error) -> ErrorData {
+    if e.is_internal() {
+        log_server_failure(SURFACED, e.code(), e.failure_reason(), e);
+    }
+    respond(e)
+}
+
+fn respond(e: &Error) -> ErrorData {
     let (rpc, message) = if e.is_internal() {
-        tracing::error!(error = %e, "server-side failure surfaced to an MCP caller");
         let message = match e {
             Error::Platform(_) => {
                 "the otto platform could not be reached to check this; nothing was changed. \
@@ -45,16 +69,28 @@ pub fn from_core(e: &Error) -> ErrorData {
     )
 }
 
-pub fn from_tenant(e: &otto_tenant::Error) -> ErrorData {
-    let e = Error::Tenant(match e {
-        otto_tenant::Error::Invalid(m) => otto_tenant::Error::Invalid(m.clone()),
+/// On the wire, any tenant failure but a bad argument is an opaque, non-retriable
+/// internal error. The log keeps the original, so a pool timeout is still
+/// logged as one.
+pub fn from_tenant(e: otto_tenant::Error) -> ErrorData {
+    let original = Error::Tenant(e);
+    let wire = Error::Tenant(match &original {
+        Error::Tenant(otto_tenant::Error::Invalid(m)) => otto_tenant::Error::Invalid(m.clone()),
         other => otto_tenant::Error::Config(other.to_string()),
     });
-    from_core(&e)
+    if wire.is_internal() {
+        log_server_failure(SURFACED, wire.code(), original.failure_reason(), &original);
+    }
+    respond(&wire)
 }
 
 pub fn from_platform(e: &otto_resource::Error) -> ErrorData {
-    tracing::error!(error = %e, "platform lookup failed for an MCP caller");
+    log_server_failure(
+        "platform lookup failed for an MCP caller",
+        "platform_unavailable",
+        flags_core::error::platform_failure_reason(e),
+        e,
+    );
     ErrorData::new(
         ErrorCode::INTERNAL_ERROR,
         "the otto platform could not be reached to check this; nothing was changed. Retry shortly.",
@@ -153,6 +189,23 @@ mod tests {
         let data = from_core(&unknown);
         assert_eq!(data.code, ErrorCode::INTERNAL_ERROR);
         assert_eq!(data.data.expect("data")["retriable"], true);
+    }
+
+    #[test]
+    fn tenant_failures_keep_their_wire_answer() {
+        let invalid = from_tenant(otto_tenant::Error::Invalid("bad org".into()));
+        assert_eq!(invalid.message, "bad org");
+        assert_eq!(invalid.data.expect("data")["code"], "invalid_argument");
+        for e in [
+            otto_tenant::Error::OrgNotFound(uuid::Uuid::nil().into()),
+            otto_tenant::Error::Db(sqlx_error()),
+        ] {
+            let wire = from_tenant(e);
+            assert_eq!(wire.code, ErrorCode::INTERNAL_ERROR);
+            let data = wire.data.expect("data");
+            assert_eq!(data["code"], "internal_error");
+            assert_eq!(data["retriable"], false);
+        }
     }
 
     fn sqlx_error() -> sqlx::Error {

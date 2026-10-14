@@ -80,20 +80,6 @@ impl NegativeCache {
     }
 }
 
-/// A coarse, body-free description of a platform failure for logs.
-fn failure_reason(e: &otto_resource::Error) -> (&'static str, Option<u16>) {
-    use otto_resource::Error as E;
-    match e {
-        E::Status { status, .. } => ("http_status", Some(*status)),
-        E::Transport(_) => ("transport", None),
-        E::Decode(_) => ("decode", None),
-        E::Unauthorized => ("unauthorized", None),
-        // The org is gone: deliberately Unknown, so it fails closed.
-        E::NotFound => ("not_found", None),
-        E::InvalidUrl(_) => ("invalid_url", None),
-    }
-}
-
 /// Turn an answer into the caller's `Result`.
 fn decide(answer: Entitlement, feature: &str, upgrade_url: &str) -> Result<()> {
     match answer {
@@ -147,7 +133,9 @@ impl EntitlementSource for Entitlements {
             .await
             {
                 Ok(Ok(status)) => return from_status(&status, &feature),
-                Ok(Err(e)) => failure_reason(&e),
+                // Any failure is Unknown, `NotFound` (the org is gone) included,
+                // so the feature fails closed.
+                Ok(Err(e)) => crate::error::platform_failure_reason(&e),
                 Err(_) => ("timeout", None),
             };
             self.failed.mark(org, Instant::now());
@@ -279,19 +267,6 @@ mod tests {
         }
         cache.mark(OrgId::from(uuid::Uuid::from_u128(99)), t0 + UNKNOWN_TTL * 2);
         assert_eq!(cache.until.lock().expect("lock").len(), 1);
-    }
-
-    #[test]
-    fn failure_reasons_carry_no_body_text() {
-        let e = otto_resource::Error::Status {
-            status: 503,
-            body: "secret body".into(),
-        };
-        assert_eq!(failure_reason(&e), ("http_status", Some(503)));
-        assert_eq!(
-            failure_reason(&otto_resource::Error::NotFound),
-            ("not_found", None)
-        );
     }
 
     #[tokio::test]
