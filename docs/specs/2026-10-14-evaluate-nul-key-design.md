@@ -27,6 +27,10 @@ From #45 (found while working #38; the behaviour predates it):
 
 ## 2. Premise corrections
 
+- **Today's failure is a 503, not a 500.** The failed bind is an internal `Error::Db`, which the
+  SDK API answers as `503 temporarily_unavailable` with `Retry-After: 5`, logged as a server-side
+  failure. So an SDK treats a NUL key as a transient outage and retries it, rather than serving its
+  default for an unknown flag.
 - **The same lookup serves the MCP tools.** `find_flag` (`FlagsExt`, `crates/flags-core/src/flags.rs`)
   is also reached through `require_flag` by `get_flag`, `flag_history`, `evaluate_flag`,
   `flag_health`, and the rollback tools, and the flag writers look a flag up by key through the
@@ -50,9 +54,9 @@ From #45 (found while working #38; the behaviour predates it):
   lookups to today's creation rules: if those rules ever tightened, existing flags would silently
   become unreachable. NUL is the one property no stored key can have, whatever path created it,
   because Postgres `text` cannot hold it. This matches `flag_ids` (#38).
-- **One predicate, three callers.** A private `fn unstorable(key: &str) -> bool` in `flags.rs`
+- **One predicate, three callers.** A `fn unstorable(key: &str) -> bool` in `flags.rs`
   (`key.contains('\0')`) is used by `find_flag`, `lock`, and `telemetry::flag_ids` (which today
-  inlines the same check), so the rule has one definition. It is `pub(crate)`.
+  inlines the same check), so the rule has one definition. It is `pub(crate)` because telemetry uses it.
 - **Same answer as any unknown key.** `find_flag` returns `Ok(None)`, and `lock` returns
   `Error::FlagNotFound`, exactly as for a key that does not exist; the SDK path then answers
   `404 flag_not_found`.
@@ -90,11 +94,11 @@ error is a usability issue, not exposure. Not filed: no AC asks for it.
 `crates/flags-core/src/telemetry.rs`: `flag_ids` uses `keys.retain(|k| !flags::unstorable(k))`;
 its comment points at `unstorable`.
 
-No public interface changes: the endpoints and tools answer an existing error instead of a 500.
+No public interface changes: the endpoints and tools answer an existing error instead of a 503 (SDK) or `internal_error` (MCP).
 
 ## 7. Invariants impact
 
-- **SDK REST contract is stable:** a request that failed with 500 now gets the documented 404.
+- **SDK REST contract is stable:** a request that failed with 503 now gets the documented 404.
   Additive.
 - **SDK path never calls the platform / no SQL outside flags-core:** unchanged; one fewer query.
 - **Tenant isolation:** unchanged; no new statement.
@@ -117,7 +121,7 @@ None.
 
 - e2e (`crates/flags-server/tests/e2e.rs`), `evaluating_a_key_with_nul_is_not_found`: with the
   public client key, both evaluate routes with `checkout%00` answer `404` and
-  `code == "flag_not_found"`; the real `checkout` still evaluates (200); MCP `get_flag` with
+  `error == "flag_not_found"`, and `error_description` holds no raw NUL; the real `checkout` still evaluates (200); MCP `get_flag` with
   `"checkout\u0000"` answers an error, not an internal one: it carries the same not-found message an
   unknown key gets.
 - DB (`crates/flags-core/tests/db.rs`), `a_key_with_nul_finds_no_flag`: `find_flag` returns `None`,

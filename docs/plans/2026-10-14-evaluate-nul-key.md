@@ -29,7 +29,7 @@ its inline check.
 - Evidence: pass counts per test binary; a `DATABASE_URL must be set` panic is a missing variable,
   not a pass. `DATABASE_URL` only ever points at the local Postgres on 15434. Only one DB test run
   at a time against that Postgres.
-- Invariants that apply: the SDK REST contract is stable (a 500 becomes the documented 404, nothing
+- Invariants that apply: the SDK REST contract is stable (a 503 becomes the documented 404, nothing
   else changes); no SQL outside flags-core, runtime `sqlx::query` only; tenant isolation unchanged
   (no new statement); request paths keep `begin_live`.
 - Out-of-band: none. No migration.
@@ -65,7 +65,7 @@ One task: one predicate and its three uses; the tests only make sense together.
 - [ ] **Step 1: Write the failing tests.**
   - `crates/flags-core/tests/db.rs`, after `telemetry_rolls_up_and_feeds_health`'s neighbours (any
     place among the flag tests), `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`
-    `a_key_with_nul_finds_no_flag`: `db(pool)`, `OrgId::new()`, `UserId::new()`, `db.begin(org)`,
+    `a_key_with_nul_finds_no_flag`: `db(pool).await`, `OrgId::new()`, `UserId::new()`, `db.begin(org)`,
     `tx.create_app("web", &[], actor)`, flag `f` via `create_flag`. Assert
     `tx.find_flag(app.id, "f\0").await.unwrap().is_none()`, and that
     `tx.update_flag(&app, "f\0", FlagPatch { name: Some("x".into()), ..Default::default() }, meta(actor)).await`
@@ -78,14 +78,15 @@ One task: one predicate and its three uses; the tests only make sense together.
     org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;`. For each path in
     `["/api/flags/checkout%00/evaluate", "/api/evaluate/checkout%00"]`:
     `sdk(&s.app, "POST", path, &client_key, None)` → `StatusCode::NOT_FOUND` and
-    `r["error"] == "flag_not_found"`. Then `/api/flags/checkout/evaluate` → `StatusCode::OK`. Then
+    `r["error"] == "flag_not_found"`, and `!r["error_description"].as_str().unwrap().contains('\0')`. Then `/api/flags/checkout/evaluate` → `StatusCode::OK`. Then
     `tool(&s.app, &t, "get_flag", json!({"app": "web", "key": "checkout\u{0}"}))` is `Err(err)` with
     `err["data"]["code"] == "flag_not_found"`.
 - [ ] **Step 2: Run, see them fail:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db a_key_with_nul_finds_no_flag`
   and
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e evaluating_a_key_with_nul_is_not_found`
-  — both fail (a database error / a 500, not not-found).
+  — both fail (a database error; a `503 temporarily_unavailable` on the SDK routes and
+  `internal_error` over MCP, not not-found).
 - [ ] **Step 3: Implement** in `crates/flags-core/src/flags.rs`:
   - Near `validate_key`, add
     ```rust
@@ -99,8 +100,7 @@ One task: one predicate and its three uses; the tests only make sense together.
   - `find_flag`: first line `if unstorable(key) { return Ok(None); }`.
   - `lock`: before the query, `if unstorable(key) { return Err(Error::FlagNotFound { app: app.name.clone(), key: key.trim().to_string() }); }`.
   - `crates/flags-core/src/telemetry.rs`, `flag_ids`: replace `keys.retain(|k| !k.contains('\0'));`
-    with `keys.retain(|k| !flags::unstorable(k));` (import as the module already imports from
-    `crate::flags`, or use the full path), and shorten its comment to point at `unstorable`.
+    with `keys.retain(|k| !crate::flags::unstorable(k));`, and shorten its comment to point at `unstorable`.
 - [ ] **Step 4: Run, see them pass:** the Step 2 commands, then all gates (Global Constraints),
   recording pass counts per test binary.
 - [ ] **Step 5: Commit:** `fix(core): answer not-found for a flag key containing nul`, body saying
