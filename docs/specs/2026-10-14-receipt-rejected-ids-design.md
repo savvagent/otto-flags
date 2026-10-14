@@ -1,6 +1,6 @@
 # Check the rejected event ids in the platform's usage receipt
 
-**Status:** APPROVED
+**Status:** IMPLEMENTED (#64)
 **Issue:** #63
 
 ## 1. Brief

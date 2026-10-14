@@ -59,7 +59,7 @@ One task: a contained check in one function and the test that proves it.
 - Modify: `crates/flags-core/src/usage.rs`
 - Modify: `crates/flags-server/tests/e2e.rs`
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-server/tests/e2e.rs`:
+- [x] **Step 1: Write the failing test** in `crates/flags-server/tests/e2e.rs`:
   - Mock: add to `struct Platform` a field `/// When set, answered verbatim to every usage batch.
     receipt: Option<UsageReceipt>,`. In `ship`, first: `if let Some(r) = &p.receipt { return
     Json(r.clone()); }` (before the `reject_with` branch).
@@ -83,10 +83,10 @@ One task: a contained check in one function and the test that proves it.
     - Case 3 (control): make all due; receipt `{accepted: 1, duplicates: 0, rejected: [A]}`.
       `ship_once` returns `Ok(2)`; `usage_outbox_rejected` has exactly one row, its `event_id`
       is A and its `reason` is `"x"`; `usage_outbox` count 0.
-- [ ] **Step 2: Run, see it fail:**
+- [x] **Step 2: Run, see it fail:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e a_receipt_naming_events_outside_the_batch_moves_nothing`
   — case 1 fails (`ship_once` returns `Ok(1)` and copies B into `usage_outbox_rejected`).
-- [ ] **Step 3: Implement** in `crates/flags-core/src/usage.rs` `ship_once`:
+- [x] **Step 3: Implement** in `crates/flags-core/src/usage.rs` `ship_once`:
   - Factor the miscount branch into a helper, e.g.
     `async fn refuse_receipt(db: &Db, ids: &[i64], msg: String, cfg: &ShipperConfig) -> ShipError`
     which logs `tracing::error!("{msg}; keeping every row and retrying")`, builds
@@ -105,10 +105,10 @@ One task: a contained check in one function and the test that proves it.
   - `use std::collections::{HashMap, HashSet};`
   - The per-rejection `error!`/`debug!` logs stay inside the insert loop (not in the helper), so a
     refused receipt's ids are never logged.
-- [ ] **Step 4: Run, see it pass:** the Step 2 command, then all gates (Global Constraints),
+- [x] **Step 4: Run, see it pass:** the Step 2 command, then all gates (Global Constraints),
   recording pass counts per test binary. `usage_logs` and the existing e2e usage tests must pass
   unchanged.
-- [ ] **Step 5: Commit:** `fix(core): refuse a usage receipt that rejects events outside its batch`,
+- [x] **Step 5: Commit:** `fix(core): refuse a usage receipt that rejects events outside its batch`,
   body saying why (a rejected id outside the batch was recorded as rejected yet still shipped; a
   repeated id duplicated the rejected row while the count check passed) and ending `Fixes #63`.
   No attribution.
