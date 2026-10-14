@@ -1,6 +1,6 @@
 # Server failure logging outside flags-mcp: a reason above debug, the text only at debug
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#42)
 **Issue:** #35
 
 ## 1. Brief
@@ -87,9 +87,10 @@ operators still see at `info` which kind of failure happened.
 - A log-capture test over `ApiError::from(flags_core::Error)` and the webhook route shows the
   lines above `DEBUG` carry `code`/`reason` and not the error's text, and the `DEBUG` line carries
   the text.
-- A source-scan test fails on any `error!`/`warn!`/`info!` event in a workspace crate that carries
-  a text field (`error = %`, `error = ?`, `reason = %`, `%reason`), wrapped calls included, with
-  `usage.rs`'s `reason = %r.reason` as its one named exception.
+- A source-scan test fails on any `error!`/`warn!`/`info!` event in a workspace crate that logs
+  text the usual ways (`error = %`/`?`, `err = %`/`?`, `reason = %`, `%reason`, shorthand `%e`,
+  or `{e}`/`{err}`/`{error}` in the message), wrapped calls included, with `usage.rs`'s
+  `reason = %r.reason` as its one named exception (#44).
 - `ShipError::failure_reason`, `rejection_reason`, and `db_failure_reason` (through its existing
   coverage) are unit-tested.
 - HTTP status codes and bodies for SDK requests, webhooks, and `/readyz` are unchanged; the

@@ -81,7 +81,7 @@ and `pub fn ShipError::failure_reason(&self) -> (&'static str, Option<u16>)`.
 
 **Model:** sonnet — mechanical edits with a small new method.
 
-- [ ] **Step 1: Write the failing test** in `usage.rs`'s `mod tests`:
+- [x] **Step 1: Write the failing test** in `usage.rs`'s `mod tests`:
 
 ```rust
 #[test]
@@ -96,12 +96,12 @@ fn ship_errors_name_their_kind_without_the_text() {
 }
 ```
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib ship_errors_name`
 Expected: compile error, no method `failure_reason` on `ShipError`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   - `error.rs`: `fn db_failure_reason` → `pub fn db_failure_reason`, doc comment noting it is
     [`Error::failure_reason`] for a bare `sqlx::Error` (as `platform_failure_reason`'s says).
   - `usage.rs`: `impl ShipError { pub fn failure_reason(&self) -> (&'static str, Option<u16>) }`
@@ -124,13 +124,13 @@ Expected: compile error, no method `failure_reason` on `ShipError`.
     notification")` then `debug!(reason = "decode", error = %e, …)`; turn the one-expression match
     arm into a block.
 
-- [ ] **Step 4: Run and see it pass**
+- [x] **Step 4: Run and see it pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core`
 Expected: all pass (report counts per binary). Then `cargo clippy --workspace --all-targets -- -D warnings`
 and `cargo fmt --all -- --check` clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `fix(core): log usage and listener failures by reason, text only at debug` — body: database and
 platform text (SQL, schema names, response bodies, URLs) was logged at warn; log a text-free
@@ -153,7 +153,7 @@ existing e2e tests in `crates/flags-server/tests/e2e.rs` pin them.
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
   - First add the dev-dependencies to `crates/flags-api/Cargo.toml` (`tracing-subscriber.workspace
     = true`, `sqlx.workspace = true`), so the test compiles and fails for the right reason.
   - `crates/flags-api/tests/failure_logs.rs`, modeled on `crates/flags-mcp/tests/failure_logs.rs`
@@ -170,12 +170,12 @@ existing e2e tests in `crates/flags-server/tests/e2e.rs` pin them.
     `"malformed_header"`, `BadSignature` → `"bad_signature"`, `Stale` → `"stale"`,
     `BadBody("secret".into())` → `"bad_body"`.
 
-- [ ] **Step 2: Run and see them fail**
+- [x] **Step 2: Run and see them fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-api --test failure_logs` (marker found at ERROR) and
 `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-api --lib rejection_reasons` (no function `rejection_reason`).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   - `error.rs`: in the `e if e.is_internal()` arm, `let (reason, status) = e.failure_reason();`
     `tracing::error!(code = e.code(), reason, status, "SDK request failed");`
     `tracing::debug!(code = e.code(), reason, status, error = %e, "SDK request failed");` Response unchanged.
@@ -189,13 +189,13 @@ Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test 
     %e, …)`. Responses unchanged.
   - Commit the `Cargo.lock` update cargo made in Step 1.
 
-- [ ] **Step 4: Run and see them pass**
+- [x] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-api -p flags-server`
 (flags-server's e2e covers webhook and SDK status codes). Then clippy and fmt as in Global
 Constraints.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `fix(api): log sdk and webhook failures by reason, text only at debug` — body as Task 1's, plus:
 the webhook's bad-body text is serde's and can quote the body. Ends `Refs #35`.
@@ -217,7 +217,7 @@ the webhook's bad-body text is serde's and can quote the body. Ends `Refs #35`.
 **Model:** sonnet. These paths fire only on runtime failures; there is no test to write first (spec
 §11 records the gap). Verify by build, clippy, and the grep in Task 4.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
   - `main.rs` shipper join (~105) and checker join (~109): `let reason = if e.is_panic() {
     "panicked" } else { "cancelled" };` `warn!(reason, "<same message>")` then `debug!(reason, error
     = %e, "<same message>")`.
@@ -230,12 +230,12 @@ the webhook's bad-body text is serde's and can quote the body. Ends `Refs #35`.
     "readiness check failed")` then `debug!(reason, error = %e, …)`. (`flags-core` is already a
     flags-server dependency.)
 
-- [ ] **Step 2: Run the gates**
+- [x] **Step 2: Run the gates**
 
 `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server`, clippy,
 fmt.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 `fix(server): log shutdown, sweep, and readiness failures by reason, text only at debug` — body as
 Task 1's. Ends `Refs #35`.
@@ -246,17 +246,17 @@ Task 1's. Ends `Refs #35`.
 
 **Model:** run by the orchestrator — commands only, no edits unless a site was missed.
 
-- [ ] **Step 1:** `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/` prints nothing.
-- [ ] **Step 2:** the span-aware check (spec §4) prints only `crates/flags-core/src/usage.rs`'s
+- [x] **Step 1:** `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/` prints nothing.
+- [x] **Step 2:** the span-aware check (spec §4) prints only `crates/flags-core/src/usage.rs`'s
   `reason = %r.reason` line (the platform's rejection reason; out of scope per spec §2):
 
 ```sh
 find crates -name '*.rs' -print0 | xargs -0 perl -0ne 'while (/tracing::(error|warn|info)!\((.*?)"\s*,?\s*\)/sg) { my $b=$2; $b =~ s/\s+/ /g; print "$ARGV: $b\n" if $b =~ /error = %|reason = %|%reason/ }'
 ```
 
-- [ ] **Step 3:** If any step finds a site, fix it in the owning crate with the same pattern and
+- [x] **Step 3:** If any step finds a site, fix it in the owning crate with the same pattern and
   commit `fix(<scope>): …` ending `Refs #35`; otherwise no commit.
-- [ ] **Step 4: Full gate run** on the final head, reporting pass counts per test binary:
+- [x] **Step 4: Full gate run** on the final head, reporting pass counts per test binary:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
   `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints
@@ -274,4 +274,6 @@ Recorded here so the plan matches what shipped (PR #42):
   delivers a signed body serde rejects and a forged signature through the router.
 - Task 3: `join_failure_reason` is a small helper with a unit test; the sweep sites stay inline.
 - Task 4: the span-aware check became `crates/flags-server/tests/log_text.rs`, so it runs in
-  `cargo test` rather than by hand.
+  `cargo test` rather than by hand; it also catches an error interpolated into the message.
+- Follow-ups filed from review: #43 (finer database and transport reasons) and #44 (usage
+  shipping's platform text in an error log and in the outbox).
