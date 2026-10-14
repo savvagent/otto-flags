@@ -15,7 +15,7 @@
 //! Writes are billable; reads, dry-run evaluation, and the identity tools are
 //! recorded but free. The SDK evaluation surface is not metered.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -329,17 +329,32 @@ pub async fn ship_once(
             "the platform accounted for {answered} of {} usage events",
             ids.len()
         );
-        tracing::error!("{msg}; keeping every row and retrying");
-        let err = otto_resource::Error::Decode(msg);
-        reschedule(db, &ids, &stored_reason(&err), cfg).await;
-        return Err(err.into());
+        return Err(refuse_receipt(db, &ids, msg, cfg).await);
+    }
+    // A rejected id outside this batch would be recorded as rejected while the
+    // row still ships later, and a repeated id would insert two rejected rows,
+    // both with the count check passing (#63). No platform-supplied id goes in
+    // the message.
+    let mut unanswered: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();
+    let stray = receipt
+        .rejected
+        .iter()
+        .filter(|r| !unanswered.remove(&r.event_id))
+        .count();
+    if stray > 0 {
+        let msg = format!(
+            "the platform rejected {} usage events, {stray} of them not in this batch or repeated",
+            receipt.rejected.len()
+        );
+        return Err(refuse_receipt(db, &ids, msg, cfg).await);
     }
 
     let mut tx = db.pool().begin().await?;
     for r in &receipt.rejected {
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
-        // replaced so it is bounded and cannot fail the batch (#51).
+        // replaced so it is bounded and cannot fail the batch (#51). The insert
+        // can only reach this batch's rows.
         let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
@@ -349,10 +364,11 @@ pub async fn ship_once(
             "INSERT INTO usage_outbox_rejected \
                (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
              SELECT event_id, org_id, user_id, tool, billable, occurred_at, $2 \
-             FROM usage_outbox WHERE event_id = $1",
+             FROM usage_outbox WHERE event_id = $1 AND id = ANY($3)",
         )
         .bind(r.event_id)
         .bind(&reason)
+        .bind(&ids)
         .execute(&mut *tx)
         .await?;
     }
@@ -362,6 +378,15 @@ pub async fn ship_once(
         .await?;
     tx.commit().await?;
     Ok(ids.len())
+}
+
+/// Keep every row of a batch whose receipt cannot be trusted and retry it
+/// with backoff; the error carries counts only, never platform text.
+async fn refuse_receipt(db: &Db, ids: &[i64], msg: String, cfg: &ShipperConfig) -> ShipError {
+    tracing::error!("{msg}; keeping every row and retrying");
+    let err = otto_resource::Error::Decode(msg);
+    reschedule(db, ids, &stored_reason(&err), cfg).await;
+    err.into()
 }
 
 async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {

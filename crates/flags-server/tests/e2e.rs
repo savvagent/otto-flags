@@ -50,6 +50,8 @@ struct Platform {
     usage_status_hits: HashMap<Uuid, usize>,
     /// When set, every shipped usage event is rejected with this reason.
     reject_with: Option<String>,
+    /// When set, answered verbatim to every usage batch.
+    receipt: Option<UsageReceipt>,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -109,6 +111,9 @@ async fn usage_status(
 
 async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageReceipt> {
     let mut p = p.lock().unwrap();
+    if let Some(r) = &p.receipt {
+        return Json(r.clone());
+    }
     if let Some(reason) = &p.reject_with {
         return Json(UsageReceipt {
             accepted: 0,
@@ -1531,4 +1536,108 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+async fn outbox_count(pool: &PgPool, table: &str) -> i64 {
+    sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn make_outbox_due(pool: &PgPool) {
+    sqlx::query("UPDATE usage_outbox SET next_attempt_at = now()")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// The platform's receipt can only move rows of the batch it answers, each
+/// once: one naming an event outside the batch, or repeating one, moves and
+/// deletes nothing (#63).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let a = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+         VALUES ($1, NULL, 'create_flag', true) RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    let b = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable, next_attempt_at) \
+         VALUES ($1, NULL, 'create_flag', true, now() + interval '1 hour') RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    let rejected = |id: Uuid| RejectedEvent {
+        event_id: id,
+        reason: "x".into(),
+    };
+
+    // Outside the batch: B was not shipped.
+    platform.lock().unwrap().receipt = Some(UsageReceipt {
+        accepted: 0,
+        duplicates: 0,
+        rejected: vec![rejected(b)],
+    });
+    let err = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.failure_reason().reason, "decode");
+    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 2);
+    assert_eq!(outbox_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+    let (a_err,): (Option<String>,) =
+        sqlx::query_as("SELECT last_error FROM usage_outbox WHERE event_id = $1")
+            .bind(a)
+            .fetch_one(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(a_err.as_deref(), Some("decode"));
+    let (b_err, b_attempts): (Option<String>, i32) =
+        sqlx::query_as("SELECT last_error, attempts FROM usage_outbox WHERE event_id = $1")
+            .bind(b)
+            .fetch_one(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(b_err, None);
+    assert_eq!(b_attempts, 0);
+
+    // Repeated.
+    make_outbox_due(s.db.pool()).await;
+    platform.lock().unwrap().receipt = Some(UsageReceipt {
+        accepted: 0,
+        duplicates: 0,
+        rejected: vec![rejected(a), rejected(a)],
+    });
+    let err = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.failure_reason().reason, "decode");
+    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 2);
+    assert_eq!(outbox_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+
+    // Control: a well-formed receipt still moves exactly the rejected row.
+    make_outbox_due(s.db.pool()).await;
+    platform.lock().unwrap().receipt = Some(UsageReceipt {
+        accepted: 1,
+        duplicates: 0,
+        rejected: vec![rejected(a)],
+    });
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    let rows: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT event_id, reason FROM usage_outbox_rejected")
+            .fetch_all(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(rows, vec![(a, "x".to_string())]);
+    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 0);
 }
