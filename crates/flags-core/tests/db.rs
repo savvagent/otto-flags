@@ -21,6 +21,7 @@ use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgPool, Postgres};
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
@@ -940,6 +941,63 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(stored, 2_000);
+    tx.commit().await.unwrap();
+}
+
+// Variation names are SDK-reported (a public client key can send any) and
+// flag_health shows them to an agent, so they are cleaned like error text.
+// Names that clean alike are counted together; one that cleans to nothing is
+// dropped like an empty variation.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_shows_variation_names_cleaned(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let events: Vec<EvalEvent> = [
+        ("a\u{202E}b", 2),
+        ("a\u{200B}b", 3),
+        ("\u{200B}", 1),
+        ("on", 4),
+    ]
+    .into_iter()
+    .flat_map(|(variation, n)| {
+        (0..n).map(move |_| EvalEvent {
+            flag_key: "f".into(),
+            enabled: true,
+            variation: Some(variation.into()),
+            environment: "production".into(),
+            at: now,
+        })
+    })
+    .collect();
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.evaluations.enabled, 10);
+    assert_eq!(
+        h.variations,
+        BTreeMap::from([("a b".to_string(), 5), ("on".to_string(), 4)])
+    );
     tx.commit().await.unwrap();
 }
 
