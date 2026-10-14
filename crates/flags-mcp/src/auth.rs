@@ -243,7 +243,7 @@ pub async fn require_bearer(
                 Err(e) => {
                     crate::error::log_server_failure(
                         "could not check the revocation tombstones",
-                        e.code(),
+                        crate::error::log_code(&e),
                         &e,
                     );
                     return unavailable();

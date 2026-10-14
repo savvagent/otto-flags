@@ -29,6 +29,15 @@ pub(crate) fn platform_code(e: &otto_resource::Error) -> &'static str {
     }
 }
 
+/// The log code for a domain failure: [`platform_code`] for a platform
+/// failure, the wire code otherwise.
+pub(crate) fn log_code(e: &Error) -> &'static str {
+    match e {
+        Error::Platform(p) => platform_code(p),
+        _ => e.code(),
+    }
+}
+
 /// Logs a server-side failure: the code at error, the text only at debug.
 /// Database and platform text can carry SQL, schema names, response bodies, and
 /// URLs, which must not reach the default log level; the code is ours.
@@ -43,11 +52,11 @@ pub(crate) fn log_server_failure(
 
 pub fn from_core(e: &Error) -> ErrorData {
     let (rpc, message) = if e.is_internal() {
-        let code = match e {
-            Error::Platform(p) => platform_code(p),
-            _ => e.code(),
-        };
-        log_server_failure("server-side failure surfaced to an MCP caller", code, e);
+        log_server_failure(
+            "server-side failure surfaced to an MCP caller",
+            log_code(e),
+            e,
+        );
         let message = match e {
             Error::Platform(_) => {
                 "the otto platform could not be reached to check this; nothing was changed. \
