@@ -148,6 +148,13 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
+/// True for a key no stored flag can have: Postgres `text` cannot hold NUL,
+/// so such a key names no flag, and binding it would fail the statement (and
+/// with it the caller's transaction) instead of finding nothing.
+pub(crate) fn unstorable(key: &str) -> bool {
+    key.contains('\0')
+}
+
 fn validate_key(key: &str) -> Result<String> {
     let key = key.trim();
     if key.is_empty() || key.len() > 128 {
@@ -312,6 +319,9 @@ impl FlagsExt for Tx<'_> {
     }
 
     async fn find_flag(&mut self, app_id: FlagAppId, key: &str) -> Result<Option<FeatureFlag>> {
+        if unstorable(key) {
+            return Ok(None);
+        }
         let org = self.org();
         Ok(sqlx::query_as(&format!(
             "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3"
@@ -554,15 +564,19 @@ async fn lock(
     expected_version: Option<i32>,
 ) -> Result<FeatureFlag> {
     let org = tx.org();
-    let flag: Option<FeatureFlag> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
-         FOR NO KEY UPDATE"
-    ))
-    .bind(org)
-    .bind(app.id)
-    .bind(key.trim())
-    .fetch_optional(tx.conn())
-    .await?;
+    let flag: Option<FeatureFlag> = if unstorable(key) {
+        None
+    } else {
+        sqlx::query_as(&format!(
+            "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
+             FOR NO KEY UPDATE"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(key.trim())
+        .fetch_optional(tx.conn())
+        .await?
+    };
     let flag = flag.ok_or_else(|| Error::FlagNotFound {
         app: app.name.clone(),
         key: key.trim().to_string(),
