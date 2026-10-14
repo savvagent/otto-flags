@@ -37,8 +37,8 @@ inside the request's transaction.
 - **NULLs through arrays.** `environment` and `stack_trace` are nullable; they bind as
   `Vec<Option<String>>` (`text[]` with NULL elements), so a missing value stays NULL rather than
   becoming an empty string.
-- **`reporter` and `org_id` are scalars** bound once (`$1`, last parameter), as `record_evaluations`
-  binds `org_id`: every row of a batch shares them.
+- **`org_id` and `reporter` are scalars,** bound once as `$1` and `$9` (as `record_evaluations`
+  binds `org_id`): every row of a batch shares them.
 - **Empty batch:** when no event names a known flag, no statement runs (as `record_evaluations`).
 - **Row order:** `INSERT … SELECT … FROM UNNEST(…)` assigns `id`s in array order in practice; nothing
   reads `flag_errors` by `id`, so order is not relied on. `received_at` keeps its column default.
