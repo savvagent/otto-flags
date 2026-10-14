@@ -28,7 +28,7 @@ From #51 (found reviewing #50 (#44)):
   any reason an operator needs; a platform reason is a short sentence.
 - **Reuse `telemetry::stored`** (cap by characters, NUL → U+FFFD), made `pub(crate)`, rather than
   a second copy in `usage`. It is the crate's one rule for "remote text bound into a `text`
-  column"; its doc comment says so. Moving it to a new module is not worth the churn for one more
+  column", and its doc comment now says so (it spoke only of telemetry). Moving it to a new module is not worth the churn for one more
   caller.
 - **Truncate silently**, no ellipsis: the column is for operators, and the cap is documented
   beside the constant.
