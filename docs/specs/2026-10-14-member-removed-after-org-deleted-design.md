@@ -78,8 +78,9 @@ tx.commit().await?;
 
 The outcome becomes `Ignored` when `deleted && first`, `Duplicate` when `!first`, `Applied`
 otherwise. The info log distinguishes the deleted-org case ("member.removed for a deleted org;
-ignored") from the normal one. The module doc's `member.removed` row adds: "For an org already
-deleted, nothing is written but the dedupe marker (#41)."
+ignored", with `first`) from the normal one. The module doc's `member.removed` row adds: "For an
+org already deleted, nothing is written but the dedupe marker and the short-lived removed-member
+tombstone (#41)." `Outcome::Ignored`'s doc widens to cover an event for a deleted org.
 
 Ordering against a concurrent `org.deleted`: `org_deleted` commits its tombstone on its own, then
 takes the same lock exclusively for the purge. If `member_removed` holds the lock first and the

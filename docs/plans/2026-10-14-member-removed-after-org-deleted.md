@@ -98,7 +98,7 @@ One task: one function and the tests that prove it.
   - Return `Outcome::Duplicate` when `!first`, `Outcome::Ignored` when `deleted`, else
     `Outcome::Applied { detail: json!({}) }`.
   - Module doc table, `member.removed` row: append "For an org already deleted, nothing is written
-    but the dedupe marker (#41)."
+    but the dedupe marker and the short-lived removed-member tombstone (#41)."
 - [ ] **Step 5: Run and see both tests pass** (same two commands as Step 3).
 - [ ] **Step 6: Run every gate** (Global Constraints) and report pass counts per test binary.
 - [ ] **Step 7: Commit** the two files with exactly this message (no trailers of any kind):
@@ -114,6 +114,9 @@ One task: one function and the tests that prove it.
 
   Fixes #41
   ```
+
+Quality review (orchestrator fix): the module doc names the `removed_members` row too,
+`Outcome::Ignored`'s doc covers a deleted org, and the deleted-org log line carries `first`.
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit by the
 orchestrator.

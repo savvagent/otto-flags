@@ -10,7 +10,7 @@
 //! | Event | Effect |
 //! |---|---|
 //! | `org.deleted` | Every row this database holds for the org is deleted, its SDK keys stop resolving at once, and its tokens are refused. Only the dedupe marker and the tombstone survive. |
-//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. For an org already deleted, nothing is written but the dedupe marker (#41). |
+//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. For an org already deleted, nothing is written but the dedupe marker and the short-lived removed-member tombstone (#41). |
 //! | `team.deleted` | Nothing: otto-flags has no team-scoped data. Acknowledged. |
 //!
 //! # Why requests take a lock
@@ -41,8 +41,9 @@ pub enum Outcome {
     /// An earlier delivery already applied this event. The cleanup was re-run
     /// anyway (it is idempotent) to catch work that raced the first run.
     Duplicate,
-    /// An event this version does not act on. Acknowledged, not failed:
-    /// failing it would only make the platform retry it forever.
+    /// An event this version does not act on, or one for an org already
+    /// deleted here. Acknowledged, not failed: failing it would only make
+    /// the platform retry it forever.
     Ignored,
 }
 
@@ -259,7 +260,7 @@ async fn member_removed(
     tx.commit().await?;
 
     if deleted {
-        tracing::info!(org = %org, event_id = %event.id, "member.removed for a deleted org; ignored");
+        tracing::info!(org = %org, event_id = %event.id, first, "member.removed for a deleted org; ignored");
     } else {
         tracing::info!(org = %org, user = %user, "member removed; their tokens are refused");
     }
