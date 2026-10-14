@@ -63,18 +63,22 @@ pub async fn receive(
     let outcome = platform_events::apply(&state.db, &event)
         .await
         .map_err(|e| {
-            let (reason, status) = e.failure_reason();
+            let f = e.failure_reason();
             tracing::error!(
                 code = e.code(),
-                reason,
-                status,
+                reason = f.reason,
+                status = f.status,
+                sqlstate = f.sqlstate(),
+                transport = f.transport,
                 event_id = %event.id,
                 "could not apply a platform event"
             );
             tracing::debug!(
                 code = e.code(),
-                reason,
-                status,
+                reason = f.reason,
+                status = f.status,
+                sqlstate = f.sqlstate(),
+                transport = f.transport,
                 event_id = %event.id,
                 error = %e,
                 "could not apply a platform event"

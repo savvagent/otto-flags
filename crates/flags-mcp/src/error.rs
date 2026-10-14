@@ -13,21 +13,38 @@
 //!   follow the same rule: the failure's code and reason at error, its text
 //!   only at debug.
 
+use flags_core::error::Failure;
 use flags_core::Error;
 use rmcp::model::{ErrorCode, ErrorData};
 
-/// Logs a server-side failure: the wire code and a text-free reason (see
-/// [`Error::failure_reason`]) at error, the text only at debug. Server-side
+/// Logs a server-side failure: the wire code and a text-free [`Failure`] (see
+/// [`Error::failure_reason`]: `reason`, `status`, `sqlstate`, `transport`) at
+/// error, the text only at debug. Server-side
 /// text can carry SQL, schema names, response bodies, and URLs, which must not
 /// reach the default log level. At debug both events appear, on purpose.
 pub(crate) fn log_server_failure(
     what: &'static str,
     code: &'static str,
-    (reason, status): (&'static str, Option<u16>),
+    f: Failure,
     detail: &dyn std::fmt::Display,
 ) {
-    tracing::error!(code, reason, status, "{what}");
-    tracing::debug!(code, reason, error = %detail, "{what}");
+    tracing::error!(
+        code,
+        reason = f.reason,
+        status = f.status,
+        sqlstate = f.sqlstate(),
+        transport = f.transport,
+        "{what}"
+    );
+    tracing::debug!(
+        code,
+        reason = f.reason,
+        status = f.status,
+        sqlstate = f.sqlstate(),
+        transport = f.transport,
+        error = %detail,
+        "{what}"
+    );
 }
 
 const SURFACED: &str = "server-side failure surfaced to an MCP caller";

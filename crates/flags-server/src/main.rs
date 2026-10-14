@@ -159,23 +159,32 @@ async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept old platform-event records"),
             Err(e) => {
-                let (reason, status) = e.failure_reason();
+                let f = e.failure_reason();
                 tracing::warn!(
                     code = e.code(),
-                    reason,
-                    status,
+                    reason = f.reason,
+                    status = f.status,
+                    sqlstate = f.sqlstate(),
+                    transport = f.transport,
                     "platform-event sweep failed"
                 );
-                tracing::debug!(code = e.code(), reason, status, error = %e, "platform-event sweep failed");
+                tracing::debug!(code = e.code(), reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "platform-event sweep failed");
             }
         }
         match flags_core::telemetry::sweep(&db).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept expired telemetry"),
             Err(e) => {
-                let (reason, status) = e.failure_reason();
-                tracing::warn!(code = e.code(), reason, status, "telemetry sweep failed");
-                tracing::debug!(code = e.code(), reason, status, error = %e, "telemetry sweep failed");
+                let f = e.failure_reason();
+                tracing::warn!(
+                    code = e.code(),
+                    reason = f.reason,
+                    status = f.status,
+                    sqlstate = f.sqlstate(),
+                    transport = f.transport,
+                    "telemetry sweep failed"
+                );
+                tracing::debug!(code = e.code(), reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "telemetry sweep failed");
             }
         }
         tokio::select! {
@@ -200,17 +209,19 @@ async fn check_platform(platform: &otto_resource::PlatformClient, config: &Confi
              is the one this service was registered with"
         ),
         Err(e) => {
-            let (reason, status) = flags_core::error::platform_failure_reason(&e);
+            let f = flags_core::error::platform_failure_reason(&e);
             tracing::warn!(
                 platform = %config.platform_url,
-                reason,
-                status,
+                reason = f.reason,
+                status = f.status,
+                transport = f.transport,
                 "could not reach the otto platform at startup; continuing"
             );
             tracing::debug!(
                 platform = %config.platform_url,
-                reason,
-                status,
+                reason = f.reason,
+                status = f.status,
+                transport = f.transport,
                 error = %e,
                 "could not reach the otto platform at startup; continuing"
             );

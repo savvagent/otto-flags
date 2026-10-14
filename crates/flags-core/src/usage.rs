@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::error::Failure;
 use otto_resource::{PlatformClient, UsageEvent, UsageStatus};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::{Db, Tx};
@@ -153,13 +154,14 @@ impl Meter {
             Err(_) => None,
         };
         // A timeout has no text; it is named as entitlements names it.
-        let (reason, status) = failure
-            .as_ref()
-            .map_or(("timeout", None), crate::error::platform_failure_reason);
-        tracing::warn!(org = %org, reason, status,
+        let f = failure.as_ref().map_or(
+            Failure::reason("timeout"),
+            crate::error::platform_failure_reason,
+        );
+        tracing::warn!(org = %org, reason = f.reason, status = f.status, transport = f.transport,
             "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
         if let Some(e) = &failure {
-            tracing::debug!(org = %org, reason, status, error = %e,
+            tracing::debug!(org = %org, reason = f.reason, status = f.status, transport = f.transport, error = %e,
                 "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
         }
         if let Ok(mut m) = self.fail_open.lock() {
@@ -263,13 +265,13 @@ pub enum ShipError {
 }
 
 impl ShipError {
-    /// A short, text-free reason (and the HTTP status, for a platform status
-    /// error) that is safe to log above debug: the error text can carry SQL,
+    /// A short, text-free [`Failure`] (reason, HTTP status, SQLSTATE, transport
+    /// sub-kind) that is safe to log above debug: the error text can carry SQL,
     /// schema names, response bodies, and URLs.
-    pub fn failure_reason(&self) -> (&'static str, Option<u16>) {
+    pub fn failure_reason(&self) -> Failure {
         match self {
             ShipError::Platform(p) => crate::error::platform_failure_reason(p),
-            ShipError::Db(e) => (crate::error::db_failure_reason(e), None),
+            ShipError::Db(e) => crate::error::db_failure_reason(e),
         }
     }
 }
@@ -372,9 +374,13 @@ async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {
     .await;
     if let Err(e) = r {
         // The claim lease still holds the rows back; this only delays a retry.
-        let reason = crate::error::db_failure_reason(&e);
-        tracing::warn!(reason, "could not record a usage shipping failure");
-        tracing::debug!(reason, error = %e, "could not record a usage shipping failure");
+        let f = crate::error::db_failure_reason(&e);
+        tracing::warn!(
+            reason = f.reason,
+            sqlstate = f.sqlstate(),
+            "could not record a usage shipping failure"
+        );
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e, "could not record a usage shipping failure");
     }
 }
 
@@ -382,7 +388,8 @@ async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {
 /// failure's name and HTTP status (`http_status 502`), never its text,
 /// which can carry a platform response body or URL (#44).
 fn stored_reason(e: &otto_resource::Error) -> String {
-    match crate::error::platform_failure_reason(e) {
+    let f = crate::error::platform_failure_reason(e);
+    match (f.reason, f.status) {
         (reason, Some(status)) => format!("{reason} {status}"),
         (reason, None) => reason.to_string(),
     }
@@ -418,9 +425,9 @@ pub async fn run(
                          accumulating in the outbox. Check FLAGS_INTROSPECTION_SECRET"
                     ),
                     other => {
-                        let (reason, status) = other.failure_reason();
-                        tracing::warn!(reason, status, retry_in = ?wait, "usage shipping failed");
-                        tracing::debug!(reason, status, retry_in = ?wait, error = %other, "usage shipping failed");
+                        let f = other.failure_reason();
+                        tracing::warn!(reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, retry_in = ?wait, "usage shipping failed");
+                        tracing::debug!(reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, retry_in = ?wait, error = %other, "usage shipping failed");
                     }
                 }
                 wait
@@ -430,9 +437,9 @@ pub async fn run(
             _ = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => {
                 if let Err(e) = ship_once(&db, &platform, &cfg).await {
-                    let (reason, status) = e.failure_reason();
-                    tracing::warn!(reason, status, "final usage flush failed; rows stay in the outbox");
-                    tracing::debug!(reason, status, error = %e, "final usage flush failed; rows stay in the outbox");
+                    let f = e.failure_reason();
+                    tracing::warn!(reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, "final usage flush failed; rows stay in the outbox");
+                    tracing::debug!(reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "final usage flush failed; rows stay in the outbox");
                 }
                 return;
             }
@@ -489,8 +496,10 @@ mod tests {
             status: 502,
             body: "secret".into(),
         });
-        assert_eq!(platform.failure_reason(), ("http_status", Some(502)));
+        let f = platform.failure_reason();
+        assert_eq!((f.reason, f.status), ("http_status", Some(502)));
         let db = ShipError::Db(sqlx::Error::Protocol("secret".into()));
-        assert_eq!(db.failure_reason(), ("protocol", None));
+        let f = db.failure_reason();
+        assert_eq!((f.reason, f.status), ("protocol", None));
     }
 }

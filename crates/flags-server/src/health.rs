@@ -62,9 +62,13 @@ async fn readyz(State(db): State<Db>) -> Response {
         // connection is a database that is down, a timeout is usually a pool
         // with every connection checked out, and those have different fixes.
         Ok(Err(e)) => {
-            let reason = flags_core::error::db_failure_reason(&e);
-            tracing::warn!(reason, "readiness check failed");
-            tracing::debug!(reason, error = %e, "readiness check failed");
+            let f = flags_core::error::db_failure_reason(&e);
+            tracing::warn!(
+                reason = f.reason,
+                sqlstate = f.sqlstate(),
+                "readiness check failed"
+            );
+            tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e, "readiness check failed");
             unready("the database rejected a probe query")
         }
         Err(_) => {
