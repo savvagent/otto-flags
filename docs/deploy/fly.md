@@ -335,7 +335,12 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
 - Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
   non-exempt pool role. Every unpinned policy added by `0002` and `0003` also requires the
   transaction-local marker `app.maintenance = 'on'` (#27), which only the background sweeps and
-  the checker's backstop set, so a request path that forgot to pin an org reads nothing. Ad-hoc
+  the checker's backstop set, so a request path that forgot to pin an org reads nothing.
+  Migration `0005` (#68) does the same for `usage_outbox` and `usage_outbox_rejected`, for every
+  command, and the usage shipper runs in a maintenance transaction. Under the superuser attach
+  role RLS does not apply, so this changes nothing in production today; under a non-exempt pool
+  role, a release without this change ships no usage while it runs against that schema (rollout
+  overlap, rollback), and the rows wait in the outbox until a newer release ships them. Ad-hoc
   diagnostics as a non-exempt role need `SET LOCAL app.maintenance = 'on'` in their
   transaction to see across orgs.
 
