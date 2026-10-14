@@ -33,6 +33,9 @@ with a hash-based CSP. `router()` adds a `/` route through `any(...)`, and its `
   contract is unchanged. No database is used on the page path. Code in `crates/` is AGPL. No SQL
   outside `flags-core`, and none is added.
 - Worktree only. Trunk changes only through the PR.
+- Before merge, a final docs commit in the same PR sets the spec's `**Status:**` to
+  `IMPLEMENTED (#<PR>)` and ticks this plan's boxes. Intermediate commits end `Refs #71`, and the
+  final feature commit ends `Fixes #71`.
 - Commit format: `<type>(<scope>): <imperative, lower-case>`. The body explains why and ends
   `Fixes #71`. No attribution of any kind: no Co-Authored-By, no "Generated with", no credit
   markers.
@@ -716,7 +719,8 @@ route other than `/` changes. `POST /` must stay a 404, not a 405, with no `Allo
   `/mcp` tests pass.
 
 - [ ] **Step 3: Implement the route.** In `lib.rs`:
-  - imports: `use axum::routing::any;` and `use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};`
+  - imports: add `use axum::routing::any;`, and replace the existing `use http::{StatusCode, Uri};`
+    with `use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};`
   - in `router()`, before `health::router(db)`:
     ```rust
     let page = Arc::new(install_page::InstallPage::new(
@@ -766,7 +770,7 @@ route other than `/` changes. `POST /` must stay a 404, not a 405, with no `Allo
 - [ ] **Step 4: Run the tests and see them pass.**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --lib`
   Expected: every lib test passes, including the four new ones and the extended `/mcp` test, with
-  0 ignored. Then run the full gates from Global Constraints (test, clippy, fmt check, the
+  0 ignored. Run `cargo fmt --all`, then run the full gates from Global Constraints (test, clippy, fmt check, the
   migrations diff, and `podman build -t otto-flags:check .`) and record the counts per test
   binary.
 
