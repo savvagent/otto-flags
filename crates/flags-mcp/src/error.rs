@@ -19,9 +19,9 @@ use rmcp::model::{ErrorCode, ErrorData};
 
 /// Logs a server-side failure: the wire code and a text-free [`Failure`] (see
 /// [`Error::failure_reason`]: `reason`, `status`, `sqlstate`, `transport`) at
-/// error, the text only at debug. Server-side
-/// text can carry SQL, schema names, response bodies, and URLs, which must not
-/// reach the default log level. At debug both events appear, on purpose.
+/// error, the text only at debug. Server-side text can carry SQL, schema names,
+/// response bodies, and URLs, which must not reach the default log level. At
+/// debug both events appear, on purpose.
 pub(crate) fn log_server_failure(
     what: &'static str,
     code: &'static str,
