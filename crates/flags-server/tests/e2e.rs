@@ -1538,7 +1538,7 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
     assert_eq!(left, 0);
 }
 
-async fn outbox_count(pool: &PgPool, table: &str) -> i64 {
+async fn row_count(pool: &PgPool, table: &str) -> i64 {
     sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
         .fetch_one(pool)
         .await
@@ -1546,7 +1546,7 @@ async fn outbox_count(pool: &PgPool, table: &str) -> i64 {
 }
 
 async fn make_outbox_due(pool: &PgPool) {
-    sqlx::query("UPDATE usage_outbox SET next_attempt_at = now()")
+    sqlx::query("UPDATE usage_outbox SET next_attempt_at = now(), last_error = NULL")
         .execute(pool)
         .await
         .unwrap();
@@ -1590,8 +1590,8 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.failure_reason().reason, "decode");
-    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 2);
-    assert_eq!(outbox_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 2);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
     let (a_err,): (Option<String>,) =
         sqlx::query_as("SELECT last_error FROM usage_outbox WHERE event_id = $1")
             .bind(a)
@@ -1619,8 +1619,15 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
         .await
         .unwrap_err();
     assert_eq!(err.failure_reason().reason, "decode");
-    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 2);
-    assert_eq!(outbox_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+    let (a_err,): (Option<String>,) =
+        sqlx::query_as("SELECT last_error FROM usage_outbox WHERE event_id = $1")
+            .bind(a)
+            .fetch_one(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(a_err.as_deref(), Some("decode"));
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 2);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
 
     // Control: a well-formed receipt still moves exactly the rejected row.
     make_outbox_due(s.db.pool()).await;
@@ -1639,5 +1646,5 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(rows, vec![(a, "x".to_string())]);
-    assert_eq!(outbox_count(s.db.pool(), "usage_outbox").await, 0);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
 }

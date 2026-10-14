@@ -335,11 +335,11 @@ pub async fn ship_once(
     // row still ships later, and a repeated id would insert two rejected rows,
     // both with the count check passing (#63). No platform-supplied id goes in
     // the message.
-    let mut unanswered: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();
+    let mut not_yet_rejected: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();
     let stray = receipt
         .rejected
         .iter()
-        .filter(|r| !unanswered.remove(&r.event_id))
+        .filter(|r| !not_yet_rejected.remove(&r.event_id))
         .count();
     if stray > 0 {
         let msg = format!(
@@ -353,8 +353,9 @@ pub async fn ship_once(
     for r in &receipt.rejected {
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
-        // replaced so it is bounded and cannot fail the batch (#51). The insert
-        // can only reach this batch's rows.
+        // replaced so it is bounded and cannot fail the batch (#51). Scoping
+        // the insert to this batch's rows repeats the check above, so a later
+        // change to that check still cannot move a row outside the batch (#63).
         let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
