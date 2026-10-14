@@ -340,9 +340,10 @@ pub async fn ship_once(
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
         // replaced so it is bounded and cannot fail the batch (#51).
+        let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
-        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?r.reason,
+        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?reason,
             "the platform refused a usage event; moving it to usage_outbox_rejected");
         sqlx::query(
             "INSERT INTO usage_outbox_rejected \
@@ -351,7 +352,7 @@ pub async fn ship_once(
              FROM usage_outbox WHERE event_id = $1",
         )
         .bind(r.event_id)
-        .bind(crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON))
+        .bind(&reason)
         .execute(&mut *tx)
         .await?;
     }
