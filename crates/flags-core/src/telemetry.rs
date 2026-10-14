@@ -78,12 +78,13 @@ pub struct Recorded {
     pub flags: Vec<FlagId>,
 }
 
-/// Reported text as it is stored: capped at `max` characters, with NUL
-/// replaced by U+FFFD. Postgres `text` cannot hold NUL, which is valid in JSON
-/// and Rust strings, so one NUL would fail the whole batch. It is replaced
-/// rather than dropped so a malformed value never merges into a real
-/// environment or variation (#38).
-fn stored(s: &str, max: usize) -> String {
+/// Remote text as it is stored, here and anywhere in the crate that binds text
+/// it did not write (SDK telemetry, the platform's answers) into a `text`
+/// column: capped at `max` characters, with NUL replaced by U+FFFD. Postgres
+/// `text` cannot hold NUL, which is valid in JSON and Rust strings, so one NUL
+/// would fail the whole batch. It is replaced rather than dropped so a
+/// malformed value never merges into a real environment or variation (#38).
+pub(crate) fn stored(s: &str, max: usize) -> String {
     s.chars()
         .take(max)
         .map(|c| if c == '\0' { '\u{FFFD}' } else { c })
@@ -599,6 +600,13 @@ mod tests {
         assert!(s.contains("Only 99 evaluations with the flag off"), "{s}");
         assert!(!s.contains("Consider rolling back"), "{s}");
         assert!(!s.contains("No sign"), "{s}");
+    }
+
+    #[test]
+    fn stored_text_is_capped_by_characters() {
+        assert_eq!(stored(&"é".repeat(500), 500), "é".repeat(500));
+        assert_eq!(stored(&"é".repeat(501), 500), "é".repeat(500));
+        assert_eq!(stored("a\0b", 500), "a\u{FFFD}b");
     }
 
     #[test]

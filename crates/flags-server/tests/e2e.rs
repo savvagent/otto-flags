@@ -21,7 +21,8 @@ use flags_core::rollback::{CheckerConfig, Hints, Mode, RollbackExt, Thresholds};
 use flags_server::{platform_client, router, spawn_checker, Config};
 use http::{Request, StatusCode};
 use otto_resource::{
-    IntrospectionResponse, MemberInfo, OrgInfo, Role, TokenKind, UsageBatch, UsageReceipt, UserInfo,
+    IntrospectionResponse, MemberInfo, OrgInfo, RejectedEvent, Role, TokenKind, UsageBatch,
+    UsageReceipt, UserInfo,
 };
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -47,6 +48,8 @@ struct Platform {
     unavailable: HashSet<Uuid>,
     /// Usage-status requests received, per org.
     usage_status_hits: HashMap<Uuid, usize>,
+    /// When set, every shipped usage event is rejected with this reason.
+    reject_with: Option<String>,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -105,7 +108,22 @@ async fn usage_status(
 }
 
 async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageReceipt> {
-    p.lock().unwrap().shipped += b.events.len();
+    let mut p = p.lock().unwrap();
+    if let Some(reason) = &p.reject_with {
+        return Json(UsageReceipt {
+            accepted: 0,
+            duplicates: 0,
+            rejected: b
+                .events
+                .iter()
+                .map(|e| RejectedEvent {
+                    event_id: e.event_id,
+                    reason: reason.clone(),
+                })
+                .collect(),
+        });
+    }
+    p.shipped += b.events.len();
     Json(UsageReceipt {
         accepted: b.events.len() as u32,
         duplicates: 0,
@@ -1477,4 +1495,40 @@ async fn a_failed_entitlement_lookup_is_not_repeated_at_once() {
         1,
         "the second check within 10 s asked the platform again"
     );
+}
+
+/// The platform's rejection reason is its text: stored capped, and a NUL in it
+/// cannot fail the batch and leave the shipper retrying it forever (#51).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+         VALUES ($1, NULL, 'create_flag', true) RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    // 600 characters, multi-byte, with a NUL.
+    platform.lock().unwrap().reject_with = Some(format!("\0{}", "é".repeat(599)));
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let reasons: Vec<String> =
+        sqlx::query_scalar("SELECT reason FROM usage_outbox_rejected WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_all(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(reasons, vec![format!("\u{FFFD}{}", "é".repeat(499))]);
+    assert_eq!(reasons[0].chars().count(), 500);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM usage_outbox")
+        .fetch_one(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
 }
