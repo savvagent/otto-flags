@@ -16,6 +16,7 @@
 
 pub mod apps;
 pub mod audit;
+pub mod audit_purge;
 pub mod entitlements;
 pub mod error;
 pub mod eval;
