@@ -1,6 +1,6 @@
 # Cap the stored platform rejection reason
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#62)
 **Issue:** #51
 
 ## 1. Brief

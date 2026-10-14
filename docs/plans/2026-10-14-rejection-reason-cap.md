@@ -60,7 +60,7 @@ One task: a one-line binding change, its helper's visibility, and the test that 
 - Modify: `crates/flags-core/src/telemetry.rs`
 - Modify: `crates/flags-server/tests/e2e.rs`
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-server/tests/e2e.rs`:
+- [x] **Step 1: Write the failing test** in `crates/flags-server/tests/e2e.rs`:
   - Mock: add to `struct Platform` a field `/// When set, every shipped usage event is rejected
     with this reason. reject_with: Option<String>,`. In `ship`, when `reject_with` is `Some(reason)`,
     answer `UsageReceipt { accepted: 0, duplicates: 0, rejected: <one RejectedEvent { event_id,
@@ -77,10 +77,10 @@ One task: a one-line binding change, its helper's visibility, and the test that 
     the stored `reason` (`SELECT reason FROM usage_outbox_rejected WHERE event_id = $1`) equals
     `format!("\u{FFFD}{}", "é".repeat(499))` and has 500 characters; `SELECT count(*) FROM
     usage_outbox` is 0.
-- [ ] **Step 2: Run, see it fail:**
+- [x] **Step 2: Run, see it fail:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e a_rejected_usage_event_keeps_a_capped_reason`
   — `ship_once` fails (the NUL fails the insert).
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `crates/flags-core/src/telemetry.rs`: `fn stored` → `pub(crate) fn stored`, with a doc comment:
     remote text (SDK telemetry, the platform's answers) as it is bound into a `text` column: at most
     `max` characters, and NUL, which Postgres `text` cannot hold, replaced with U+FFFD.
@@ -90,8 +90,8 @@ One task: a one-line binding change, its helper's visibility, and the test that 
     `.bind(&r.reason)` → `.bind(crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON))`, and
     extend the comment above the insert: stored capped and with NUL replaced, so it is bounded and
     cannot fail the batch.
-- [ ] **Step 4: Run, see it pass:** the Step 2 command, then all gates (Global Constraints),
+- [x] **Step 4: Run, see it pass:** the Step 2 command, then all gates (Global Constraints),
   recording pass counts per test binary. `usage_logs` (its reason is short) must still pass.
-- [ ] **Step 5: Commit:** `fix(core): cap the platform's rejection reason in the usage outbox`,
+- [x] **Step 5: Commit:** `fix(core): cap the platform's rejection reason in the usage outbox`,
   body saying why (the one unbounded remote-text column on a small shared database; a NUL would
   fail the batch and wedge the shipper) and ending `Fixes #51`. No attribution.
