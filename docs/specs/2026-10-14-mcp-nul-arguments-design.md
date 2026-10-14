@@ -136,7 +136,10 @@ through to the existing `AppNotFound` with the list of apps (a query with no arg
 sites; `health` binds `environment.map(|e| stored(e, MAX_ENVIRONMENT))` and returns that in
 `Health::environment`.
 
-No public interface changes: tools answer documented error codes instead of `internal_error`.
+Public interface changes, all additive: tools answer documented error codes (`app_not_found`,
+`invalid_argument`) or results instead of `internal_error`. `flag_health` also changes in two
+non-breaking ways (section 3): its `environment` field echoes the normalized name (NUL becomes
+U+FFFD), and an environment longer than 64 characters matches its truncated stored form.
 
 ## 7. Invariants impact
 
@@ -162,6 +165,9 @@ None.
 - A UUID with a NUL appended does not parse as a UUID; it is not found.
 - NUL inside a nested `configuration` object key, or an array inside a rule value: `contains_nul`
   walks the whole tree. serde_json's parse depth limit (128) bounds the recursion.
+- `archive_flag`/`restore_flag` on a flag already in that state return it unchanged before any
+  statement or reason validation (`set_archived`), so a NUL reason there succeeds as a no-op; no
+  statement binds it, which is all the AC requires.
 - `rollback_flag`'s reason is prefixed (`"rollback to vN: <reason>"`) before `validate_text`; the
   NUL survives the prefix and is refused.
 - Error messages produced by `AppNotFound`/`FlagNotFound` print the name with `{:?}`, so NUL shows
@@ -179,7 +185,8 @@ None.
   reported environment; after all of it the transaction still commits (no statement failed).
 - e2e (`crates/flags-server/tests/e2e.rs`), `mcp_arguments_with_nul_are_not_internal_errors`:
   lookup tools `get_flag` (app NUL → `app_not_found`), `remove_rollback_policy` (environment NUL →
-  `removed: false`), `flag_health` (environment NUL → success); write tools `create_flag` (reason
+  `removed: false`), `flag_health` (environment NUL → success), `propose_rollback` (environment
+  NUL → `invalid_argument`, exercising `find_policy` before `require_environment`); write tools `create_flag` (reason
   NUL), `update_flag` (configuration NUL), `set_flag_environment` (rule value NUL) →
   `invalid_argument`.
 

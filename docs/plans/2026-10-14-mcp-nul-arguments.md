@@ -77,6 +77,8 @@ split the tests.
   values: [json!("a\u{0}")]}` is `Err` containing `"rule 0"` and `"NUL"`; the same with
   `attribute: "pl\u{0}an"` (operator `Exists`, no values) and with `description: Some("d\u{0}")`
   is `Err`.
+  Run: `cargo test -p flags-core --lib -- contains_nul validation_refuses_nul` (no database).
+  Expected: FAIL (does not compile: `contains_nul` is missing).
 
 - [ ] **Step 2: DB test** in `crates/flags-core/tests/db.rs`, after `a_key_with_nul_finds_no_flag`:
   `arguments_with_nul_find_nothing_or_are_refused` (`#[sqlx::test(migrator = "flags_core::MIGRATOR")]`).
@@ -102,7 +104,7 @@ split the tests.
     `health(.., Some("production"), ..)` → `evaluations.enabled == 3`.
   - The flag is unchanged (`tx.find_flag(app.id, "f")` version 1) and `tx.commit()` succeeds
     (no statement failed in the transaction).
-  Run: `flock …/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db arguments_with_nul`
+  Run: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db arguments_with_nul`
   Expected: FAIL (a database error, e.g. 22021/22P05, or a non-`Invalid` result).
 
 - [ ] **Step 3: e2e test** in `crates/flags-server/tests/e2e.rs`, after
@@ -111,7 +113,8 @@ split the tests.
   (app `web`). Then:
   - Lookups: `get_flag {"app": "web\u0000", "key": "checkout"}` → `Err`, `err["data"]["code"] ==
     "app_not_found"`; `remove_rollback_policy {"app": "web", "key": "checkout", "environment":
-    "production\u0000"}` → `Ok`, `r["removed"] == false`; `flag_health {"app": "web", "key":
+    "production\u0000"}` → `Ok`, `r["removed"] == false`; `propose_rollback {"app": "web", "key":
+    "checkout", "environment": "production\u0000"}` → `Err`, code `"invalid_argument"`; `flag_health {"app": "web", "key":
     "checkout", "environment": "production\u0000"}` → `Ok`.
   - Writes: `create_flag {"app": "web", "key": "other", "reason": "r\u0000"}`,
     `update_flag {"app": "web", "key": "checkout", "configuration": {"k": "\u0000"}}`,
@@ -121,7 +124,7 @@ split the tests.
   Check the error shape against the existing `evaluating_a_key_with_nul_is_not_found` (it reads
   `err["data"]["code"]`). If a tool's scope needs differ from `org_with_flag`'s token, read that
   helper first.
-  Run: `flock …/db-test.lock env DATABASE_URL=… cargo test -p flags-server --test e2e mcp_arguments_with_nul`
+  Run: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e mcp_arguments_with_nul`
   Expected: FAIL (`internal_error`).
 
 - [ ] **Step 4: Implement.**
@@ -139,8 +142,10 @@ split the tests.
     (U+0000)".into()) }`. `validate_env`: in the per-rule loop, before the attribute length check,
     refuse `rule.attribute.contains('\0') || rule.description.as_deref().is_some_and(|d|
     d.contains('\0')) || rule.values.iter().any(contains_nul)` with
-    `format!("rule {i}: must not contain NUL (U+0000)")`.
-  - `apps.rs` `resolve_app`: `let found = if crate::flags::unstorable(wanted) { None } else {
+    `format!("rule {i}: must not contain NUL (U+0000)")`. This is the one place for the rule check:
+    `validate_all_envs` reuses `validate_env` over stored environments, which cannot hold NUL, so
+    it is unaffected.
+  - `apps.rs` `resolve_app` (keep the `Option<FlagApp>` annotation on `found`): `let found = if crate::flags::unstorable(wanted) { None } else {
     <existing query> };` — the not-found branch below is unchanged.
   - `rollback.rs`: `find_policy`: `if crate::flags::unstorable(environment) { return Ok(None); }`;
     `remove_policy`: `if crate::flags::unstorable(environment) { return Ok(false); }`, each with a
@@ -154,7 +159,7 @@ split the tests.
     `Health::environment`.
 
 - [ ] **Step 5: Run the targeted tests, then all gates.**
-  `flock …/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
+  `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
   — all pass, report counts per binary; `cargo clippy --workspace --all-targets -- -D warnings`;
   `cargo fmt --all -- --check`; the migrations diff prints nothing.
 
