@@ -74,7 +74,8 @@ together.
     `flag_errors` row (select `environment, error_type, error_message, stack_trace`) equals
     `("prod\u{FFFD}x", "Type\u{FFFD}Error", "bad\u{FFFD}message", "at\u{FFFD}main")`, and that
     `flag_errors` has exactly 1 row.
-  - Record an evaluation batch (`KeyKind::Server`) of three events: two with flag `f`, `enabled:
+  - Record an evaluation batch (`KeyKind::Server`) of three events, all with one shared `at` (a
+    single `let now = Utc::now();`, so both land in one hourly bucket): two with flag `f`, `enabled:
     true`, `environment: "stag\0ing"`, `variation: Some("v\0one")`; one with flag key `"f\0"`.
     Assert the receipt is `Receipt { accepted: 2, unknown_flags: 1 }` and `flag_eval_hourly` has
     exactly one row whose `(environment, variation, count)` is
@@ -94,7 +95,7 @@ together.
     would fail the whole batch; it is replaced (not dropped) so a malformed value never merges into
     a real environment or variation; #38. Update all six call sites.
   - In `flag_ids`, before binding, drop keys containing `'\0'`
-    (`keys.retain(|k| !k.contains('\0'))`), with a comment: no flag key can contain NUL
+    (`keys.retain(|k| !k.contains('\0'))`; the parameter becomes `mut keys`), with a comment: no flag key can contain NUL
     (`flags::validate_key`), so such a key is unknown like any other, and binding it would fail the
     batch. The callers' `ids.get(&e.flag_key)` miss already counts it as unknown.
 - [ ] **Step 5: Run the DB test and the unit test and see them pass:**
@@ -107,7 +108,8 @@ together.
   one error whose `error_type`, `error_message`, `stack_trace`, and `environment` contain `"\u0000"`
   (serde_json's `json!` with a Rust `"\0"` in the string produces it), plus one with `flag_key:
   "checkout\u0000"`; assert `StatusCode::OK` and body `{"accepted": 1, "unknown_flags": 1}`. Same
-  for `/api/telemetry/evaluations` with `environment` and `variation` containing NUL (field names as
+  for `/api/telemetry/evaluations` with one event whose `environment` and `variation` contain NUL
+  plus one with `flag_key: "checkout\u0000"` (field names as
   in `report`: `flag_key`, `result`, `environment`, `variation`, `timestamp`); assert OK and
   `{"accepted": 1, "unknown_flags": 1}`. Run it:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e telemetry_with_nul`
