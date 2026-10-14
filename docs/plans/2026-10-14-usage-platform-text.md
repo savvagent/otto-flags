@@ -72,7 +72,7 @@ together.
 
 **Model:** sonnet — contained change with fully specified code.
 
-- [ ] **Step 1: Write the failing unit test** in `crates/flags-core/src/usage.rs` `mod tests`:
+- [x] **Step 1: Write the failing unit test** in `crates/flags-core/src/usage.rs` `mod tests`:
 
 ```rust
 #[test]
@@ -93,7 +93,7 @@ fn the_stored_reason_names_the_failure_without_its_text() {
 }
 ```
 
-- [ ] **Step 2: Write the failing integration test** `crates/flags-server/tests/usage_logs.rs`
+- [x] **Step 2: Write the failing integration test** `crates/flags-server/tests/usage_logs.rs`
   (a new binary with exactly one test). Model the capture helpers on
   `crates/flags-api/tests/failure_logs.rs` (`Capture` writer) and the mock platform on
   `crates/flags-server/tests/e2e.rs` (`start_platform`, `server`). Contents:
@@ -137,19 +137,19 @@ fn the_stored_reason_names_the_failure_without_its_text() {
     8. DB: `SELECT reason FROM usage_outbox_rejected WHERE event_id = $1` equals
        `format!("unknown org {REASON_MARKER}")`; `SELECT count(*) FROM usage_outbox` is 0.
 
-- [ ] **Step 3: Remove the exception from `crates/flags-server/tests/log_text.rs`:** delete the
+- [x] **Step 3: Remove the exception from `crates/flags-server/tests/log_text.rs`:** delete the
   `ALLOWED` constant and its doc comment, delete `let allowed = …;`, and change the condition to
   `if shorthand || TEXT_FIELDS.iter().any(|t| flat.contains(t))`. If `name` becomes used only for
   the message, keep it there. Leave `TEXT_FIELDS`, `TEXT_ARGS`, and the second test as they are.
 
-- [ ] **Step 4: Run the tests and see them fail.**
+- [x] **Step 4: Run the tests and see them fail.**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib stored_reason`
   → compile error (`stored_reason` not found).
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test usage_logs --test log_text`
   → `usage_logs` fails on the `last_error` assertion (the error's text is stored), and `log_text`
   fails naming `flags-core/src/usage.rs: … reason = %r.reason …`.
 
-- [ ] **Step 5: Implement in `crates/flags-core/src/usage.rs`:**
+- [x] **Step 5: Implement in `crates/flags-core/src/usage.rs`:**
 
   - Add, below `reschedule`:
 
@@ -183,17 +183,17 @@ fn the_stored_reason_names_the_failure_without_its_text() {
   - `reschedule`: rename the parameter `error` to `reason` and bind it directly
     (`.bind(reason)`), dropping `.chars().take(500).collect::<String>()`.
 
-- [ ] **Step 6: Run the tests and see them pass** (same two commands as Step 4).
+- [x] **Step 6: Run the tests and see them pass** (same two commands as Step 4).
 
-- [ ] **Step 7: Docs.** In `docs/deploy/fly.md`, after the usage-backlog SQL block, add:
+- [x] **Step 7: Docs.** In `docs/deploy/fly.md`, after the usage-backlog SQL block, add:
   "`last_error` names the last failure and its HTTP status (`http_status 502`, `transport`,
   `unauthorized`; a miscounted receipt stores `decode`, and the counts are in the `error` log);
   the failure's text is logged only at `debug`."
 
-- [ ] **Step 8: Run every gate** (Global Constraints), recording pass counts per test binary and
+- [x] **Step 8: Run every gate** (Global Constraints), recording pass counts per test binary and
   `git rev-parse HEAD`.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
   ```
   fix(core): keep platform text out of usage error logs and the outbox

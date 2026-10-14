@@ -1,6 +1,6 @@
 # Usage shipping: no platform text above debug or in the outbox
 
-**Status:** APPROVED
+**Status:** IMPLEMENTED (#50)
 **Issue:** #44
 
 ## 1. Brief
