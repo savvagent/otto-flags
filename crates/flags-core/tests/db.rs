@@ -1267,6 +1267,7 @@ async fn audit_purge_only_reaches_deleted_orgs(pool: PgPool) {
     assert_eq!(audit_rows(&pool, org).await, rows);
     app_db.pool().close().await;
 }
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn old_rollback_events_are_swept(pool: PgPool) {
     let db = db(pool).await;

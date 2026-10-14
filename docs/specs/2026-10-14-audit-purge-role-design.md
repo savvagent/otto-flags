@@ -1,6 +1,6 @@
 # Audit-trail purge that works without an RLS-exempt pool role
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#39)
 **Issue:** #21
 
 ## 1. Brief
@@ -155,6 +155,13 @@ this only removes the dependency).
 -- function owned by the migrating role, so it works when the pool runs as
 -- otto_app (which has no DELETE on audit_events) and when the migrating role
 -- is not exempt from RLS.
+--
+-- The guard is the tombstone in deleted_orgs, which otto_app can write (the
+-- purge writes it before calling this). So SQL running as otto_app could
+-- tombstone a live org and then erase its trail. That needs arbitrary SQL, which
+-- inside a tenant transaction can already RESET ROLE to the pool's own role;
+-- the guard stops bugs, not injection, and a forged tombstone also locks the
+-- org out for good, which is not silent.
 
 SET LOCAL lock_timeout = '3s';
 

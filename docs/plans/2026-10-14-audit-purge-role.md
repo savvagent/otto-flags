@@ -56,7 +56,7 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
 - Modify: `crates/flags-core/tests/db.rs` (two new tests, after
   `org_deleted_purges_everything_and_revokes_keys`; use the existing `otto_app_db` helper)
 
-- [ ] **Step 1: Write the failing tests** in `crates/flags-core/tests/db.rs`, each with
+- [x] **Step 1: Write the failing tests** in `crates/flags-core/tests/db.rs`, each with
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`. In both, build the superuser `Db` with
   `db(pool.clone()).await` before `otto_app_db(&pool)` (as `due_policies_sees_every_org_as_otto_app`
   does), and check SQLSTATEs with the file's existing `sqlstate(&err)` helper:
@@ -81,10 +81,10 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
        before the rollback, so no savepoint is needed).
     Roll back the transaction; on the superuser pool the org's audit row count is unchanged. Close
     `app_db.pool()` before returning.
-- [ ] **Step 2: Run them, see them fail** (the first with `permission denied` from the purge, the
+- [x] **Step 2: Run them, see them fail** (the first with `permission denied` from the purge, the
   second because the function does not exist):
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/b406261e-e2cc-4fde-a8a9-63de98aae867/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- org_deleted_purges_the_audit_trail_as_otto_app audit_purge_only_reaches_deleted_orgs`
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - Create `crates/flags-core/migrations/0004_audit_purge.sql` with exactly the SQL in the spec's
     §8 (copy it, including its comments).
   - In `org_deleted` (`crates/flags-core/src/platform_events.rs`): remove the unpinned
@@ -94,11 +94,11 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
     and keep inserting that count as `deleted["audit_events"]`. Replace the old comment with one
     saying why: the trail is append-only to `otto_app`, so it goes through the migrating role's
     guarded function (#21), inside the purge transaction so it is removed atomically with the rest.
-- [ ] **Step 4: Run the new tests, then the whole `db` binary** (the purge, isolation, and sweep
+- [x] **Step 4: Run the new tests, then the whole `db` binary** (the purge, isolation, and sweep
   tests must stay green):
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/b406261e-e2cc-4fde-a8a9-63de98aae867/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
-- [ ] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
-- [ ] **Step 6: Commit** the three files with exactly this message (no trailers of any kind):
+- [x] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
+- [x] **Step 6: Commit** the three files with exactly this message (no trailers of any kind):
 
   ```
   fix(core): purge a deleted org's audit trail through a guarded function
