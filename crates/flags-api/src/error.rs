@@ -49,7 +49,9 @@ impl From<flags_core::Error> for ApiError {
             flags_core::Error::AccessRevoked => Self::unauthorized(),
             flags_core::Error::Invalid(m) => Self::bad_request(m),
             e if e.is_internal() => {
-                tracing::error!(error = %e, "SDK request failed");
+                let (reason, status) = e.failure_reason();
+                tracing::error!(code = e.code(), reason, status, "SDK request failed");
+                tracing::debug!(code = e.code(), reason, error = %e, "SDK request failed");
                 Self::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "temporarily_unavailable",
