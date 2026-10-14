@@ -130,7 +130,7 @@ No code path changes. The runbook section covers, in order:
      re-run the deploy. Recording `N` before `N+1` is deployable would let a restart boot the new
      code against a schema without `N`.
    - *A `success = false` row (`Dirty`)*: every release, old and new, refuses to boot; machines
-     already running keep serving only until they restart or resume from suspend. Confirm nothing of `N` is half applied, then Rob runs
+     already running keep serving only until they restart (resuming from suspend does not re-run migrations). Confirm nothing of `N` is half applied, then Rob runs
      `DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false;`.
 4. **Never:** edit, rename, delete, or renumber the failed file, or reuse its number (checksums,
    CI's `migrations-append-only`, the contiguity test, and databases that already applied it);

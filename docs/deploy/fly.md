@@ -146,7 +146,15 @@ fly status -a otto-flags            # is any machine still on the failed release
 ```
 
 Do not assume the deploy rolled back: check `fly status` for a machine left on the failed
-release.
+release. "The previous release keeps serving" holds only for machines Fly did not move to the
+new image. A machine left on it fails every boot, and with `min_machines_running = 0` the proxy
+may start it for a request; on a one-machine app that is an outage. Moving it back is a hand
+deploy, which is **Rob's**:
+
+```bash
+fly releases -a otto-flags --image   # the image of the last release that booted
+fly deploy -a otto-flags --image <that image ref>
+```
 
 Rob, in `fly postgres connect`:
 
@@ -174,7 +182,9 @@ stopped mid-boot): there is nothing to clear. Migrations that take strong locks 
 of queueing every query behind it. If one session keeps blocking, ending it
 (`SELECT pg_terminate_backend(<pid>);`, only for a pid on `otto_flags`) is Rob's call. Then re-run
 the deploy: re-run the `deploy` job of the **newest** CI run on `main`, since each run deploys
-its own commit and an older one would deploy older code:
+its own commit and an older one would deploy older code. An agent may do this: it is the same CI
+path as any push to `main`, not a hand `fly deploy`. Wait for that run to finish first
+(`gh run rerun --failed` refuses a run in progress):
 
 ```bash
 gh run list -R savvagent/otto-flags --workflow CI --branch main --event push --limit 1 \
@@ -196,10 +206,13 @@ two ways out.
    not. Use `IF EXISTS` / `IF NOT EXISTS` guards and data statements that are correct either way.
    Order matters:
    1. Merge the PR with `<N+1>`. Its deploy fails on `<N>` like the others.
-   2. Rob records `<N>` as applied:
+   2. `fly status` shows no machine on any release that contains `<N>` but not `<N+1>` (move one
+      back as above first). Once `<N>` is recorded, such a machine would boot cleanly, skip `<N>`,
+      and serve code that expects `<N>`'s schema.
+   3. Rob records `<N>` as applied:
 
       ```bash
-      git show origin/main:crates/flags-core/migrations/<NNNN>_<name>.sql | sha384sum
+      git fetch origin && git show origin/main:crates/flags-core/migrations/<NNNN>_<name>.sql | sha384sum
       ```
 
       ```sql
@@ -209,15 +222,15 @@ two ways out.
 
       sqlx compares only the version and the checksum (SHA-384 of the file's bytes, which
       `migration_checksums_are_the_sha384_of_their_files` pins); the description is cosmetic.
-   3. Re-run the newest deploy. It skips `<N>` and applies `<N+1>`.
+   4. Immediately re-run the newest deploy. It skips `<N>` and applies `<N+1>`.
 
-   Recording `<N>` before `<N+1>` is merged would let a restarting machine boot code that
-   expects `<N>`'s schema against a database without it.
+   Recording `<N>` before `<N+1>` is merged would let the failed release boot code that expects
+   `<N>`'s schema against a database without it.
 
 **A `success = false` row (`Dirty`)**: sqlx does not write one, but a hand-written row or another
 tool can. Every release, old and new, then refuses to boot with
 `migration <N> is partially applied`; machines already running keep serving only until they
-restart or resume from suspend. Confirm nothing of `<N>` is half applied (compare the schema
+restart (a resume from suspend continues the running process and does not migrate). Confirm nothing of `<N>` is half applied (compare the schema
 with the file), then Rob clears it, and the next boot runs `<N>` again:
 
 ```sql
