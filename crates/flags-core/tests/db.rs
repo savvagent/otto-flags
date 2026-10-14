@@ -52,6 +52,101 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     }
 }
 
+/// The usage outbox is drained by the background shipper across every org, so
+/// its baseline policy lets an unpinned transaction through. Unpinned alone is
+/// not enough (#68, as #27 for the retention tables): a request path that
+/// forgot to pin is unpinned too. Without the maintenance marker an unpinned
+/// `otto_app` transaction sees, changes, and adds nothing; with it, it sees
+/// every org's rows; pinned transactions still see only their own org.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn usage_outbox_tables_need_the_maintenance_marker_unpinned(pool: PgPool) {
+    let (a, b) = (OrgId::new(), OrgId::new());
+    for org in [a, b] {
+        sqlx::query(
+            "INSERT INTO usage_outbox (org_id, tool, billable) VALUES ($1, 'create_flag', true)",
+        )
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_outbox_rejected (event_id, org_id, tool, billable, occurred_at, reason) \
+             VALUES (gen_random_uuid(), $1, 'create_flag', true, now(), 'x')",
+        )
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    for table in ["usage_outbox", "usage_outbox_rejected"] {
+        // Unpinned, no marker: nothing visible, nothing changed.
+        let mut tx = as_app_unpinned(&pool).await;
+        let seen: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(seen, 0, "{table}: unpinned read without the marker");
+        let updated = sqlx::query(&format!("UPDATE {table} SET tool = 'x'"))
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(updated, 0, "{table}: unpinned update without the marker");
+        let deleted = sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap()
+            .rows_affected();
+        assert_eq!(deleted, 0, "{table}: unpinned delete without the marker");
+        tx.rollback().await.unwrap();
+
+        // Unpinned, no marker: an insert is refused.
+        let mut tx = as_app_unpinned(&pool).await;
+        let insert = if table == "usage_outbox" {
+            "INSERT INTO usage_outbox (org_id, tool, billable) VALUES ($1, 'create_flag', true)"
+        } else {
+            "INSERT INTO usage_outbox_rejected (event_id, org_id, tool, billable, occurred_at, reason) \
+             VALUES (gen_random_uuid(), $1, 'create_flag', true, now(), 'x')"
+        };
+        let err = sqlx::query(insert)
+            .bind(a)
+            .execute(&mut *tx)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            sqlstate(&err),
+            "42501",
+            "{table}: unpinned insert without the marker"
+        );
+        drop(tx);
+
+        // Unpinned with the marker: every org's rows.
+        let mut tx = as_app_maintenance(&pool).await;
+        let seen: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(seen, 2, "{table}: maintenance read");
+        tx.rollback().await.unwrap();
+
+        // Pinned: only the org's own rows, and its own insert succeeds.
+        let db = db(pool.clone()).await;
+        let mut tx = db.begin(a).await.unwrap();
+        let seen: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+        assert_eq!(seen, 1, "{table}: pinned read");
+        sqlx::query(insert)
+            .bind(a)
+            .execute(tx.conn())
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+    }
+}
+
 /// The SQLSTATE of a failed statement.
 fn sqlstate(err: &sqlx::Error) -> String {
     err.as_database_error()
