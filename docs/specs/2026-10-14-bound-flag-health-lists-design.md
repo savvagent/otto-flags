@@ -42,8 +42,9 @@ From #59 (found by the reviews of #58 (#47); the behaviour predates it):
 - **Bound the answer, not ingest** (the AC's first option). Recording only declared variation names
   would change what the SDK telemetry endpoint accepts (the SDK contract is additive-only), would
   need the flag's variations at ingest, and would misattribute evaluations from an SDK running
-  against a flag whose variations were just renamed. The storage side is already bounded: the
-  rollup row count is bounded by retention (90 days) and by the per-request batch size, as it was.
+  against a flag whose variations were just renamed. Storage growth is out of scope: ingest and
+  retention are unchanged, so rollup rows stay bounded only by the 90-day retention. This change
+  bounds what `health` reads and returns.
 - **20 variations shown**, the most a flag may declare (`eval::MAX_VARIATIONS`), so a flag's own
   variations all fit unless reported junk outnumbers them. Chosen by count, ties by name.
 - **100 raw groups fetched** for each list (`FETCHED_GROUPS`) before cleaning and merging. Raw names
@@ -55,14 +56,14 @@ From #59 (found by the reviews of #58 (#47); the behaviour predates it):
   "error reports raw and truncated" invariant.
 - A merged error group: `count` is the sum, `last_seen` the latest, `last_message` the message of
   the raw group with the latest `last_seen`. Order: count desc, then `last_seen` desc, then type, so
-  the answer is deterministic. 10 shown, as before.
+  the answer is deterministic; on before off breaks a last tie. 10 shown, as before.
 - `otherVariations` counts on-evaluations that reported a non-empty variation name not shown in
   `variations`: names beyond the top 20, names outside the fetched 100, and names that clean to
   nothing (already dropped from the map today). Evaluations with no variation are in neither, as
-  today. Computed as `named total - sum(shown)` from a totals query. The totals and the variations
-  query are two statements under READ COMMITTED, so an ingest landing between them can skew the
-  remainder by that batch; `max(0)` keeps it non-negative. Accepted: health is a reading of a live
-  window, not a ledger.
+  today. Computed as `named total - sum(shown)`, where the named total is a window sum
+  (`sum(sum(count)) OVER ()`) on the variations query itself, taken before its `LIMIT`, so it
+  comes from the same snapshot as the rows (review of #65; a separate totals statement could be
+  skewed by a batch landing between the two). `max(0)` stays as a guard.
 - Ties: the SQL `ORDER BY ..., variation` (database collation) only makes the fetch deterministic;
   what is shown is decided by the Rust sort (count desc, then byte order of the cleaned name).
 - Every Run Profile value was read from the Development Workflow section; none assumed.
@@ -72,7 +73,7 @@ From #59 (found by the reviews of #58 (#47); the behaviour predates it):
 What a client key reports can no longer size `flag_health`'s answer or split one error into
 several rows.
 
-- 50 distinct reported variation names produce at most 20 `variations` entries (the 20 most
+- 30 distinct reported variation names produce 20 `variations` entries (the 20 most
   evaluated), with every other named on-evaluation counted in `otherVariations`.
 - Error types differing only in characters `inert` replaces show as one `top_errors` row whose
   count is their sum.
@@ -94,8 +95,8 @@ several rows.
 - Constants: `SHOWN_VARIATIONS = crate::eval::MAX_VARIATIONS` (made `pub(crate)` in `eval.rs`),
   `SHOWN_ERRORS = 10`, `FETCHED_GROUPS: i64 = 100`.
 - Totals query replaces the per-variation loop's counting:
-  `SELECT coalesce(sum(count) FILTER (WHERE enabled), 0)::bigint, coalesce(sum(count) FILTER (WHERE NOT enabled), 0)::bigint, coalesce(sum(count) FILTER (WHERE enabled AND variation <> ''), 0)::bigint FROM flag_eval_hourly WHERE <same window/env filter>`.
-- Variations query: `SELECT variation, sum(count)::bigint FROM flag_eval_hourly WHERE <filter> AND enabled AND variation <> '' GROUP BY variation ORDER BY 2 DESC, variation LIMIT $5`.
+  `SELECT coalesce(sum(count) FILTER (WHERE enabled), 0)::bigint, coalesce(sum(count) FILTER (WHERE NOT enabled), 0)::bigint FROM flag_eval_hourly WHERE <same window/env filter>`.
+- Variations query: `SELECT variation, sum(count)::bigint, (sum(sum(count)) OVER ())::bigint FROM flag_eval_hourly WHERE <filter> AND enabled AND variation <> '' GROUP BY variation ORDER BY 2 DESC, variation LIMIT $5`; the named total is the third column of any row (0 when none).
 - Pure fn `top_variations(rows: Vec<(String, i64)>, named_total: i64) -> (BTreeMap<String, i64>, i64)`:
   clean each name with `inert(_, MAX_VARIATION)`, drop empties, merge alike, keep the
   `SHOWN_VARIATIONS` largest (count desc, name asc), return them and
@@ -149,12 +150,16 @@ None. The change is in server code and deploys with the merge. No recurring-cost
   merge-before-cap, empties, remainder) and `merge_error_groups` (merge sums counts, keeps the
   latest message and `last_seen`, keeps on/off apart, caps at 10, order).
 - `crates/flags-core/tests/db.rs`:
-  - `health_shows_at_most_twenty_variations`: 30 names with distinct counts (plus one
-    no-variation evaluation); `variations` holds the 20 most evaluated, `otherVariations` the rest,
+  - `health_shows_at_most_twenty_variations`: 30 names with distinct counts (plus two
+    no-variation evaluations); `variations` holds the 20 most evaluated, `otherVariations` the rest,
     `evaluations.enabled` the full total.
   - `health_merges_error_types_that_read_alike`: three spellings of `TypeError` that clean to the
     same text, 2 errors each, against eleven other types of 3 errors each. Unmerged, no spelling
     reaches the ten; merged, `TypeError` (6) ranks first as one row and nine of the eleven follow.
+  - `health_reads_a_bounded_number_of_variation_names` (added in review): 100 names evaluated
+    twice fill the fetch; 30 one-off spellings of `zz` past it would merge into a leading `zz` if
+    read. The answer shows 20 of the fetched names, no `zz`, and an exact remainder.
+  - The e2e `flag_health` call asserts `variations` and `otherVariations` under their wire names.
   - `health_shows_variation_names_cleaned` gains `otherVariations == 1` (the `"\u{200B}"` name).
 - Gates: test (under the shared DB-test lock), lint, format, extra, and the `crates/**` podman
   build.

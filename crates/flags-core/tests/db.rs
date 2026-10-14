@@ -1098,6 +1098,58 @@ async fn health_shows_at_most_twenty_variations(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+// The fetch behind the map is bounded too: past the 100 most evaluated names
+// the rest are not read, even when they would merge into one large name, and
+// they are still counted in other_variations (#59).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_reads_a_bounded_number_of_variation_names(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // 100 names evaluated twice fill the fetch. 30 spellings of "zz", once
+    // each, are past it: read, they would merge into "zz" (30) and lead.
+    let fetched = (0..100).flat_map(|i| [format!("a{i:03}"), format!("a{i:03}")]);
+    let past = (1..=30).map(|k| format!("zz{}", "\u{200B}".repeat(k)));
+    let events: Vec<EvalEvent> = fetched
+        .chain(past)
+        .map(|v| EvalEvent {
+            flag_key: "f".into(),
+            enabled: true,
+            variation: Some(v),
+            environment: "production".into(),
+            at: now,
+        })
+        .collect();
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, events)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.evaluations.enabled, 230);
+    let expected: BTreeMap<String, i64> = (0..20).map(|i| (format!("a{i:03}"), 2)).collect();
+    assert_eq!(h.variations, expected);
+    assert_eq!(h.other_variations, 230 - 40);
+    tx.commit().await.unwrap();
+}
+
 // Error types are grouped as they read after cleaning, so one error reported
 // under spellings that differ only in hidden characters is one row, and cannot
 // spread over the ten and push real errors out (#59).
