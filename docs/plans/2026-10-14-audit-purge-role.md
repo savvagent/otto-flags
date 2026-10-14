@@ -7,9 +7,11 @@
 `SECURITY DEFINER` function owned by the migrating role, inside the pinned purge transaction, so it
 works when the pool runs as `otto_app`, without `otto_app` gaining DELETE on `audit_events`.
 
-**Architecture:** New migration `0004_audit_purge.sql` (function, two marker-gated policies scoped
-to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the function on
-`tx.conn()` instead of the unpinned `DELETE`; two DB tests.
+**Architecture:** New migration `0004_audit_purge.sql`: a PL/pgSQL `SECURITY DEFINER` function
+that refuses an owner not exempt from RLS (`55000`) and any org but the pinned one (`42501`), and
+the EXECUTE grant to `otto_app`. `org_deleted` calls it on `tx.conn()` instead of the unpinned
+`DELETE`; three DB tests. (Task 1 as first planned also had marker-gated policies; Task 2 removed
+them.)
 
 **Tech Stack:** Rust (stable, MSRV 1.88), sqlx 0.8.6, Postgres 16.
 
@@ -36,11 +38,11 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
   `tenant_isolation_is_enforced_on_every_tenant_table` must stay green); no SQL outside flags-core,
   runtime `sqlx::query` only; webhook application stays idempotent.
 - Security details that must survive exactly as written in the spec's §8: `SECURITY DEFINER`,
-  `SET search_path = pg_catalog, public, pg_temp` (pg_temp last), `public.`-qualified table names in
-  the body and in the policy subqueries, `SET app.audit_purge = 'on'` on the function, both policies
-  `TO CURRENT_USER` and gated on the marker and on `public.deleted_orgs`, `REVOKE EXECUTE … FROM
-  PUBLIC`, `GRANT EXECUTE … TO otto_app` inside the `otto_app`-exists guard, and
-  `SET LOCAL lock_timeout = '3s'` first.
+  `SET search_path = pg_catalog, public, pg_temp` (pg_temp last), `public.`-qualified names in
+  the body, the owner-exemption check (`55000`), the pinned-org check (`42501`), the
+  `deleted_orgs` guard, `REVOKE EXECUTE … FROM PUBLIC`, and `GRANT EXECUTE … TO otto_app` inside
+  the `otto_app`-exists guard. (Task 1's original list also named the marker, the policies, and
+  `lock_timeout`; Task 2 removed those.)
 - Out-of-band: the migration applies at boot (agent-owned). Nothing human-only.
 - Commit format: `<type>(<scope>): <imperative, lower-case>`, body explains why and ends
   `Fixes #21`. No attribution of any kind (no Co-Authored-By, no "Generated with", no credit
@@ -136,4 +138,9 @@ configuration they were for, and no test could reach them. They were removed. In
 - [x] Rework `0004` and the spec to the design in spec §3 and §8.
 - [x] Tests as in spec §11; run the `db` binary, then every gate.
 - [x] Commit with a why-body ending `Refs #21`; no trailers.
+
+Review round 2 (still Task 2): the owner refusal got its own SQLSTATE (`55000`); the owner test
+runs in one rolled-back transaction so a failing run leaves no role; `docs/deploy/fly.md` records
+the owner precondition (#40 tracks a startup check); the migration header and spec §12 state that
+both guards can be set by the caller. #41 is a pre-existing gap the review found.
 
