@@ -1,6 +1,6 @@
 # MCP failure logging: the code at error level, the text only at debug
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#36)
 **Issue:** #29
 
 ## 1. Brief
@@ -54,7 +54,7 @@ From #29 (found reviewing #24; predates it):
   text, so they are safe above debug.
 - **One logging helper in `flags-mcp`.** `pub(crate) fn log_server_failure(what, code, (reason,
   status), detail: &dyn Display)` emits `tracing::error!(code, reason, status, "{what}")` then
-  `tracing::debug!(code, error = %detail, "{what}")`. `code` is the wire code, so logs and
+  `tracing::debug!(code, reason, error = %detail, "{what}")`. `code` is the wire code, so logs and
   responses share a search key. All four sites call it. The `what` messages are as before.
 - **`from_tenant` takes the error by value** (its one caller, `server.rs`, already owns it). It
   keeps its wire answer exactly (anything but `Invalid` becomes an opaque, non-retriable internal

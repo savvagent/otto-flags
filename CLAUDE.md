@@ -194,6 +194,8 @@ crate module docs.
 - Test placement: SQL and domain behavior in `crates/flags-core/tests/db.rs` with
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`; pure logic as unit tests beside the code;
   MCP, SDK API, and webhook behavior in `crates/flags-server/tests/e2e.rs` against its mock platform.
+  A test that captures `tracing` output gets its own `tests/` binary (callsite-interest caching;
+  see `crates/flags-mcp/tests/failure_logs.rs`).
 - Only the JS/TS packages have CI (`.github/workflows/sdks.yml`). The Go, Python, Java, Swift,
   Kotlin, and Rust SDKs have none; their local gates are under Gates.
 - `CONTRIBUTING.md` predates the server and covers only the SDKs: its `feature/` branch prefix,

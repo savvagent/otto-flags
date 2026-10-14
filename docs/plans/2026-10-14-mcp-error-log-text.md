@@ -40,6 +40,9 @@ one definition, and moves the log-capture test into its own binary.
 
 ### Task 1: Log MCP failures by code above debug
 
+> Shipped as written in cab0922, then reshaped by Task 2: `platform_code` and the
+> `(what, code, detail)` helper below were replaced by `flags-core`'s failure reasons.
+
 **Model:** sonnet
 
 **Files:**
@@ -48,7 +51,7 @@ one definition, and moves the log-capture test into its own binary.
 - Modify: `crates/flags-mcp/src/auth.rs` (lines ~244 and ~270)
 - `Cargo.lock` (the new dev-dependency rewrites `flags-mcp`'s entry; commit it)
 
-- [ ] **Step 1: Write the failing tests** in `crates/flags-mcp/src/error.rs` `mod tests`:
+- [x] **Step 1: Write the failing tests** in `crates/flags-mcp/src/error.rs` `mod tests`:
   - A capture helper: a `tracing_subscriber::fmt()` subscriber with `.with_ansi(false)`,
     `.with_max_level(tracing::Level::DEBUG)`, and a `MakeWriter` over an
     `Arc<Mutex<Vec<u8>>>`, installed with `tracing::subscriber::with_default` around a closure (thread-local on purpose:
@@ -66,9 +69,9 @@ one definition, and moves the log-capture test into its own binary.
     `reqwest::Error` and is not built in the test).
   - Also assert the wire is unchanged in the first test: `from_platform`'s `data.code` is still
     `platform_unavailable` and `from_core`'s Db message is unchanged (no `MARKER_`).
-- [ ] **Step 2: Run, see them fail to compile / fail:**
+- [x] **Step 2: Run, see them fail to compile / fail:**
   `cargo test -p flags-mcp --lib error::tests` (no DB needed for these unit tests)
-- [ ] **Step 3: Implement** in `error.rs`:
+- [x] **Step 3: Implement** in `error.rs`:
   - `pub(crate) fn platform_code(e: &otto_resource::Error) -> &'static str` with an exhaustive
     match (`Transport(_)` → `platform_transport`).
   - `pub(crate) fn log_server_failure(what: &'static str, code: &'static str, detail: &dyn std::fmt::Display)`:
@@ -85,15 +88,15 @@ one definition, and moves the log-capture test into its own binary.
   - `auth.rs:244`: `crate::error::log_server_failure("could not check the revocation tombstones", e.code(), &e)`.
     `auth.rs:270`: `crate::error::log_server_failure("token introspection failed", crate::error::platform_code(&e), &e)`.
     Confirm the module path (`crate::error`) and the error types by reading the file.
-- [ ] **Step 4: Run, see them pass:** `cargo test -p flags-mcp --lib error::tests`, then
+- [x] **Step 4: Run, see them pass:** `cargo test -p flags-mcp --lib error::tests`, then
   `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/flags-mcp/src` prints nothing.
-- [ ] **Step 5: Run every gate** and report pass counts per test binary:
+- [x] **Step 5: Run every gate** and report pass counts per test binary:
   - `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `cargo fmt --all -- --check`
   - `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints nothing)
   - `podman build -t otto-flags:check .`
-- [ ] **Step 6: Commit** `crates/flags-mcp/Cargo.toml`, `Cargo.lock`, `crates/flags-mcp/src/error.rs`,
+- [x] **Step 6: Commit** `crates/flags-mcp/Cargo.toml`, `Cargo.lock`, `crates/flags-mcp/src/error.rs`,
   `crates/flags-mcp/src/auth.rs` with exactly this message (no trailers of any kind):
 
   ```
@@ -132,12 +135,12 @@ after a507905 (comment-analyzer, architect).
 - Create: `crates/flags-mcp/tests/failure_logs.rs` (the capture test, alone in its binary)
 - Modify: the spec, and this plan
 
-- [ ] **Step 1:** Write `failure_reasons_name_the_kind_without_the_text` in flags-core and the
+- [x] **Step 1:** Write `failure_reasons_name_the_kind_without_the_text` in flags-core and the
   capture test in `tests/failure_logs.rs`; see them fail to compile.
-- [ ] **Step 2:** Implement as the spec's §3 and §6 describe.
-- [ ] **Step 3:** `cargo test -p flags-mcp` and `cargo test -p flags-core --lib` pass; run
+- [x] **Step 2:** Implement as the spec's §3 and §6 describe.
+- [x] **Step 3:** `cargo test -p flags-mcp` and `cargo test -p flags-core --lib` pass; run
   `cargo test -p flags-mcp` 60 times with no failure.
-- [ ] **Step 4:** Run every gate (Task 1, Step 5) and report pass counts per test binary.
-- [ ] **Step 5:** Commit `fix(core): name database and platform failures for logs without their
+- [x] **Step 4:** Run every gate (Task 1, Step 5) and report pass counts per test binary.
+- [x] **Step 5:** Commit `fix(core): name database and platform failures for logs without their
   text`, body ending `Fixes #29`; no trailers.
 
