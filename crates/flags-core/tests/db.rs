@@ -905,6 +905,17 @@ async fn error_batches_land_one_row_per_known_event(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!((environment, stack, enabled), (None, None, false));
+    let (environment, stack): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT environment, stack_trace FROM flag_errors WHERE flag_id = $1 AND error_message = 'first'",
+    )
+    .bind(f)
+    .fetch_one(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(
+        (environment.as_deref(), stack.as_deref()),
+        (Some("production"), Some("at main"))
+    );
 
     let (length, occurred_at): (i32, chrono::DateTime<Utc>) = sqlx::query_as(
         "SELECT length(error_message), occurred_at FROM flag_errors \
@@ -916,9 +927,11 @@ async fn error_batches_land_one_row_per_known_event(pool: PgPool) {
     .unwrap();
     assert_eq!(length, 2_000);
     // A future timestamp is stored as roughly now. Compare against Rust clocks:
-    // SQL now() is fixed at the transaction's start.
+    // SQL now() is fixed at the transaction's start. One microsecond of slack:
+    // Postgres keeps microseconds, chrono nanoseconds.
+    let slack = chrono::Duration::microseconds(1);
     assert!(
-        occurred_at >= now && occurred_at <= after,
+        occurred_at >= now - slack && occurred_at <= after,
         "{occurred_at} not in {now}..={after}"
     );
 
