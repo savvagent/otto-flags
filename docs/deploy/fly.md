@@ -108,19 +108,25 @@ under sqlx's advisory lock. This section is about a boot that stops there. A boo
 migrations and then logs `refusing to serve: …` is a different failure: the tenant-isolation
 proof or the audit purge check (see Infrastructure).
 
-Every production write below is **human-only (Rob)**: an agent stops at the read-only
-diagnostics and hands over the exact statement. Rob runs SQL through
-`fly postgres connect -a otto-db -d otto_flags`, which is interactive (it hangs when run
-non-interactively, so an agent cannot use it). Never practise these steps on production; the
-tests named below run them against a scratch database.
+**Agents diagnose; Rob acts.** Every database write, hand deploy, and deploy re-run below is
+**Rob's** (an agent runs a deploy re-run only when Rob asks): an agent stops at the read-only
+diagnostics and hands over the exact statement or command. Rob runs SQL as the attach role
+through `fly postgres connect -a otto-db -d otto_flags`, which is interactive (it hangs when run
+non-interactively, so an agent cannot use it). That role is a superuser on an instance that also
+hosts `otto_platform` and `otto_factory`, so every statement below is scoped to `otto_flags`.
+Never practise these steps on production; the tests named below run them against a scratch
+database.
 
 ### What a failure leaves behind
 
-sqlx runs each migration and its `_sqlx_migrations` row in one transaction (none of ours starts
-with `-- no-transaction`). A failure rolls back both, so:
+sqlx commits each migration together with its `_sqlx_migrations` row (`flags_core::MIGRATOR`
+has no `-- no-transaction` migration, and `no_migration_runs_outside_a_transaction` keeps it so).
+A failure rolls back that migration and its row, so:
 
-- **Nothing is recorded and nothing is half applied.** sqlx never writes a `success = false`
-  row on Postgres, so a real failure does not produce `Dirty`.
+- **The failed migration leaves nothing: no row, none of its changes.** sqlx never writes a
+  `success = false` row on Postgres, so a real failure does not produce `Dirty`. Earlier
+  migrations in the same boot committed on their own and stay applied; they are additive
+  (`CLAUDE.md` Invariants), so the previous release runs against them.
 - **The previous release boots normally.** It does not know the failed version and there is no
   row for it (`ignore_missing`, `crates/flags-core/src/migrate.rs`).
 - **The new release retries the migration from scratch on every boot** and fails the same way
@@ -135,7 +141,8 @@ The new machine's log shows `applying migrations`, then the process exits with
 `migrations failed`, whose cause chain includes
 `while executing migration <N>: error returned from database: <message>`. The log carries the
 database's message, not its SQLSTATE. The machine never binds a port, so `/readyz` fails and the
-deploy fails.
+deploy fails. Exiting also ends the session holding sqlx's advisory lock, which sqlx does not
+release itself after a failure.
 
 ### Diagnose (read-only)
 
@@ -145,11 +152,11 @@ fly releases -a otto-flags          # which release failed
 fly status -a otto-flags            # is any machine still on the failed release?
 ```
 
-Do not assume the deploy rolled back: check `fly status` for a machine left on the failed
-release. "The previous release keeps serving" holds only for machines Fly did not move to the
-new image. A machine left on it fails every boot, and with `min_machines_running = 0` the proxy
-may start it for a request; on a one-machine app that is an outage. Moving it back is a hand
-deploy, which is **Rob's**:
+Do not assume the deploy rolled back. "The previous release keeps serving" holds only for
+machines Fly did not move to the new image. A machine left on it fails every boot, and with
+`min_machines_running = 0` the proxy may start it for a request; on a one-machine app that is an
+outage. Moving it back is a hand deploy, **Rob's**, run from an up-to-date `main` checkout so
+`fly.toml` matches:
 
 ```bash
 fly releases -a otto-flags --image   # the image of the last release that booted
@@ -162,66 +169,89 @@ Rob, in `fly postgres connect`:
 SELECT version, description, success, encode(checksum, 'hex') AS checksum, installed_on
 FROM _sqlx_migrations ORDER BY version;
 
--- For a lock wait: open transactions on this database. otto-db also hosts otto_platform and
--- otto_factory; never touch their sessions.
-SELECT pid, usename, state, now() - xact_start AS xact_age, wait_event_type, left(query, 80)
-FROM pg_stat_activity
-WHERE datname = 'otto_flags' AND xact_start IS NOT NULL
-ORDER BY xact_start;
+-- For a lock wait: sessions on this database, who blocks whom, and who holds an advisory lock
+-- (sqlx's migration lock). Share pids, states, and ages, never query text: it can hold data.
+SELECT a.pid, a.usename, a.application_name, a.state, now() - a.xact_start AS xact_age,
+       a.wait_event_type, pg_blocking_pids(a.pid) AS blocked_by,
+       EXISTS (SELECT 1 FROM pg_locks l
+               WHERE l.pid = a.pid AND l.locktype = 'advisory' AND l.granted) AS holds_advisory
+FROM pg_stat_activity a
+WHERE a.datname = 'otto_flags' AND a.pid <> pg_backend_pid()
+ORDER BY a.xact_start NULLS LAST;
 ```
 
 After a real failure, `<N>` has no row and no row has `success = false`.
 
 ### Recover
 
-Match the cause from the log's message.
+Match the cause from the log's message. "Re-run the newest deploy" below means, for Rob (or an
+agent he asks), re-running the failed jobs of the **newest** CI run on `main`: each run deploys
+its own commit, so an older run would deploy older code. Wait for that run to finish first
+(`gh run rerun --failed` refuses a run in progress; it re-runs every failed job in the run, not
+only `deploy`):
+
+```bash
+gh run list -R savvagent/otto-flags --workflow CI --branch main --event push --limit 1 \
+  --json databaseId,headSha,status
+gh run rerun <databaseId> -R savvagent/otto-flags --failed
+```
 
 **A transient cause** (`canceling statement due to lock timeout`, a dropped connection, a machine
 stopped mid-boot): there is nothing to clear. Migrations that take strong locks set
 `SET LOCAL lock_timeout` (as `0002` and `0003` do) so a lock wait fails the boot quickly instead
-of queueing every query behind it. If one session keeps blocking, ending it
-(`SELECT pg_terminate_backend(<pid>);`, only for a pid on `otto_flags`) is Rob's call. Then re-run
-the deploy: re-run the `deploy` job of the **newest** CI run on `main`, since each run deploys
-its own commit and an older one would deploy older code. An agent may do this: it is the same CI
-path as any push to `main`, not a hand `fly deploy`. Wait for that run to finish first
-(`gh run rerun --failed` refuses a run in progress):
+of queueing every query behind it. If one session keeps blocking, ending it is Rob's call, scoped
+so a mistyped pid cannot reach another database (no row returned means it was not on
+`otto_flags`):
 
-```bash
-gh run list -R savvagent/otto-flags --workflow CI --branch main --event push --limit 1 \
-  --json databaseId,headSha
-gh run rerun <databaseId> -R savvagent/otto-flags --failed
+```sql
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+WHERE pid = <pid> AND datname = 'otto_flags' AND pid <> pg_backend_pid();
 ```
+
+Then re-run the newest deploy.
 
 **The SQL fails on production data** (a constraint the rows violate, a duplicate; messages such as
 `violates check constraint`, `violates not-null constraint`, `could not create unique index`):
 two ways out.
 
 1. *Preferred: fix the data so `<N>` applies as written.* The fix PR's author writes the
-   statement and the SELECT that shows the offending rows; Rob runs them in a transaction
-   (`BEGIN; …; COMMIT;`). Then re-run the newest deploy. Every database then has the same
-   history.
+   statement, scoped by primary key or `org_id`, with the SELECT that shows the offending rows
+   and the expected row count. Rob runs it in a transaction (`BEGIN; …;`), compares the
+   `UPDATE n` / `DELETE n` tag with the expected count, and only then `COMMIT;` (else
+   `ROLLBACK;`). As the superuser attach role the statement bypasses RLS and the flag-change path:
+   a fix that changes flag state must also write its `flag_versions` row and
+   `pg_notify('flag_changes', …)`, or be made through the MCP tools instead. Then re-run the
+   newest deploy. Every database then has the same history.
 2. *When `<N>` must never run as written:* record `<N>` as applied without running it, and ship
    the corrected change as the next migration, `<N+1>`. `<N+1>` must converge both states:
    databases where `<N>` did run (CI, local, any fresh database) and production, where it did
-   not. Use `IF EXISTS` / `IF NOT EXISTS` guards and data statements that are correct either way.
-   Order matters:
+   not. Use `IF EXISTS` / `IF NOT EXISTS` guards and data statements that are correct either way,
+   and say in the PR that `<N>` is recorded, not run, in production. Order matters:
    1. Merge the PR with `<N+1>`. Its deploy fails on `<N>` like the others.
    2. `fly status` shows no machine on any release that contains `<N>` but not `<N+1>` (move one
       back as above first). Once `<N>` is recorded, such a machine would boot cleanly, skip `<N>`,
       and serve code that expects `<N>`'s schema.
-   3. Rob records `<N>` as applied:
+   3. Rob records `<N>` as applied, with the checksum of the file at the merge commit of the
+      `<N+1>` PR (what the image embeds):
 
       ```bash
-      git fetch origin && git show origin/main:crates/flags-core/migrations/<NNNN>_<name>.sql | sha384sum
+      git fetch origin
+      git show <merge sha>:crates/flags-core/migrations/<NNNN>_<name>.sql | sha384sum | cut -d' ' -f1
       ```
 
       ```sql
+      BEGIN;
       INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
-      VALUES (<N>, '<name with _ as spaces>', true, decode('<sha384sum hex>', 'hex'), -1);
+      VALUES (<N>, '<name with _ as spaces>', true, decode('<hex>', 'hex'), -1)
+      RETURNING version, encode(checksum, 'hex');
+      -- The returned hex must equal the sha384sum output; else ROLLBACK;
+      COMMIT;
       ```
 
       sqlx compares only the version and the checksum (SHA-384 of the file's bytes, which
-      `migration_checksums_are_the_sha384_of_their_files` pins); the description is cosmetic.
+      `migration_checksums_are_the_sha384_of_their_files` pins); the description is cosmetic. A
+      wrong checksum makes every release that knows `<N>` refuse with `VersionMismatch`; the undo
+      is `DELETE FROM _sqlx_migrations WHERE version = <N> AND success = true;`.
    4. Immediately re-run the newest deploy. It skips `<N>` and applies `<N+1>`.
 
    Recording `<N>` before `<N+1>` is merged would let the failed release boot code that expects
@@ -229,12 +259,12 @@ two ways out.
 
 **A `success = false` row (`Dirty`)**: sqlx does not write one, but a hand-written row or another
 tool can. Every release, old and new, then refuses to boot with
-`migration <N> is partially applied`; machines already running keep serving only until they
-restart (a resume from suspend continues the running process and does not migrate). Confirm nothing of `<N>` is half applied (compare the schema
-with the file), then Rob clears it, and the next boot runs `<N>` again:
+`migration <N> is partially applied`. Machines already running keep serving until they restart
+(resuming from suspend does not re-run migrations). Confirm nothing of `<N>` is half applied
+(compare the schema with the file), then Rob clears it, and the next boot runs `<N>` again:
 
 ```sql
-DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false;
+DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false RETURNING version;
 ```
 
 `a_failed_unknown_migration_still_refuses_to_boot` pins both the refusal and the statement.
@@ -252,10 +282,9 @@ DELETE FROM _sqlx_migrations WHERE version = <N> AND success = false;
   Infrastructure.
 - **Boot the new release with `FLAGS_RUN_MIGRATIONS=false`** against a schema without `<N>`: its
   code expects `<N>`'s schema.
-
-A `-- no-transaction` migration (none exists yet) would differ: a failure part-way leaves its
-earlier statements applied and no row, and the next boot re-runs it from the top, so such a
-migration must be safe to re-run.
+- **Add a `-- no-transaction` migration** without revisiting this section: sqlx runs one
+  outside any transaction it opens and records its row separately, so "leaves nothing" no longer
+  holds (`no_migration_runs_outside_a_transaction` refuses one until then).
 
 ### Afterwards
 

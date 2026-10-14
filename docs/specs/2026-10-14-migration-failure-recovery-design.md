@@ -59,7 +59,8 @@ Read against sqlx 0.8.6 (`Cargo.lock`), `sqlx-postgres/src/migrate.rs` and
 - **Re-running the CI `deploy` job of the newest `main` CI run** (`gh run rerun <id> --failed`) is
   the retry path. The `deploy` job deploys its own run's SHA, so re-running an older run would
   deploy an older commit; every later push failed the same way, so the newest run is the one to
-  re-run. It is the same path as every push to `main`, not a hand `fly deploy`, which stays Rob's.
+  re-run. It runs migrations (DDL) against production, so after review it is **Rob's call**, run
+  by an agent only when he asks, like a hand `fly deploy`; `CLAUDE.md` Out-of-band says so.
 - **The description column is cosmetic:** sqlx validates only version and checksum
   (`validate_applied_migrations` and the checksum compare in `run_direct`). The runbook still
   gives the value sqlx would write (the file name without version and `.sql`, `_` as spaces).
@@ -165,7 +166,8 @@ Tests in `crates/flags-core/tests/db.rs` (`#[sqlx::test(migrator = "flags_core::
 - **Append-only migrations / rollback compatibility:** no migration added or changed. The runbook
   restates both rules and never proposes an edit.
 - **Human-only:** every production write in the runbook (data fix, `INSERT`, `DELETE`,
-  `pg_terminate_backend`) names Rob; agents get read-only diagnostics only.
+  `pg_terminate_backend`, a hand deploy, and re-running a deploy) names Rob; agents get read-only
+  diagnostics only, and re-run a deploy only when Rob asks.
 - **No SQL outside flags-core:** the new SQL is in `flags-core`'s tests.
 - Tenant isolation, MCP auth, metering, SDK contract: untouched.
 
@@ -179,9 +181,9 @@ None. The change is docs and tests; the deploy redeploys unchanged server code.
 
 ## 10. Error handling and edge cases
 
-- A `-- no-transaction` migration (none exists) that fails part-way leaves its earlier statements
-  applied and no row; the next boot re-runs it from the top, so such a migration must be
-  idempotent. One sentence in the runbook.
+- A `-- no-transaction` migration (none exists) runs outside any sqlx transaction with its row
+  recorded separately, so the runbook's guarantees would not hold; after review,
+  `no_migration_runs_outside_a_transaction` refuses one and the runbook's Never list says why.
 - Two machines booting at once: the advisory lock serializes them; the loser waits, then sees the
   same failure. Nothing extra to clear.
 - A machine killed after commit but before the `execution_time` update leaves a `success = true`
@@ -195,7 +197,9 @@ gates do not apply. DB tests run once, serialized (no other worktree runs them).
 
 ## 12. Risks and open questions
 
-- The runbook describes Fly's rollback behavior as `CLAUDE.md` does; it is not re-tested here
-  (that would need a failing production deploy).
+- Whether Fly rolls a failed deploy back is not re-tested here (that would need a failing
+  production deploy). After review, the runbook and `CLAUDE.md` Ship > verify both say not to
+  assume it: `fly status` must show no machine left on the failed release, and moving one back
+  is Rob's hand deploy.
 - `fly postgres connect` is the only documented production SQL path and is interactive; giving
   agents a read-only non-interactive path is a separate concern, not this issue.
