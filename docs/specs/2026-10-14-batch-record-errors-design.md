@@ -42,9 +42,10 @@ inside the request's transaction.
 - **Empty batch:** when no event names a known flag, no statement runs (as `record_evaluations`).
 - **Row order:** `INSERT … SELECT … FROM UNNEST(…)` assigns `id`s in array order in practice; nothing
   reads `flag_errors` by `id`, so order is not relied on. `received_at` keeps its column default.
-- **Statement size:** a full batch at every field's cap is about 1000 × ~10 KB ≈ 10 MB of bound
-  text in one statement, the same bytes the loop sent across 1000 statements. The API already
-  bounds the request body; no new bound is needed.
+- **Statement size:** the request body is bounded by axum's default 2 MB `DefaultBodyLimit` (no
+  route in `flags-api` or `flags-server` raises or disables it), so one batch's bound text is at
+  most about 2 MB, the same bytes the loop sent across up to 1000 statements. No new bound is
+  needed.
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
@@ -126,4 +127,4 @@ production; `flag_health` (a read) is.
 
 ## 12. Risks and open questions
 
-- None beyond §3's statement size, which is unchanged in total bytes.
+- None beyond §3's statement size, which is unchanged in total bytes and bounded by the body limit.
