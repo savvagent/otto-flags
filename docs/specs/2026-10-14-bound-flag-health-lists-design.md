@@ -59,7 +59,12 @@ From #59 (found by the reviews of #58 (#47); the behaviour predates it):
 - `otherVariations` counts on-evaluations that reported a non-empty variation name not shown in
   `variations`: names beyond the top 20, names outside the fetched 100, and names that clean to
   nothing (already dropped from the map today). Evaluations with no variation are in neither, as
-  today. Computed exactly, as `named total - sum(shown)`, from a totals query.
+  today. Computed as `named total - sum(shown)` from a totals query. The totals and the variations
+  query are two statements under READ COMMITTED, so an ingest landing between them can skew the
+  remainder by that batch; `max(0)` keeps it non-negative. Accepted: health is a reading of a live
+  window, not a ledger.
+- Ties: the SQL `ORDER BY ..., variation` (database collation) only makes the fetch deterministic;
+  what is shown is decided by the Rust sort (count desc, then byte order of the cleaned name).
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
@@ -125,7 +130,7 @@ None.
 
 ## 9. Out-of-band
 
-None. The change is in server code and deploys with the merge.
+None. The change is in server code and deploys with the merge. No recurring-cost impact.
 
 ## 10. Error handling and edge cases
 
@@ -147,9 +152,9 @@ None. The change is in server code and deploys with the merge.
   - `health_shows_at_most_twenty_variations`: 30 names with distinct counts (plus one
     no-variation evaluation); `variations` holds the 20 most evaluated, `otherVariations` the rest,
     `evaluations.enabled` the full total.
-  - `health_merges_error_types_that_read_alike`: `"TypeError"`, `"Type\u{200B}Error"`… (spellings
-    that clean to the same text), plus eleven other types; one `top_errors` row with the summed
-    count, and the real types are not pushed out.
+  - `health_merges_error_types_that_read_alike`: three spellings of `TypeError` that clean to the
+    same text, 2 errors each, against eleven other types of 3 errors each. Unmerged, no spelling
+    reaches the ten; merged, `TypeError` (6) ranks first as one row and nine of the eleven follow.
   - `health_shows_variation_names_cleaned` gains `otherVariations == 1` (the `"\u{200B}"` name).
 - Gates: test (under the shared DB-test lock), lint, format, extra, and the `crates/**` podman
   build.
