@@ -244,6 +244,8 @@ pub fn platform_failure_reason(e: &otto_resource::Error) -> Failure {
 
 /// The connect/timeout/other sub-kind of a platform transport failure, from
 /// the transport error's own predicates (no text), `None` for any other variant.
+/// The platform client sets only a total request timeout, so a connect that
+/// hangs until it fires is `timeout`; `connect` is a refusal, DNS, or TLS failure.
 fn transport_kind(e: &otto_resource::Error) -> Option<&'static str> {
     match e {
         otto_resource::Error::Transport(t) => Some(if t.is_connect() {
@@ -529,6 +531,8 @@ mod tests {
             "40 01",
             "4000-",
             "4000\u{e9}",
+            // Five bytes, one of them not ASCII: rejected by the byte check.
+            "400\u{e9}",
         ] {
             assert!(Sqlstate::parse(bad).is_none(), "{bad:?}");
         }

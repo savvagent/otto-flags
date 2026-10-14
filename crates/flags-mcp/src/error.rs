@@ -10,8 +10,8 @@
 //!   the next action.
 //! - Server-side failures (database, platform) never put their own text on the
 //!   wire: it can carry schema details and is no use to an agent anyway. Logs
-//!   follow the same rule: the failure's code and reason at error, its text
-//!   only at debug.
+//!   follow the same rule: the failure's code and text-free fields (reason,
+//!   status, sqlstate, transport) at error, its text only at debug.
 
 use flags_core::error::Failure;
 use flags_core::Error;

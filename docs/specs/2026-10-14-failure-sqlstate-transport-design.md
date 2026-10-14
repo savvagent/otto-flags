@@ -62,9 +62,11 @@ From #43 (found reviewing #42 / #35):
   event carries the same fields as the line above it, plus the text it already carries (this adds
   `status` to the MCP helper's debug line, which omits it today).
 - **Transport sub-kind order:** `reqwest::Error::is_connect()` → `connect` (connection refused,
-  DNS, TLS handshake, and a connect timeout, which is a connect-phase failure); else
-  `is_timeout()` → `timeout` (the request timeout fired after connecting); else `other`. Both are
-  boolean predicates; no text is read.
+  DNS, TLS handshake); else `is_timeout()` → `timeout`; else `other`. Both are boolean
+  predicates; no text is read. `otto-resource` sets only a total request timeout (no
+  `connect_timeout`), so a connect that hangs until that timeout (a blackholed platform) is
+  reported by reqwest as a request timeout and logs `timeout`, not `connect`: `timeout` means "no
+  answer in time", whether or not the connection opened.
 - **57 and 25 names** (Postgres condition names, appendix A of the Postgres docs): `57P01`
   `admin_shutdown`, `57P02` `crash_shutdown`, `57P03` `cannot_connect_now`, any other `57xxx`
   (except `57014`, which stays `query_canceled`) `operator_intervention`; `25006`
@@ -185,7 +187,8 @@ None. No config key, secret, scope, or registration.
   (`database_error` or the matched name), no `sqlstate` field.
 - `Error::Tenant(otto_tenant::Error::Db(e))` gets the same `sqlstate` as `Error::Db(e)`.
 - A non-DB, non-platform `flags_core::Error`: `Failure::reason(self.code())`.
-- A reqwest error that is both connect and timeout: `connect`.
+- A reqwest error that is both connect and timeout (an OS-level connect timeout): `connect`. A
+  hang that the client's total timeout cuts off logs `timeout` (see Assumptions).
 
 ## 11. Testing approach
 
