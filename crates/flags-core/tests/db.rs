@@ -1295,42 +1295,32 @@ async fn audit_purge_only_reaches_deleted_orgs(pool: PgPool) {
 }
 
 /// An owner subject to row-level security would see no audit rows and purge
-/// nothing in silence, so the function refuses to run for one (#21).
+/// nothing in silence, so the function refuses to run for one (#21). All in
+/// one transaction that is rolled back: `CREATE ROLE` is transactional, so a
+/// failing run leaves no cluster-wide role behind.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn audit_purge_refuses_an_owner_subject_to_rls(pool: PgPool) {
-    let db = db(pool.clone()).await;
     let org = OrgId::new();
-    // Roles are cluster-wide: a unique name, dropped before returning.
     let role = format!("purge_owner_{}", uuid::Uuid::new_v4().simple());
-    let owner: String = sqlx::query_scalar("SELECT current_user::text")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
     for statement in [
         format!("CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS"),
         format!("ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO {role}"),
     ] {
-        sqlx::query(&statement).execute(&pool).await.unwrap();
+        sqlx::query(&statement).execute(&mut *tx).await.unwrap();
     }
-
-    let mut tx = db.begin(org).await.unwrap();
+    sqlx::query("SELECT set_config('app.org_id', $1, true)")
+        .bind(org.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     let err = sqlx::query_scalar::<_, i64>("SELECT purge_deleted_org_audit($1)")
         .bind(org)
-        .fetch_one(tx.conn())
+        .fetch_one(&mut *tx)
         .await
         .unwrap_err();
-    assert!(
-        err.to_string().contains("exempt from row-level security"),
-        "{err}"
-    );
+    assert_eq!(sqlstate(&err), "55000", "{err}");
     tx.rollback().await.unwrap();
-
-    for statement in [
-        format!("ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO \"{owner}\""),
-        format!("DROP ROLE {role}"),
-    ] {
-        sqlx::query(&statement).execute(&pool).await.unwrap();
-    }
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]

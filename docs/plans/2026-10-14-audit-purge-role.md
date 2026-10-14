@@ -21,9 +21,9 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
 
 - Worktree only (`/home/robhicks/dev/otto-flags/.claude/worktrees/fix-21-audit-purge-role`);
   `main` changes only through the PR.
-- Gates (from `CLAUDE.md` > Gates), from the worktree root. Another worktree shares the local
-  Postgres, so every DB test run takes the run's lock:
-  - test: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/b406261e-e2cc-4fde-a8a9-63de98aae867/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
+- Gates (from `CLAUDE.md` > Gates), from the worktree root. Another worktree shared the local
+  Postgres, so DB test runs were serialized (see `CLAUDE.md` > Worktree):
+  - test: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
   - lint: `cargo clippy --workspace --all-targets -- -D warnings`
   - format: `cargo fmt --all -- --check`
   - extra: `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` prints nothing (`0004` is an addition, status `A`, which this filter does not print)
@@ -47,6 +47,9 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
   markers).
 
 ### Task 1: Purge the audit trail through an owned, guarded function
+
+> Shipped, then reworked by Task 2: the marker, the `TO CURRENT_USER` policies, `lock_timeout`, and
+> the marker test below were removed in review. Spec §3 and §8 describe what shipped.
 
 **Model:** sonnet
 
@@ -83,7 +86,7 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
     `app_db.pool()` before returning.
 - [x] **Step 2: Run them, see them fail** (the first with `permission denied` from the purge, the
   second because the function does not exist):
-  `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/b406261e-e2cc-4fde-a8a9-63de98aae867/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- org_deleted_purges_the_audit_trail_as_otto_app audit_purge_only_reaches_deleted_orgs`
+  `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- org_deleted_purges_the_audit_trail_as_otto_app audit_purge_only_reaches_deleted_orgs`
 - [x] **Step 3: Implement.**
   - Create `crates/flags-core/migrations/0004_audit_purge.sql` with exactly the SQL in the spec's
     §8 (copy it, including its comments).
@@ -96,7 +99,7 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
     guarded function (#21), inside the purge transaction so it is removed atomically with the rest.
 - [x] **Step 4: Run the new tests, then the whole `db` binary** (the purge, isolation, and sweep
   tests must stay green):
-  `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/b406261e-e2cc-4fde-a8a9-63de98aae867/scratchpad/dbtest.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
+  `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
 - [x] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
 - [x] **Step 6: Commit** the three files with exactly this message (no trailers of any kind):
 

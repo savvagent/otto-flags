@@ -9,12 +9,13 @@
 -- would see no rows and purge nothing. The function refuses to run then, so
 -- the delivery fails and is retried visibly instead.
 --
--- The guard is the tombstone in deleted_orgs, which otto_app can write (the
--- purge writes it first), and the pinned org. So SQL running as otto_app could
--- tombstone its own pinned org and erase that trail. That needs arbitrary SQL,
--- which inside a tenant transaction can already RESET ROLE to the pool's own
--- role; the guard stops bugs, not injection, and a forged tombstone also locks
--- the org out for good, which is not silent.
+-- The guards are the tombstone in deleted_orgs and the pinned org, and both
+-- can be set by the caller: otto_app can write deleted_orgs (the purge writes
+-- it first) and app.org_id. So SQL running as otto_app could tombstone any org
+-- and erase its trail. That needs arbitrary SQL, which inside a tenant
+-- transaction can already RESET ROLE to the pool's own role; the guards stop
+-- bugs, not injection, and a forged tombstone also locks the org out for good,
+-- which is not silent.
 
 CREATE FUNCTION purge_deleted_org_audit(purge_org uuid) RETURNS bigint
 LANGUAGE plpgsql SECURITY DEFINER
@@ -27,7 +28,8 @@ DECLARE
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles
                   WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN
-    RAISE EXCEPTION 'purge_deleted_org_audit needs an owner exempt from row-level security';
+    RAISE EXCEPTION 'purge_deleted_org_audit needs an owner exempt from row-level security'
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
   IF purge_org IS DISTINCT FROM public.current_org() THEN
     RAISE EXCEPTION 'purge_deleted_org_audit only purges the org the transaction is pinned to'
