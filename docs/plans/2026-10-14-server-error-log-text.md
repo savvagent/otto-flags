@@ -120,7 +120,7 @@ Expected: compile error, no method `failure_reason` on `ShipError`.
   - final flush (~394): same pattern with `e.failure_reason()`.
   - `notify.rs`: connect failure (~95), LISTEN failure (~103), recv failure (~117): `warn!(reason =
     crate::error::db_failure_reason(&e), "<same message>")` then `debug!(reason = …, error = %e,
-    "<same message>")`. Bad payload (~114): `warn!(reason = "decode", "unreadable flag-change
+    "<same message>")`. Bad payload (~114), a `serde_json::Error`, not a database error: `warn!(reason = "decode", "unreadable flag-change
     notification")` then `debug!(reason = "decode", error = %e, …)`; turn the one-expression match
     arm into a block.
 
@@ -154,6 +154,8 @@ existing e2e tests in `crates/flags-server/tests/e2e.rs` pin them.
 **Model:** sonnet.
 
 - [ ] **Step 1: Write the failing tests**
+  - First add the dev-dependencies to `crates/flags-api/Cargo.toml` (`tracing-subscriber.workspace
+    = true`, `sqlx.workspace = true`), so the test compiles and fails for the right reason.
   - `crates/flags-api/tests/failure_logs.rs`, modeled on `crates/flags-mcp/tests/failure_logs.rs`
     (copy its `Capture` writer and `capture` helper; module doc: SDK request failures are logged
     by code and reason at error, text only at debug (#35); own binary for the callsite-interest
@@ -170,8 +172,8 @@ existing e2e tests in `crates/flags-server/tests/e2e.rs` pin them.
 
 - [ ] **Step 2: Run and see them fail**
 
-Run: `cargo test -p flags-api --test failure_logs` (marker found at ERROR) and
-`cargo test -p flags-api --lib rejection_reasons` (no function `rejection_reason`).
+Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-api --test failure_logs` (marker found at ERROR) and
+`DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-api --lib rejection_reasons` (no function `rejection_reason`).
 
 - [ ] **Step 3: Implement**
   - `error.rs`: in the `e if e.is_internal()` arm, `let (reason, status) = e.failure_reason();`
@@ -185,7 +187,7 @@ Run: `cargo test -p flags-api --test failure_logs` (marker found at ERROR) and
     e.failure_reason();` `error!(code = e.code(), reason, status, event_id = %event.id, "could not
     apply a platform event")` then `debug!(code = e.code(), reason, event_id = %event.id, error =
     %e, …)`. Responses unchanged.
-  - `Cargo.toml` dev-dependencies; let cargo update `Cargo.lock`.
+  - Commit the `Cargo.lock` update cargo made in Step 1.
 
 - [ ] **Step 4: Run and see them pass**
 
@@ -225,8 +227,8 @@ the webhook's bad-body text is serde's and can quote the body. Ends `Refs #35`.
     flags_core::error::platform_failure_reason(&e);` `warn!(platform = %config.platform_url, reason,
     status, "could not reach the otto platform at startup; continuing")` then `debug!(…, error = %e, …)`.
   - `health.rs` (~65): `let reason = flags_core::error::db_failure_reason(&e);` `warn!(reason,
-    "readiness check failed")` then `debug!(reason, error = %e, …)`. Add `flags-core` to
-    flags-server's `[dependencies]` only if it is not already there (check `Cargo.toml` first).
+    "readiness check failed")` then `debug!(reason, error = %e, …)`. (`flags-core` is already a
+    flags-server dependency.)
 
 - [ ] **Step 2: Run the gates**
 
@@ -240,9 +242,9 @@ Task 1's. Ends `Refs #35`.
 
 ---
 
-### Task 4: Cross-crate check
+### Task 4: Cross-crate check and full gates
 
-**Model:** haiku — runs commands, no edits unless a site was missed.
+**Model:** run by the orchestrator — commands only, no edits unless a site was missed.
 
 - [ ] **Step 1:** `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/` prints nothing.
 - [ ] **Step 2:** the span-aware check (spec §4) prints only `crates/flags-core/src/usage.rs`'s
@@ -254,3 +256,8 @@ find crates -name '*.rs' -print0 | xargs -0 perl -0ne 'while (/tracing::(error|w
 
 - [ ] **Step 3:** If any step finds a site, fix it in the owning crate with the same pattern and
   commit `fix(<scope>): …` ending `Refs #35`; otherwise no commit.
+- [ ] **Step 4: Full gate run** on the final head, reporting pass counts per test binary:
+  `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
+  `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints
+  nothing), and `podman build -t otto-flags:check .`.
