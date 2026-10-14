@@ -51,6 +51,9 @@ pub fn is_billable(tool: &str) -> bool {
 const QUOTA_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const FAIL_OPEN_FOR: Duration = Duration::from_secs(5);
 pub const WARN_AT: f64 = 0.8;
+/// The platform's rejection reason is its text, kept for operators: this many
+/// characters are enough to read it, and bound the column.
+const MAX_REJECTED_REASON: usize = 500;
 
 #[derive(Clone)]
 pub struct Meter {
@@ -335,10 +338,12 @@ pub async fn ship_once(
     let mut tx = db.pool().begin().await?;
     for r in &receipt.rejected {
         // The platform's reason is its text, not ours: debug only, and kept in
-        // usage_outbox_rejected for operators (#44).
+        // usage_outbox_rejected for operators (#44), capped and with NUL
+        // replaced so it is bounded and cannot fail the batch (#51).
+        let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
-        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?r.reason,
+        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?reason,
             "the platform refused a usage event; moving it to usage_outbox_rejected");
         sqlx::query(
             "INSERT INTO usage_outbox_rejected \
@@ -347,7 +352,7 @@ pub async fn ship_once(
              FROM usage_outbox WHERE event_id = $1",
         )
         .bind(r.event_id)
-        .bind(&r.reason)
+        .bind(&reason)
         .execute(&mut *tx)
         .await?;
     }
