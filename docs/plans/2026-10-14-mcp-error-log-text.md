@@ -44,7 +44,7 @@ text only at `debug`; tool and HTTP responses are unchanged.
 - Modify: `crates/flags-mcp/Cargo.toml` (`[dev-dependencies]`: `tracing-subscriber.workspace = true`)
 - Modify: `crates/flags-mcp/src/error.rs`
 - Modify: `crates/flags-mcp/src/auth.rs` (lines ~244 and ~270)
-- `Cargo.lock` only if cargo rewrites it
+- `Cargo.lock` (the new dev-dependency rewrites `flags-mcp`'s entry; commit it)
 
 - [ ] **Step 1: Write the failing tests** in `crates/flags-mcp/src/error.rs` `mod tests`:
   - A capture helper: a `tracing_subscriber::fmt()` subscriber with `.with_ansi(false)`,
@@ -55,8 +55,8 @@ text only at `debug`; tool and HTTP responses are unchanged.
   - `server_failures_log_the_code_above_debug_and_the_text_only_at_debug`: inside the capture, call
     `from_core(&Error::Db(sqlx::Error::Protocol("MARKER_DB relation secret".into())))` and
     `from_platform(&otto_resource::Error::Status { status: 503, body: "MARKER_PLATFORM".into() })`.
-    Assert: lines containing ` ERROR ` include `code=internal_error` and
-    `code=platform_http_status`, and no line containing ` ERROR ` contains `MARKER_`; lines
+    Assert: lines containing ` ERROR ` include `code="internal_error"` and
+    `code="platform_http_status"` (tracing-subscriber 0.3 prints `&str` fields quoted), and no line containing ` ERROR ` contains `MARKER_`; lines
     containing ` DEBUG ` contain `MARKER_DB` and `MARKER_PLATFORM`.
   - `platform_codes_name_the_failure_kind`: `platform_code` returns `platform_unauthorized`,
     `platform_not_found`, `platform_http_status`, `platform_decode`, `platform_invalid_url` for
@@ -85,9 +85,25 @@ text only at `debug`; tool and HTTP responses are unchanged.
     Confirm the module path (`crate::error`) and the error types by reading the file.
 - [ ] **Step 4: Run, see them pass:** `cargo test -p flags-mcp --lib error::tests`, then
   `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/flags-mcp/src` prints nothing.
-- [ ] **Step 5: Run the gates** (test with `DATABASE_URL`, lint, format) and report pass counts per
-  test binary.
-- [ ] **Step 6: Commit:**
-  `fix(mcp): log server-side failures by code, text only at debug` with a body explaining that
-  database and platform text could carry schema details and platform bodies into production logs,
-  ending `Fixes #29`.
+- [ ] **Step 5: Run every gate** and report pass counts per test binary:
+  - `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints nothing)
+  - `podman build -t otto-flags:check .`
+- [ ] **Step 6: Commit** `crates/flags-mcp/Cargo.toml`, `Cargo.lock`, `crates/flags-mcp/src/error.rs`,
+  `crates/flags-mcp/src/auth.rs` with exactly this message (no trailers of any kind):
+
+  ```
+  fix(mcp): log server-side failures by code, text only at debug
+
+  Database and platform error text can carry SQL, schema names, platform
+  response bodies, and URLs, and flags-mcp logged it at error level. Log a
+  text-free code at error (a finer platform code, so a rejected credential
+  is told apart from an outage) and the text only at debug.
+
+  Fixes #29
+  ```
+
+The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit, before
+merge, by the orchestrator, not by this task.
