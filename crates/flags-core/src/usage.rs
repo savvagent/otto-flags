@@ -137,7 +137,7 @@ impl Meter {
                 return None;
             }
         }
-        let (reason, status) = match tokio::time::timeout(
+        let failure = match tokio::time::timeout(
             QUOTA_LOOKUP_TIMEOUT,
             self.platform.usage_status(org.as_uuid()),
         )
@@ -149,14 +149,19 @@ impl Meter {
                 }
                 return Some(status);
             }
-            Ok(Err(e)) => {
-                tracing::debug!(org = %org, error = %e, "could not read usage from the platform");
-                crate::error::platform_failure_reason(&e)
-            }
-            Err(_) => ("timed_out", None),
+            Ok(Err(e)) => Some(e),
+            Err(_) => None,
         };
+        // A timeout has no text; it is named as entitlements names it.
+        let (reason, status) = failure
+            .as_ref()
+            .map_or(("timeout", None), crate::error::platform_failure_reason);
         tracing::warn!(org = %org, reason, status,
             "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
+        if let Some(e) = &failure {
+            tracing::debug!(org = %org, reason, status, error = %e,
+                "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
+        }
         if let Ok(mut m) = self.fail_open.lock() {
             m.insert(org, Instant::now() + FAIL_OPEN_FOR);
         }
@@ -400,7 +405,7 @@ pub async fn run(
                     other => {
                         let (reason, status) = other.failure_reason();
                         tracing::warn!(reason, status, retry_in = ?wait, "usage shipping failed");
-                        tracing::debug!(reason, status, error = %other, "usage shipping failed");
+                        tracing::debug!(reason, status, retry_in = ?wait, error = %other, "usage shipping failed");
                     }
                 }
                 wait

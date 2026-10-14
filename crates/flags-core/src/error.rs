@@ -170,9 +170,9 @@ pub fn platform_failure_reason(e: &otto_resource::Error) -> (&'static str, Optio
 }
 
 /// [`Error::failure_reason`] for a database failure the caller holds as a bare
-/// `sqlx::Error`: the sqlx variant, or for an error Postgres raised, its
-/// condition name from the SQLSTATE: never the message, which can quote values
-/// and schema.
+/// `sqlx::Error`: the sqlx variant, or for an error Postgres raised, the
+/// condition name of a common SQLSTATE (`database_error` for the rest): never
+/// the message, which can quote values and schema.
 pub fn db_failure_reason(e: &sqlx::Error) -> &'static str {
     match e {
         sqlx::Error::PoolTimedOut => "pool_timed_out",
