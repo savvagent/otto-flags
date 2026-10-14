@@ -1,0 +1,132 @@
+# Keep invisible format characters out of reported text shown to agents
+
+**Status:** DRAFT
+**Issue:** #47
+
+## 1. Brief
+
+From #47 (found by the security review of #46 (#38); the behaviour predates it):
+
+> `flag_health` shows SDK-reported error text (`error_type`, `last_message`) to agents after passing it
+> through `inert` (`crates/flags-core/src/telemetry.rs`), which replaces characters for which
+> `char::is_control()` is true. That is Unicode category Cc only. Format characters (category Cf),
+> including the bidirectional overrides and isolates (U+202A..U+202E, U+2066..U+2069) and zero-width
+> characters (U+200B..U+200F, U+2060, U+FEFF), pass through unchanged.
+>
+> Anyone holding an app's public `sdk_` client key can report error text, so such characters can reach
+> an agent's context, where they can visually reorder or hide parts of the quoted text for any human
+> reading the same output. The text is already marked as untrusted data in the tool's schema docs, and
+> the cost is low, but `inert`'s stated purpose is to make reported text hard to dress up as anything
+> other than a quoted error.
+>
+> **Acceptance criteria**
+> - [ ] `inert` also replaces Unicode format characters (at least the bidi controls and zero-width
+>   characters listed above) with a space before flattening whitespace.
+> - [ ] The existing unit test `reported_text_is_flattened_and_shortened` (or a sibling) covers a
+>   string containing U+202E and U+200B.
+
+## 2. Premise corrections
+
+- **Hiding text from a reader is not only a format-character trick.** Variation selectors
+  (U+FE00..U+FE0F, U+E0100..U+E01EF, category Mn) render as nothing on their own and can carry
+  arbitrary bytes invisibly after any base character, the same way the Cf tag characters
+  (U+E0020..U+E007F) can. A model reads them; a human does not see them. Stripping Cf alone leaves
+  that channel open, so `inert` replaces both (§3).
+
+## 3. Assumptions
+
+- **Every Cf character, not only the listed ones.** The issue says "at least" the bidi and
+  zero-width characters. The whole category (Unicode 16.0: 21 ranges, among them the soft hyphen,
+  the Arabic letter mark, the invisible math operators U+2061..U+2064, the deprecated format
+  characters U+206A..U+206F, the interlinear annotation characters U+FFF9..U+FFFB, and the tag
+  characters U+E0001, U+E0020..U+E007F) has no visible glyph of its own, and none of it is needed to
+  read an error message. A fixed table is used, not a dependency: Rust's standard library exposes no
+  general-category lookup, and a new crate for one 21-range table is not worth the review cost.
+  U+2065 (unassigned, inside the bidi block) is included so U+2060..U+206F is one range.
+- **Variation selectors too** (§2). The cost is that an emoji in an error message loses its
+  presentation selector and may render as text style; the message is still legible.
+- **Replace with a space, then flatten.** As the issue specifies: a format character becomes a
+  space, so `split_whitespace` folds it with its neighbours. A zero-width space between two words
+  therefore becomes one space, and `"ab\u{200B}cd"` becomes `"ab cd"`; that is a visible mark that
+  something was there, which is the point.
+- **Only `inert`.** It is the one place SDK-reported text is shown to an agent (`top_errors` in
+  `flag_health`; grep for `inert` finds no other caller). What is stored is unchanged: the raw text
+  stays in `flag_errors` as reported (minus NUL, #38), and only the view is cleaned.
+- **No other invisible characters.** Hangul fillers (U+115F, U+1160, U+3164) and other blank
+  letters are category Lo; they can pad but not reorder or encode hidden text, and stripping
+  letters is a judgment the issue does not ask for. Recorded in §12.
+- Every Run Profile value was read from the Development Workflow section; none assumed.
+
+## 4. Goal and success criteria
+
+Error text reported through an SDK reaches an agent as plain, visibly ordered text with nothing
+hidden in it.
+
+- `inert` replaces every Cf character and every variation selector with a space before flattening.
+- `"boom\u{202E}gnp.exe"` comes out as `"boom gnp.exe"`; `"a\u{200B}b"` as `"a b"`.
+- A unit test covers U+202E and U+200B (the AC), plus the tag characters and a variation selector.
+- Nothing else about `inert` changes: Cc still becomes a space, whitespace still flattens, the
+  length cap and ellipsis are unchanged.
+
+## 5. Scope
+
+**In:** `inert` and its unit test, in `crates/flags-core/src/telemetry.rs`.
+
+**Out:** what `record_errors` stores; any other text an agent sees (flag names, descriptions,
+rollback reasons are written by authenticated agents, not public keys); the MCP schema docs, which
+already call this text untrusted.
+
+## 6. Architecture
+
+`crates/flags-core/src/telemetry.rs`:
+
+- New private `fn hidden(c: char) -> bool`: true for `char::is_control` (Cc), every Cf range of
+  Unicode 16.0, and the two variation-selector ranges, as one `matches!` over `char` ranges.
+- `inert` (`telemetry.rs:401`) maps `c` to `' '` when `hidden(c)` instead of when `c.is_control()`.
+  Its doc comment says what is replaced and why.
+
+No public interface changes. `inert` is private; `Health.top_errors` keeps its shape.
+
+## 7. Invariants impact
+
+- **SDK-reported text is untrusted when an MCP tool returns it:** strengthened; `flag_health` still
+  returns it as data, now without characters that change how it reads.
+- **Evaluations are counted, not stored / error reports raw and truncated:** unchanged; storage is
+  untouched.
+- **SDK REST contract:** unchanged; only the MCP view changes.
+- No SQL, migration, RLS, scope, or metering change.
+
+## 8. Migration
+
+None.
+
+## 9. Out-of-band
+
+None.
+
+## 10. Error handling and edge cases
+
+- A string made only of hidden characters flattens to `""`, as a string of only control characters
+  does today.
+- A hidden character at the cut point: replacement and flattening run before truncation, so the
+  cap counts only visible characters and spaces, as before.
+- Combining marks other than variation selectors (accents) are kept: they are visible and part of
+  ordinary text.
+
+## 11. Testing approach
+
+Unit tests beside the code (pure logic, per `CLAUDE.md` > Notes):
+
+- Extend `reported_text_is_flattened_and_shortened` with U+202E and U+200B.
+- Add `reported_text_loses_invisible_characters`: bidi isolates, U+FEFF, a tag-character run
+  (`"\u{E0001}\u{E0069}\u{E0067}"`), a variation selector, the soft hyphen; and that an ordinary
+  accented letter (`"é"` as `e\u{0301}`) is kept.
+
+Gates: test, lint, format, extra, and the `crates/**` podman build.
+
+## 12. Risks and open questions
+
+- **Future Unicode versions add Cf characters** the fixed table will not know. The table names its
+  Unicode version; a later update is a one-line change. Acceptable: new Cf assignments are rare.
+- **Blank letters** (Hangul fillers) still pass through; they can pad text but not hide or reorder
+  it. Not filed: no AC asks for it.
