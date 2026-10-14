@@ -62,7 +62,7 @@ together.
 - Modify: `crates/flags-core/tests/db.rs`
 - Modify: `crates/flags-server/tests/e2e.rs`
 
-- [ ] **Step 1: Write the DB test** `telemetry_text_with_nul_is_stored_replaced` in
+- [x] **Step 1: Write the DB test** `telemetry_text_with_nul_is_stored_replaced` in
   `crates/flags-core/tests/db.rs`, beside `error_batch_columns_keep_their_own_values`, with
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`. Setup as the neighbouring tests: `db(pool)`,
   `OrgId::new()`, `UserId::new()`, `db.begin(org)`, `tx.create_app("web", &[], actor)`, one flag
@@ -81,14 +81,14 @@ together.
     exactly one row whose `(environment, variation, count)` is
     `("stag\u{FFFD}ing", "v\u{FFFD}one", 2)`.
   - Commit the transaction at the end (`tx.commit().await.unwrap()`), as neighbours do.
-- [ ] **Step 2: Write the unit test** `nul_is_replaced_and_text_capped` in `telemetry.rs`'s
+- [x] **Step 2: Write the unit test** `nul_is_replaced_and_text_capped` in `telemetry.rs`'s
   `mod tests`: `stored("a\0b\0", 10) == "a\u{FFFD}b\u{FFFD}"`, `stored("\0\0\0", 2) ==
   "\u{FFFD}\u{FFFD}"`, `stored("abc", 2) == "ab"`. (It will not compile until Step 4; that is its
   failing state.)
-- [ ] **Step 3: Run the DB test and see it fail** with the Postgres `0x00` error:
+- [x] **Step 3: Run the DB test and see it fail** with the Postgres `0x00` error:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db telemetry_text_with_nul`
   (Step 2's unit test is in the library, not this binary, so it does not block this run.)
-- [ ] **Step 4: Implement** in `crates/flags-core/src/telemetry.rs`:
+- [x] **Step 4: Implement** in `crates/flags-core/src/telemetry.rs`:
   - Rename `truncate` to `stored` and make it
     `s.chars().take(max).map(|c| if c == '\0' { '\u{FFFD}' } else { c }).collect()`, with a doc
     comment: Postgres `text` cannot hold NUL, which is valid in JSON and Rust strings, so one NUL
@@ -98,10 +98,10 @@ together.
     (`keys.retain(|k| !k.contains('\0'))`; the parameter becomes `mut keys`), with a comment: no flag key can contain NUL
     (`flags::validate_key`), so such a key is unknown like any other, and binding it would fail the
     batch. The callers' `ids.get(&e.flag_key)` miss already counts it as unknown.
-- [ ] **Step 5: Run the DB test and the unit test and see them pass:**
+- [x] **Step 5: Run the DB test and the unit test and see them pass:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core telemetry`
   (and the `--test db telemetry_text_with_nul` filter from Step 3).
-- [ ] **Step 6: Write the endpoint test** `telemetry_with_nul_text_is_accepted` in
+- [x] **Step 6: Write the endpoint test** `telemetry_with_nul_text_is_accepted` in
   `crates/flags-server/tests/e2e.rs`, after `report`'s helpers: `let (url, platform) =
   start_platform().await; let s = server(pool, &url).await;` then `org_with_flag(&s, &platform,
   Uuid::new_v4(), "checkout")` for the server key. POST `/api/telemetry/errors` via `sdk(...)` with
@@ -115,8 +115,8 @@ together.
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e telemetry_with_nul`
   To confirm it tests the fix, temporarily comment out the `.map` in `stored` and the `retain` in
   `flag_ids`, see the test fail with a non-200, and restore both; record both runs.
-- [ ] **Step 7: Run every gate** (Global Constraints) and report pass counts per test binary.
-- [ ] **Step 8: Commit** the three files with exactly this message (no trailers of any kind):
+- [x] **Step 7: Run every gate** (Global Constraints) and report pass counts per test binary.
+- [x] **Step 8: Commit** the three files with exactly this message (no trailers of any kind):
 
   ```
   fix(core): replace nul in sdk telemetry text instead of failing the batch
@@ -132,3 +132,8 @@ together.
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit by the
 orchestrator.
+
+Review round (PR #46): the DB test also records a batch of only NUL keys (nothing written) and a
+plain `staging` / `vone` evaluation beside the NUL one (two buckets, not one); the endpoint test
+sends with the public client key; the module docs mention NUL replacement. A Bidi-format-character
+gap in `inert` (pre-existing) is #47.

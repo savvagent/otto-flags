@@ -1,6 +1,6 @@
 # Accept SDK telemetry text containing NUL
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#46)
 **Issue:** #38
 
 ## 1. Brief
