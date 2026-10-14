@@ -43,7 +43,7 @@ From #43 (found reviewing #42 / #35):
 - **Not every site that logs a database failure logs a reason.** `crates/flags-core/src/rollback.rs`
   logs only `code` (always `internal_error` for a database failure) at `:1162` and `:1682`. The AC
   covers sites that log a reason; giving the rollback checker reasons is a separate change, filed
-  as a follow-up issue rather than widened into this one.
+  by the agent before this PR as #54 rather than widened into this one.
 - **`usage_outbox.last_error`** stores `<reason>` or `<reason> <status>` (#44). That column is not
   a log line; it keeps its current format (no transport sub-kind), so its contents do not change.
 
@@ -59,7 +59,8 @@ From #43 (found reviewing #42 / #35):
 - **Which sites emit which fields:** a site holding a `flags_core::Error` (which can be either kind)
   emits all four; a site holding only a `sqlx::Error` emits `reason` and `sqlstate`; a site holding
   only an `otto_resource::Error` emits `reason`, `status`, and `transport`. The debug twin of each
-  event carries the same fields as the line above it, plus the text it already carries.
+  event carries the same fields as the line above it, plus the text it already carries (this adds
+  `status` to the MCP helper's debug line, which omits it today).
 - **Transport sub-kind order:** `reqwest::Error::is_connect()` → `connect` (connection refused,
   DNS, TLS handshake, and a connect timeout, which is a connect-phase failure); else
   `is_timeout()` → `timeout` (the request timeout fired after connecting); else `other`. Both are
@@ -74,7 +75,7 @@ From #43 (found reviewing #42 / #35):
   separate question; this change is about naming only.
 - **Tests produce real transport errors** with `otto_resource::PlatformClient` against local
   sockets (a closed port, a listener that never answers with a short client timeout, a listener
-  that closes the connection at once), so no `reqwest` dependency is added.
+  that answers with bytes that are not HTTP), so no `reqwest` dependency is added.
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
@@ -134,8 +135,9 @@ impl Sqlstate {
   Failure` (sets `status` for `Status`, `transport` for `Transport`);
   `db_failure_reason(&sqlx::Error) -> Failure` (sets `sqlstate` for `sqlx::Error::Database`
   whose code parses; reason mapping gains the 57/25 names, matched after the existing exact codes
-  so `57014` stays `query_canceled`). A private `transport_kind(&reqwest::Error)` holds the
-  sub-kind rule (method calls on the value; no import of `reqwest` needed).
+  so `57014` stays `query_canceled`). A private `transport_kind(&otto_resource::Error) -> Option<&'static str>` holds
+  the sub-kind rule, calling `is_connect()` / `is_timeout()` on the `Transport` variant's value;
+  a signature naming `reqwest::Error` would need a `reqwest` dependency, so none does.
 - `usage.rs`: `ShipError::failure_reason -> Failure`; `stored_reason` reads `.reason` and
   `.status` (output unchanged); the quota fail-open timeout uses `Failure::reason("timeout")`;
   the shipping-loop, final-flush, and reschedule-record events log the new fields.
