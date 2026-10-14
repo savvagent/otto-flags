@@ -79,7 +79,9 @@ From #21 (found while folding #12 into #11):
     every request transaction would match these policies and any org could read or delete
     tombstoned orgs' audit rows until the purge commits. With it, only code inside the function
     (or code that deliberately sets the marker, as with `app.maintenance`) matches. They grant
-    nothing to `otto_app`.
+    nothing to `otto_app`. Inside the pinned purge transaction the existing
+    `audit_events_tenant_isolation` policy already covers the reads (the pinned org is the
+    target), so `audit_events_purge_read` matters only for an unpinned call.
   - `SET LOCAL lock_timeout = '3s'` first, as 0002 and 0003 do: `CREATE POLICY` takes an
     `ACCESS EXCLUSIVE` lock on `audit_events`, which every audited MCP write inserts into.
 - **Calling it:** `org_deleted` replaces the unpinned `DELETE` with
@@ -228,8 +230,10 @@ In `crates/flags-core/tests/db.rs` with `#[sqlx::test(migrator = "flags_core::MI
 - `audit_purge_only_reaches_deleted_orgs`: as `otto_app` on a live org, `SELECT
   purge_deleted_org_audit($1)` returns 0 and deletes nothing; after `CREATE TEMP TABLE
   deleted_orgs (org_id uuid)` holding that live org, the call still returns 0 and the rows remain;
-  `DELETE FROM audit_events WHERE org_id = $1` fails with SQLSTATE `42501`. (One connection: the
-  temp table is per session.)
+  `DELETE FROM audit_events WHERE org_id = $1` fails with SQLSTATE `42501`. Run inside
+  `db.begin(live_org)` on the `otto_app` `Db`, as production calls it (one connection: the temp
+  table is per session). After the call, `current_setting('app.audit_purge', true)` in the same
+  transaction is not `'on'`, pinning that the marker exists only during the function.
 - Existing `org_deleted_purges_everything_and_revokes_keys` and the isolation proof run unchanged.
 - Gates: test (with `DATABASE_URL`), clippy, fmt, the migrations guard (must print nothing: `0004`
   is an addition), and `podman build`.
