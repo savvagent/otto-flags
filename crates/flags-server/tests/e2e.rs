@@ -875,6 +875,49 @@ async fn report(s: &Server, sdk_key: &str, key: &str, on: usize, off: usize, err
     assert_eq!(status, StatusCode::OK, "{r}");
 }
 
+/// NUL is valid in JSON but not in Postgres text; it used to fail the whole
+/// batch with an error instead of the receipt (#38).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn telemetry_with_nul_text_is_accepted(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let (_, _, server_key, _) = org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;
+    let now = chrono::Utc::now().timestamp();
+
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/telemetry/errors",
+        &server_key,
+        Some(json!({"errors": [
+            {"flag_key": "checkout", "flag_enabled": true, "environment": "prod\u{0}x",
+             "error_type": "Type\u{0}Error", "error_message": "bad\u{0}message",
+             "stack_trace": "at\u{0}main", "timestamp": now},
+            {"flag_key": "checkout\u{0}", "flag_enabled": true, "error_type": "E",
+             "error_message": "m", "timestamp": now},
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r, json!({"accepted": 1, "unknown_flags": 1}));
+
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/telemetry/evaluations",
+        &server_key,
+        Some(json!({"evaluations": [
+            {"flag_key": "checkout", "result": true, "environment": "stag\u{0}ing",
+             "variation": "v\u{0}one", "timestamp": now},
+            {"flag_key": "checkout\u{0}", "result": true, "environment": "production",
+             "timestamp": now},
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r, json!({"accepted": 1, "unknown_flags": 1}));
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn auto_rollback_needs_a_plan_that_includes_it(pool: PgPool) {
     let (url, platform) = start_platform().await;
