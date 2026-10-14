@@ -5,12 +5,31 @@
 //! (and code or status) at info and above, the text only at debug. Most of the
 //! sites that log a failure are reached only when a database or the platform
 //! fails at runtime, so instead of a test per site this scans the source of
-//! every workspace crate for the field forms that carry text.
+//! every workspace crate for the usual ways of logging an error's text: the
+//! field forms below and an error interpolated into the message. A spelling
+//! it does not know (another binding name, `tracing::event!`) gets past it.
 
 use std::path::{Path, PathBuf};
 
-/// Field forms that put an error's or a remote party's text in an event.
-const TEXT_FIELDS: &[&str] = &["error = %", "error = ?", "reason = %", "%reason"];
+/// Substrings that put an error's or a remote party's text in an event:
+/// field forms, and the error interpolated into the message.
+const TEXT_FIELDS: &[&str] = &[
+    "error = %",
+    "error = ?",
+    "err = %",
+    "err = ?",
+    "reason = %",
+    "%reason",
+    "{e}",
+    "{e:?}",
+    "{err}",
+    "{err:?}",
+    "{error}",
+    "{error:?}",
+];
+
+/// Whole arguments that log an error's text through shorthand (`%e`).
+const TEXT_ARGS: &[&str] = &["%e", "?e", "%err", "?err", "%error", "?error"];
 
 /// Known exceptions, by file and the exact field: the platform's per-event
 /// rejection reason is its answer to a successful call, kept for operators
@@ -45,7 +64,8 @@ fn no_event_above_debug_logs_error_text() {
             let allowed = ALLOWED
                 .iter()
                 .any(|(f, field)| name == *f && flat.contains(field));
-            if !allowed && TEXT_FIELDS.iter().any(|t| flat.contains(t)) {
+            let shorthand = flat.split(',').any(|a| TEXT_ARGS.contains(&a.trim()));
+            if !allowed && (shorthand || TEXT_FIELDS.iter().any(|t| flat.contains(t))) {
                 found.push(format!("{name}: {flat}"));
             }
         }
