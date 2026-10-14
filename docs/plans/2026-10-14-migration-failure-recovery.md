@@ -1,7 +1,7 @@
 # Migration Failure Recovery Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** `docs/deploy/fly.md` tells an operator how to recover from a migration that failed in
 production, and tests in `flags-core` pin every behavior and statement the runbook relies on.
@@ -72,11 +72,11 @@ runbook from those facts.
 
 **Model:** sonnet — test code fully specified below.
 
-- [ ] **Step 1: Imports.** Change `use sqlx::migrate::MigrateError;` to
+- [x] **Step 1: Imports.** Change `use sqlx::migrate::MigrateError;` to
   `use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};` and add
   `use std::borrow::Cow;`.
 
-- [ ] **Step 2: Add the failed-migration test** after
+- [x] **Step 2: Add the failed-migration test** after
   `a_release_boots_against_a_database_a_newer_release_migrated`:
 
 ```rust
@@ -177,7 +177,7 @@ async fn a_failed_migration_leaves_nothing_and_the_previous_release_boots(pool: 
 }
 ```
 
-- [ ] **Step 3: Add the checksum test** right after it:
+- [x] **Step 3: Add the checksum test** right after it:
 
 ```rust
 /// The runbook's "record as applied" statement takes the checksum from
@@ -211,7 +211,7 @@ async fn migration_checksums_are_the_sha384_of_their_files(pool: PgPool) {
 }
 ```
 
-- [ ] **Step 4: Extend the `Dirty` test.** In `a_failed_unknown_migration_still_refuses_to_boot`,
+- [x] **Step 4: Extend the `Dirty` test.** In `a_failed_unknown_migration_still_refuses_to_boot`,
   change the doc comment to:
 
 ```rust
@@ -234,7 +234,7 @@ async fn migration_checksums_are_the_sha384_of_their_files(pool: PgPool) {
     flags_core::MIGRATOR.run(&pool).await.unwrap();
 ```
 
-- [ ] **Step 4b: Run migrators on one closed session.** (Spec critique.) Add a helper
+- [x] **Step 4b: Run migrators on one closed session.** (Spec critique.) Add a helper
   `async fn boot_migrate(migrator: &Migrator, pool: &PgPool) -> Result<(), MigrateError>` that
   acquires a connection, `detach()`es it, runs the migrator on it, and `close()`s it (import
   `sqlx::Connection`); replace every `newer_release.run(&pool)` and
@@ -242,18 +242,18 @@ async fn migration_checksums_are_the_sha384_of_their_files(pool: PgPool) {
   migration error without releasing its advisory lock, which would otherwise block the next
   migrator on another pooled connection.
 
-- [ ] **Step 5: Prove each test can fail.** Temporarily invert one assertion per test (e.g.
+- [x] **Step 5: Prove each test can fail.** Temporarily invert one assertion per test (e.g.
   `assert_eq!(rows, 1, …)`, `sqlstate "23505"`, compare `digest` against an empty slice, drop the
   `DELETE`), run, see each FAIL, then restore. Run:
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- migration`
   Expected: the inverted test fails.
 
-- [ ] **Step 6: Run the tests.**
+- [x] **Step 6: Run the tests.**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db -- migration`
   Expected: the migration tests pass, none skipped. Then `cargo fmt --all` and
   `cargo clippy --workspace --all-targets -- -D warnings`.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add crates/flags-core/tests/db.rs
@@ -276,7 +276,7 @@ runbook never proposes editing a migration.
 
 **Model:** opus — accuracy against the code matters most here.
 
-- [ ] **Step 1: Write the section** in `docs/deploy/fly.md`, following the spec's section 6,
+- [x] **Step 1: Write the section** in `docs/deploy/fly.md`, following the spec's section 6,
   items 1-6, in the doc's existing style (prose plus `bash`/`sql` blocks). It must contain:
   the boot-log signature (`applying migrations`, `migrations failed`,
   `while executing migration <N>: error returned from database: <message>`, which carries the
@@ -293,22 +293,22 @@ runbook never proposes editing a migration.
   the `DELETE`); the "never" list; the note distinguishing `refusing to serve: …`; the
   `-- no-transaction` sentence; and "afterwards, verify per `CLAUDE.md` Ship > verify".
 
-- [ ] **Step 2: `MIGRATOR` doc comment.** After "…and a migration recorded as failed, known or
+- [x] **Step 2: `MIGRATOR` doc comment.** After "…and a migration recorded as failed, known or
   not, with `Dirty`." add: "sqlx never records a failed migration itself on Postgres: each
   migration and its row commit in one transaction, so a failure leaves neither and the previous
   release boots. Recovery: `docs/deploy/fly.md`, \"When a migration fails\"."
 
-- [ ] **Step 3: `CLAUDE.md` pointer.** Append to the `- Migrations (agent):` bullet:
+- [x] **Step 3: `CLAUDE.md` pointer.** Append to the `- Migrations (agent):` bullet:
   " Recovery from a failed one: `docs/deploy/fly.md` (When a migration fails)."
 
-- [ ] **Step 4: Gates.** Run every gate in Global Constraints (all four plus `podman build`);
+- [x] **Step 4: Gates.** Run every gate in Global Constraints (all four plus `podman build`);
   the docs must not break `cargo doc`-free gates, and the test gate re-proves Task 1.
 
-- [ ] **Step 4b: Causes by message, not SQLSTATE.** (Plan critique.) The runbook tells causes
+- [x] **Step 4b: Causes by message, not SQLSTATE.** (Plan critique.) The runbook tells causes
   apart by the database message in the log (`canceling statement due to lock timeout`,
   `violates check constraint`, `could not create unique index`); the log carries no SQLSTATE.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add docs/deploy/fly.md crates/flags-core/src/migrate.rs CLAUDE.md
@@ -324,7 +324,7 @@ git commit -m "docs(deploy): document recovery from a failed production migratio
 
 **Model:** haiku — mechanical.
 
-- [ ] **Step 1:** After the PR is open and reviews are addressed, set the spec's `**Status:**` to
+- [x] **Step 1:** After the PR is open and reviews are addressed, set the spec's `**Status:**` to
   `IMPLEMENTED (#<PR>)` and tick every box in this plan (`CLAUDE.md` Design docs > shipped).
-- [ ] **Step 2: Commit** `docs: record the migration runbook as shipped` with a why-body ending
+- [x] **Step 2: Commit** `docs: record the migration runbook as shipped` with a why-body ending
   `Fixes #34`, push, and re-run the merge gate on the new head.

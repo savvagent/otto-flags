@@ -126,7 +126,7 @@ Hand these to Rob with the exact command; never run them:
   hosting `otto_platform` and `otto_factory`; the attach role is superuser on the whole instance).
   Production diagnostics are SELECT-only.
 - `fly secrets set`, and platform-side `otto-platform-server resource …` commands.
-- A hand `fly deploy` (only when Rob asks).
+- A hand `fly deploy`, or re-running a failed CI `deploy` job (only when Rob asks).
 - Anything that adds recurring cost: a bigger VM, `min_machines_running > 0`, a new volume, app,
   database, or paid service.
 - Package publishes.

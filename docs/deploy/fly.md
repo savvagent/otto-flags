@@ -39,7 +39,7 @@ database alone, so a platform outage does not affect flag evaluation.
   owner at boot, next to the isolation proof (#40): a healthy boot logs `audit purge ready:
   purge_deleted_org_audit(uuid) is owned by "…" (superuser) and executable by "otto_app"`, and
   any other state ends the boot with `refusing to serve: an org.deleted could not purge the
-  org's audit trail: …`, naming the fix (the deploy then rolls back). The same check refuses a
+  org's audit trail: …`, naming the fix (the deploy fails; check `fly status` as under When a migration fails). The same check refuses a
   missing function, or a tenant role without `EXECUTE` on it. Before moving off the superuser
   attach role (for example onto a dedicated instance), either give the new migrating role
   `BYPASSRLS` (only when tenant transactions still drop into `otto_app`; where `otto_app`

@@ -1,6 +1,6 @@
 # Recovering from a migration that fails in production
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#57)
 **Issue:** #34
 
 ## 1. Brief
@@ -103,8 +103,9 @@ No code path changes. The runbook section covers, in order:
    `migrations failed`, whose cause chain includes
    `while executing migration <N>: error returned from database: <message>` (sqlx's displays; the
    message, not the SQLSTATE). The new machine never binds a port and `/readyz` fails; the deploy
-   fails, and `CLAUDE.md` Ship > verify says it rolls back, but `fly status` is the check for any
-   machine left on the failed release. The previous release keeps serving: no row was written. Later pushes to `main` fail the same way until
+   fails; whether Fly rolled it back is not assumed: `fly status` is the check for any machine
+   left on the failed release (moving one back is Rob's hand deploy). The previous release keeps
+   serving on machines Fly did not move: no row was written. Later pushes to `main` fail the same way until
    recovery; they are merged, not live.
 2. **Diagnose (read-only).** `fly logs -a otto-flags --no-tail` (the version and the database's message; causes are told apart by message text, never SQLSTATE, which the log does not carry),
    `fly releases -a otto-flags`, `fly status -a otto-flags`; then Rob, in `fly postgres connect`:
