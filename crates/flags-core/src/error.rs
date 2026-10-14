@@ -210,6 +210,7 @@ impl Sqlstate {
             .then_some(Self(bytes))
     }
 
+    /// The five-character code, for a log field.
     pub fn as_str(&self) -> &str {
         // Checked ASCII on construction.
         std::str::from_utf8(&self.0).expect("ascii sqlstate")
