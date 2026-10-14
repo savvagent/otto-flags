@@ -144,36 +144,138 @@ impl Error {
     }
 
     /// A text-free description of this failure for logs above debug: a fixed
-    /// reason we chose, and an HTTP status for a platform failure. Database and
-    /// platform text can carry SQL, schema names, response bodies, and URLs, so
-    /// it is logged only at debug; this is what an operator reads at `info`.
-    pub fn failure_reason(&self) -> (&'static str, Option<u16>) {
+    /// reason we chose, an HTTP status for a platform failure, the SQLSTATE for
+    /// an error Postgres raised, and the connect/timeout/other sub-kind of a
+    /// platform transport failure (`reason`, `status`, `sqlstate`, `transport`).
+    /// Database and platform text can carry SQL, schema names, response bodies,
+    /// and URLs, so it is logged only at debug; this is what an operator reads
+    /// at `info`.
+    pub fn failure_reason(&self) -> Failure {
         match self {
-            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => (db_failure_reason(e), None),
+            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => db_failure_reason(e),
             Error::Platform(p) => platform_failure_reason(p),
-            _ => (self.code(), None),
+            _ => Failure::reason(self.code()),
         }
     }
 }
 
+/// A text-free description of a failure, for logs above debug (#29, #35, #43).
+///
+/// Every field is either a name this crate chose or a value with no room for
+/// text: an HTTP status, a validated five-character SQLSTATE. Database and
+/// platform text can carry SQL, schema names, response bodies, and URLs, so it
+/// is logged only at debug. Log sites write the fields that apply to the error
+/// they hold as `reason`, `status`, `sqlstate`, and `transport`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Failure {
+    /// A fixed name for the kind of failure.
+    pub reason: &'static str,
+    /// The HTTP status the platform answered with.
+    pub status: Option<u16>,
+    /// The SQLSTATE, when Postgres raised the error.
+    pub sqlstate: Option<Sqlstate>,
+    /// For a platform transport failure: `connect`, `timeout`, or `other`.
+    pub transport: Option<&'static str>,
+}
+
+impl Failure {
+    /// A failure known only by its reason.
+    pub const fn reason(reason: &'static str) -> Self {
+        Self {
+            reason,
+            status: None,
+            sqlstate: None,
+            transport: None,
+        }
+    }
+
+    /// The SQLSTATE as a log field value.
+    pub fn sqlstate(&self) -> Option<&str> {
+        self.sqlstate.as_ref().map(Sqlstate::as_str)
+    }
+}
+
+/// A Postgres SQLSTATE: five ASCII uppercase letters or digits, checked on
+/// construction so nothing but the code can reach a log line through it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Sqlstate([u8; 5]);
+
+impl Sqlstate {
+    /// `None` unless `code` is exactly five ASCII uppercase letters or digits.
+    pub fn parse(code: &str) -> Option<Self> {
+        let bytes: [u8; 5] = code.as_bytes().try_into().ok()?;
+        bytes
+            .iter()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            .then_some(Self(bytes))
+    }
+
+    /// The five-character code, for a log field.
+    pub fn as_str(&self) -> &str {
+        // Checked ASCII on construction.
+        std::str::from_utf8(&self.0).expect("ascii sqlstate")
+    }
+}
+
+impl std::fmt::Debug for Sqlstate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Sqlstate({})", self.as_str())
+    }
+}
+
 /// [`Error::failure_reason`] for a platform failure the caller holds unwrapped.
-pub fn platform_failure_reason(e: &otto_resource::Error) -> (&'static str, Option<u16>) {
+pub fn platform_failure_reason(e: &otto_resource::Error) -> Failure {
     use otto_resource::Error as E;
     match e {
-        E::Status { status, .. } => ("http_status", Some(*status)),
-        E::Transport(_) => ("transport", None),
-        E::Decode(_) => ("decode", None),
-        E::Unauthorized => ("unauthorized", None),
-        E::NotFound => ("not_found", None),
-        E::InvalidUrl(_) => ("invalid_url", None),
+        E::Status { status, .. } => Failure {
+            status: Some(*status),
+            ..Failure::reason("http_status")
+        },
+        E::Transport(_) => Failure {
+            transport: transport_kind(e),
+            ..Failure::reason("transport")
+        },
+        E::Decode(_) => Failure::reason("decode"),
+        E::Unauthorized => Failure::reason("unauthorized"),
+        E::NotFound => Failure::reason("not_found"),
+        E::InvalidUrl(_) => Failure::reason("invalid_url"),
+    }
+}
+
+/// The connect/timeout/other sub-kind of a platform transport failure, from
+/// the transport error's own predicates (no text), `None` for any other variant.
+/// The platform client sets only a total request timeout, so a connect that
+/// hangs until it fires is `timeout`; `connect` is a refusal, DNS, or TLS failure.
+fn transport_kind(e: &otto_resource::Error) -> Option<&'static str> {
+    match e {
+        otto_resource::Error::Transport(t) => Some(if t.is_connect() {
+            "connect"
+        } else if t.is_timeout() {
+            "timeout"
+        } else {
+            "other"
+        }),
+        _ => None,
     }
 }
 
 /// [`Error::failure_reason`] for a database failure the caller holds as a bare
 /// `sqlx::Error`: the sqlx variant, or for an error Postgres raised, the
-/// condition name of a common SQLSTATE (`database_error` for the rest): never
-/// the message, which can quote values and schema.
-pub fn db_failure_reason(e: &sqlx::Error) -> &'static str {
+/// condition name of a common SQLSTATE (`database_error` for the rest), plus
+/// the validated SQLSTATE itself: never the message, which can quote values and
+/// schema.
+pub fn db_failure_reason(e: &sqlx::Error) -> Failure {
+    let sqlstate = match e {
+        sqlx::Error::Database(db) => db.code().and_then(|c| Sqlstate::parse(&c)),
+        _ => None,
+    };
+    Failure {
+        sqlstate,
+        ..Failure::reason(db_reason(e))
+    }
+}
+
+fn db_reason(e: &sqlx::Error) -> &'static str {
     match e {
         sqlx::Error::PoolTimedOut => "pool_timed_out",
         sqlx::Error::PoolClosed => "pool_closed",
@@ -191,12 +293,19 @@ pub fn db_failure_reason(e: &sqlx::Error) -> &'static str {
             Some("40P01") => "deadlock_detected",
             Some("55P03") => "lock_not_available",
             Some("57014") => "query_canceled",
+            Some("57P01") => "admin_shutdown",
+            Some("57P02") => "crash_shutdown",
+            Some("57P03") => "cannot_connect_now",
+            Some("25006") => "read_only_sql_transaction",
+            Some("25P02") => "in_failed_sql_transaction",
             Some("42501") => "insufficient_privilege",
             Some("42P01") => "undefined_table",
             Some("42703") => "undefined_column",
             Some(c) if c.starts_with("23") => "integrity_constraint_violation",
             Some(c) if c.starts_with("08") => "connection_exception",
             Some(c) if c.starts_with("53") => "insufficient_resources",
+            Some(c) if c.starts_with("57") => "operator_intervention",
+            Some(c) if c.starts_with("25") => "invalid_transaction_state",
             _ => "database_error",
         },
         _ => "other",
@@ -234,17 +343,17 @@ mod tests {
     /// A database error with a chosen SQLSTATE: sqlx's own Postgres error
     /// cannot be built outside sqlx.
     #[derive(Debug)]
-    struct Sqlstate(&'static str);
+    struct FakeDbError(&'static str);
 
-    impl std::fmt::Display for Sqlstate {
+    impl std::fmt::Display for FakeDbError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "sqlstate {}", self.0)
         }
     }
 
-    impl std::error::Error for Sqlstate {}
+    impl std::error::Error for FakeDbError {}
 
-    impl sqlx::error::DatabaseError for Sqlstate {
+    impl sqlx::error::DatabaseError for FakeDbError {
         fn message(&self) -> &str {
             "test"
         }
@@ -266,7 +375,7 @@ mod tests {
     }
 
     fn db(code: &'static str) -> sqlx::Error {
-        sqlx::Error::Database(Box::new(Sqlstate(code)))
+        sqlx::Error::Database(Box::new(FakeDbError(code)))
     }
 
     #[test]
@@ -359,7 +468,8 @@ mod tests {
             (Error::AccessRevoked, "access_revoked", None),
         ];
         for (e, reason, status) in cases {
-            assert_eq!(e.failure_reason(), (reason, status), "{e:?}");
+            let f = e.failure_reason();
+            assert_eq!((f.reason, f.status), (reason, status), "{e:?}");
         }
         use otto_resource::Error as P;
         for (e, reason) in [
@@ -367,8 +477,140 @@ mod tests {
             (P::Decode("secret".into()), "decode"),
             (P::InvalidUrl("secret".into()), "invalid_url"),
         ] {
-            assert_eq!(platform_failure_reason(&e), (reason, None));
+            let f = platform_failure_reason(&e);
+            assert_eq!((f.reason, f.status), (reason, None));
         }
+    }
+
+    #[test]
+    fn sqlstate_is_logged_only_when_postgres_raised_it() {
+        let f = Error::Db(db("57P01")).failure_reason();
+        assert_eq!(f.reason, "admin_shutdown");
+        assert_eq!(f.sqlstate(), Some("57P01"));
+        assert_eq!(f.transport, None);
+
+        let f = Error::Tenant(otto_tenant::Error::Db(db("22P02"))).failure_reason();
+        assert_eq!(f.reason, "database_error");
+        assert_eq!(f.sqlstate(), Some("22P02"));
+
+        assert_eq!(
+            Error::Db(sqlx::Error::PoolTimedOut)
+                .failure_reason()
+                .sqlstate(),
+            None
+        );
+        assert_eq!(db_failure_reason(&db("bad code")).sqlstate(), None);
+        assert_eq!(db_failure_reason(&db("57p01")).sqlstate(), None);
+    }
+
+    #[test]
+    fn class_57_and_25_conditions_are_named() {
+        for (code, reason) in [
+            ("57P01", "admin_shutdown"),
+            ("57P02", "crash_shutdown"),
+            ("57P03", "cannot_connect_now"),
+            ("57000", "operator_intervention"),
+            ("57014", "query_canceled"),
+            ("25006", "read_only_sql_transaction"),
+            ("25P02", "in_failed_sql_transaction"),
+            ("25001", "invalid_transaction_state"),
+        ] {
+            assert_eq!(db_failure_reason(&db(code)).reason, reason, "{code}");
+        }
+    }
+
+    #[test]
+    fn sqlstate_parse_accepts_only_five_uppercase_alphanumerics() {
+        let s = Sqlstate::parse("40P01").expect("valid");
+        assert_eq!(s.as_str(), "40P01");
+        for bad in [
+            "",
+            "4000",
+            "400011",
+            "40p01",
+            "40 01",
+            "4000-",
+            "4000\u{e9}",
+            // Five bytes, one of them not ASCII: rejected by the byte check.
+            "400\u{e9}",
+        ] {
+            assert!(Sqlstate::parse(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    async fn transport_failure(base: String, timeout: std::time::Duration) -> otto_resource::Error {
+        let mut cfg = otto_resource::ClientConfig::new(base, "https://flags.test/mcp", "secret");
+        cfg.timeout = timeout;
+        let client = otto_resource::PlatformClient::new(cfg).expect("client");
+        client
+            .usage_status(uuid::Uuid::nil())
+            .await
+            .expect_err("the platform is not reachable")
+    }
+
+    #[tokio::test]
+    async fn transport_failures_carry_a_sub_kind() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let long = std::time::Duration::from_secs(5);
+
+        // connect: nothing listens on the port.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+            .port();
+        let e = transport_failure(format!("http://127.0.0.1:{port}"), long).await;
+        let f = platform_failure_reason(&e);
+        assert_eq!(
+            (f.reason, f.transport),
+            ("transport", Some("connect")),
+            "{e:?}"
+        );
+
+        // timeout: accepts and never answers.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let holder = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((sock, _)) = listener.accept().await {
+                held.push(sock);
+            }
+        });
+        let e = transport_failure(
+            format!("http://{addr}"),
+            std::time::Duration::from_millis(200),
+        )
+        .await;
+        let f = platform_failure_reason(&e);
+        assert_eq!(
+            (f.reason, f.transport),
+            ("transport", Some("timeout")),
+            "{e:?}"
+        );
+        holder.abort();
+
+        // other: a response hyper cannot parse.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let garbage = tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock.write_all(b"NOT HTTP\r\n\r\n").await;
+            }
+        });
+        let e = transport_failure(format!("http://{addr}"), long).await;
+        let f = platform_failure_reason(&e);
+        assert_eq!(
+            (f.reason, f.transport),
+            ("transport", Some("other")),
+            "{e:?}"
+        );
+        garbage.abort();
     }
 
     #[test]

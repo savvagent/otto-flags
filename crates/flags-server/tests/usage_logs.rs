@@ -121,7 +121,8 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
     let err = flags_core::usage::ship_once(&db, &platform, &cfg)
         .await
         .unwrap_err();
-    assert_eq!(err.failure_reason(), ("http_status", Some(502)));
+    let f = err.failure_reason();
+    assert_eq!((f.reason, f.status), ("http_status", Some(502)));
     let last_error: Option<String> =
         sqlx::query_scalar("SELECT last_error FROM usage_outbox WHERE event_id = $1")
             .bind(event_id)
@@ -137,7 +138,8 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
     let err = flags_core::usage::ship_once(&db, &platform, &cfg)
         .await
         .unwrap_err();
-    assert_eq!(err.failure_reason(), ("decode", None));
+    let f = err.failure_reason();
+    assert_eq!((f.reason, f.status), ("decode", None));
     let last_error: Option<String> =
         sqlx::query_scalar("SELECT last_error FROM usage_outbox WHERE event_id = $1")
             .bind(event_id)

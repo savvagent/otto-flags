@@ -126,7 +126,7 @@ impl EntitlementSource for Entitlements {
             if self.failed.is_unknown(org, Instant::now()) {
                 return Entitlement::Unknown;
             }
-            let (reason, status) = match tokio::time::timeout(
+            let f = match tokio::time::timeout(
                 LOOKUP_TIMEOUT,
                 self.platform.usage_status(org.as_uuid()),
             )
@@ -136,10 +136,10 @@ impl EntitlementSource for Entitlements {
                 // Any failure is Unknown, `NotFound` (the org is gone) included,
                 // so the feature fails closed.
                 Ok(Err(e)) => crate::error::platform_failure_reason(&e),
-                Err(_) => ("timeout", None),
+                Err(_) => crate::error::Failure::reason("timeout"),
             };
             self.failed.mark(org, Instant::now());
-            tracing::warn!(org = %org, feature = %feature, reason, status,
+            tracing::warn!(org = %org, feature = %feature, reason = f.reason, status = f.status, transport = f.transport,
                 "could not confirm a plan feature with the platform; treating it as not granted");
             Entitlement::Unknown
         }
