@@ -110,7 +110,7 @@ Expected: compile error, no method `failure_reason` on `ShipError`.
   - `usage.rs` quota fail-open (~line 140-156): replace the `String` `failure` with
     `(reason, status)`: `Ok(Err(e))` → log `tracing::debug!(org = %org, error = %e, "could not read
     usage from the platform")` and yield `platform_failure_reason(&e)`; `Err(_)` →
-    `("timed_out", None)`. The warn becomes
+    `("timeout", None)` (as review settled; see below). The warn becomes
     `tracing::warn!(org = %org, reason, status, "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}")`.
   - `reschedule` (~350): `tracing::warn!(reason = db_failure_reason(&e), "could not record a usage shipping failure")`
     then `tracing::debug!(reason = …, error = %e, same message)`.
@@ -178,14 +178,14 @@ Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test 
 - [ ] **Step 3: Implement**
   - `error.rs`: in the `e if e.is_internal()` arm, `let (reason, status) = e.failure_reason();`
     `tracing::error!(code = e.code(), reason, status, "SDK request failed");`
-    `tracing::debug!(code = e.code(), reason, error = %e, "SDK request failed");` Response unchanged.
+    `tracing::debug!(code = e.code(), reason, status, error = %e, "SDK request failed");` Response unchanged.
   - `platform.rs`: `fn rejection_reason(e: &WebhookError) -> &'static str`, exhaustive match, with
     a doc line. `BadBody(reason)` arm: `tracing::error!(reason = "bad_body", "platform webhook was
     signed but unreadable")` then `tracing::debug!(reason = "bad_body", error = %detail, …)` (rename
     the binding to `detail`). `Err(e)` arm: `warn!(reason = rejection_reason(&e), "platform webhook
     rejected")` then `debug!(…, error = %e, …)`. Apply failure: `let (reason, status) =
     e.failure_reason();` `error!(code = e.code(), reason, status, event_id = %event.id, "could not
-    apply a platform event")` then `debug!(code = e.code(), reason, event_id = %event.id, error =
+    apply a platform event")` then `debug!(code = e.code(), reason, status, event_id = %event.id, error =
     %e, …)`. Responses unchanged.
   - Commit the `Cargo.lock` update cargo made in Step 1.
 
@@ -222,7 +222,7 @@ the webhook's bad-body text is serde's and can quote the body. Ends `Refs #35`.
     "panicked" } else { "cancelled" };` `warn!(reason, "<same message>")` then `debug!(reason, error
     = %e, "<same message>")`.
   - sweeps (~130, ~135): `let (reason, status) = e.failure_reason();` `warn!(code = e.code(),
-    reason, status, "<same message>")` then `debug!(code = e.code(), reason, error = %e, …)`.
+    reason, status, "<same message>")` then `debug!(code = e.code(), reason, status, error = %e, …)`.
   - `check_platform` `Err(e)` (~158): `let (reason, status) =
     flags_core::error::platform_failure_reason(&e);` `warn!(platform = %config.platform_url, reason,
     status, "could not reach the otto platform at startup; continuing")` then `debug!(…, error = %e, …)`.
@@ -261,3 +261,17 @@ find crates -name '*.rs' -print0 | xargs -0 perl -0ne 'while (/tracing::(error|w
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
   `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints
   nothing), and `podman build -t otto-flags:check .`.
+
+## Changes after review
+
+Recorded here so the plan matches what shipped (PR #42):
+
+- Task 1: the quota fail-open's debug event follows its warn with the same fields, rather than
+  being logged inside the match arm, and its timeout reason is `timeout` (the name
+  `entitlements.rs` uses for the same call), not `timed_out`. The shipping loop's debug event
+  keeps `retry_in`.
+- Task 2: the bad-body arm takes its reason from `rejection_reason`; `failure_logs.rs` also
+  delivers a signed body serde rejects and a forged signature through the router.
+- Task 3: `join_failure_reason` is a small helper with a unit test; the sweep sites stay inline.
+- Task 4: the span-aware check became `crates/flags-server/tests/log_text.rs`, so it runs in
+  `cargo test` rather than by hand.

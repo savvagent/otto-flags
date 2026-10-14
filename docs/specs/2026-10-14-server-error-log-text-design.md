@@ -62,8 +62,9 @@ database or platform text, but the issue lists them and the rule is uniform: the
 - **Webhook rejection kinds** are a private `fn rejection_reason(&WebhookError) -> &'static str` in
   `flags-api/src/platform.rs`: `malformed_header`, `bad_signature`, `stale`, `bad_body`.
 - **Other kinds:** a `JoinError` logs `reason = "panicked"` or `"cancelled"`; an unreadable
-  flag-change payload logs `reason = "decode"`; a quota-lookup timeout keeps `reason = "timed_out"`
-  (as text it was `"timed out"`; the value changes to match the other reasons' form).
+  flag-change payload logs `reason = "decode"`; a quota-lookup timeout logs `reason = "timeout"`
+  (as text it was `"timed out"`), the name `entitlements.rs` already logs for a timeout of the same
+  platform call, so one filter finds both.
 - **Field names follow #29:** `code` (the wire code, where the site has a `flags_core::Error`),
   `reason`, and `status` (HTTP status of a platform failure, when there is one). Sites holding
   only a `sqlx::Error` log `reason` alone.
@@ -71,8 +72,9 @@ database or platform text, but the issue lists them and the rule is uniform: the
   `tracing::debug!` with the same fields plus `error = %e` and the same message. No shared logging
   helper: the levels differ by site, and `tracing`'s level is a macro, so a helper would need one
   function per level for two lines each.
-- **Test-only dependency.** `tracing-subscriber` (workspace) becomes a `flags-api` dev-dependency,
-  for a log-capture test in its own binary (as #29's). No production dependency changes.
+- **Test-only dependencies.** `tracing-subscriber` and `sqlx` (workspace) become `flags-api`
+  dev-dependencies, for a log-capture test in its own binary (as #29's) that builds a
+  `sqlx::Error` and a lazy pool. No production dependency changes.
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
@@ -82,8 +84,12 @@ operators still see at `info` which kind of failure happened.
 
 - Every site in §1 and §2 logs at its current level with `reason` (and `code`/`status` where
   available) and no error text, and logs the text at `debug`.
-- A log-capture test over `ApiError::from(flags_core::Error)` shows the `ERROR` line carries
-  `code` and `reason` and not the error's text, and the `DEBUG` line carries the text.
+- A log-capture test over `ApiError::from(flags_core::Error)` and the webhook route shows the
+  lines above `DEBUG` carry `code`/`reason` and not the error's text, and the `DEBUG` line carries
+  the text.
+- A source-scan test fails on any `error!`/`warn!`/`info!` event in a workspace crate that carries
+  a text field (`error = %`, `error = ?`, `reason = %`, `%reason`), wrapped calls included, with
+  `usage.rs`'s `reason = %r.reason` as its one named exception.
 - `ShipError::failure_reason`, `rejection_reason`, and `db_failure_reason` (through its existing
   coverage) are unit-tested.
 - HTTP status codes and bodies for SDK requests, webhooks, and `/readyz` are unchanged; the
@@ -120,9 +126,10 @@ subscriber configuration.
     `db_failure_reason(&e)`; a bad payload logs `"decode"`.
   - `flags-core/src/usage.rs`: `reschedule` logs `db_failure_reason`; the shipping loop and final
     flush log `e.failure_reason()`; the quota fail-open logs `platform_failure_reason` (or
-    `timed_out`) and its `status`.
-  - `flags-server/src/main.rs`: `JoinError` kind (`is_panic()` → `panicked`, else `cancelled`;
-    the checker's handle is aborted on timeout, so `cancelled` happens); sweeps log `e.code()` and
+    `timeout`) and its `status`.
+  - `flags-server/src/main.rs`: `JoinError` kind (`is_panic()` → `panicked`, else `cancelled`,
+    which covers a task aborted from outside; the shutdown path's own abort after the 5 s timeout
+    is not joined, so it is not logged here); sweeps log `e.code()` and
     `e.failure_reason()` (for a non-database `flags_core::Error` the reason falls back to the code,
     so the two can match; intended);
     `check_platform` logs `platform_failure_reason`.
@@ -157,21 +164,26 @@ is no longer written there; raising a crate to `debug` brings it back for diagno
 ## 11. Testing approach
 
 - `crates/flags-api/tests/failure_logs.rs`: one test, own binary (the callsite-interest caching
-  #29 hit). Cases: `Error::Db` with a Postgres-style marker text (`Protocol("MARKER_DB")`) and
-  `Error::Platform(Status { status: 503, body: "MARKER_PLATFORM" })`; assert the `ERROR` lines
-  carry `code=`/`reason=`/`status=` and no marker, the `DEBUG` lines carry the marker, and the
-  response status is 503.
+  #29 hit). Cases: `Error::Db` with a marker text (`Protocol("MARKER_DB")`) and
+  `Error::Platform(Status { status: 503, body: "MARKER_PLATFORM" })`, each answering 503 with no
+  marker in the message; a signed webhook body serde rejects (its text quotes the rejected value;
+  400) and a forged signature (401), both through the router on a lazy pool that is never used.
+  Assert the lines above `DEBUG` carry the expected `code=`/`reason=`/`status=` and no marker, and
+  the `DEBUG` lines carry the marker.
 - Unit tests: `ShipError::failure_reason` (both variants, no text) in `usage.rs`;
-  `rejection_reason` for each `WebhookError` variant in `platform.rs`.
+  `rejection_reason` for each `WebhookError` variant in `platform.rs`; `join_failure_reason` (a
+  real panic and a real abort) in `main.rs`.
+- `crates/flags-server/tests/log_text.rs`: the source scan in §4, plus a test of the scanner on a
+  wrapped call.
 - The other sites (listener, readiness, sweeps, shutdown, startup platform check) are reached only
   through a failing database or platform at runtime; their reasons come from the unit-tested
-  helpers, and the two checks in §4 guard against text fields coming back. This is a deliberate
-  gap: forcing those failures in tests costs more than it proves.
+  helpers, and the source-scan test guards against text fields coming back. No test drives their
+  failure: forcing those failures costs more than it proves.
 - Gates: `cargo test --workspace` with `DATABASE_URL`, clippy, fmt, the migrations check (vacuous),
   and `podman build` (crates/ changed).
 
 ## 12. Risks and open questions
 
-- Dashboards or alerts keyed on the old `error` text at warn: none exist (logs go only to
-  `fly logs`).
+- Dashboards or alerts keyed on the old `error` text at warn: none known as of 2026-10-14 (logs
+  go only to `fly logs`).
 - The quota fail-open `reason` value changes form (text → kind); it is read by no tool.
