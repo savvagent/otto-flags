@@ -1763,7 +1763,7 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
-    let db = db(pool).await;
+    let db = db(pool.clone()).await;
     let org = OrgId::new();
     let (gone, stays) = (UserId::new(), UserId::new());
     let body = otto_resource::webhook::body(
@@ -1772,12 +1772,80 @@ async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
         Utc::now(),
         &json!({"org_id": org.as_uuid(), "user_id": gone.as_uuid()}),
     );
-    platform_events::apply(&db, &otto_resource::webhook::parse(&body).unwrap())
+    let outcome = platform_events::apply(&db, &otto_resource::webhook::parse(&body).unwrap())
         .await
         .unwrap();
+    assert_eq!(outcome, Outcome::Applied { detail: json!({}) });
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events \
+         WHERE org_id = $1 AND action = 'platform.member.removed'",
+    )
+    .bind(org)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1);
     assert!(platform_events::revoked(&db, org, gone).await.unwrap());
     assert!(!platform_events::revoked(&db, org, stays).await.unwrap());
     assert!(begin_live(&db, org, Some(stays)).await.is_ok());
+}
+
+/// A `member.removed` delivered after its org's `org.deleted` must not write
+/// an audit row into the purged org: nothing would remove it (#41). Only the
+/// dedupe marker is kept, and the user stays refused.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn member_removed_after_org_deleted_writes_no_audit_row(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    tx.create_app("web", &[], UserId::new()).await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(audit_rows(&pool, org).await > 0);
+
+    let app_db = otto_app_db(&pool).await;
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "org.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid()}),
+    );
+    let deleted = otto_resource::webhook::parse(&body).unwrap();
+    assert!(matches!(
+        platform_events::apply(&app_db, &deleted).await.unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert_eq!(audit_rows(&pool, org).await, 0);
+
+    let user = UserId::new();
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "member.removed",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid(), "user_id": user.as_uuid()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    assert_eq!(
+        platform_events::apply(&app_db, &event).await.unwrap(),
+        Outcome::Ignored
+    );
+    assert_eq!(audit_rows(&pool, org).await, 0);
+
+    // Superuser pool: `app_db`'s RLS would hide the marker.
+    let markers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM platform_events WHERE event_id = $1")
+            .bind(event.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(markers, 1);
+    assert!(platform_events::revoked(&db, org, user).await.unwrap());
+
+    assert_eq!(
+        platform_events::apply(&app_db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    assert_eq!(audit_rows(&pool, org).await, 0);
+    app_db.pool().close().await;
 }
 
 /// The columns' defaults and `Thresholds::default()` are one set of numbers

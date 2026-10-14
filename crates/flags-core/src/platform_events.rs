@@ -10,7 +10,7 @@
 //! | Event | Effect |
 //! |---|---|
 //! | `org.deleted` | Every row this database holds for the org is deleted, its SDK keys stop resolving at once, and its tokens are refused. Only the dedupe marker and the tombstone survive. |
-//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. |
+//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. For an org already deleted, nothing is written but the dedupe marker (#41). |
 //! | `team.deleted` | Nothing: otto-flags has no team-scoped data. Acknowledged. |
 //!
 //! # Why requests take a lock
@@ -243,7 +243,12 @@ async fn member_removed(
     let mut tx = db.begin(org).await?;
     exclude_requests(&mut tx, org).await?;
     let first = first_delivery(&mut tx, event, "member.removed").await?;
-    if first {
+    // Under the exclusive lifecycle lock, so a tombstone committed before this
+    // point is seen; one committed later is followed by a purge that removes
+    // whatever this writes. Without the check a late event's audit row would
+    // outlive its org's purge (#41).
+    let deleted = revoked_on(tx.conn(), org, None).await?;
+    if first && !deleted {
         tx.audit(
             Entry::new(action::MEMBER_REMOVED)
                 .actor_label("platform")
@@ -253,12 +258,18 @@ async fn member_removed(
     }
     tx.commit().await?;
 
-    tracing::info!(org = %org, user = %user, "member removed; their tokens are refused");
-    Ok(if first {
+    if deleted {
+        tracing::info!(org = %org, event_id = %event.id, "member.removed for a deleted org; ignored");
+    } else {
+        tracing::info!(org = %org, user = %user, "member removed; their tokens are refused");
+    }
+    Ok(if !first {
+        Outcome::Duplicate
+    } else if deleted {
+        Outcome::Ignored
+    } else {
         Outcome::Applied {
             detail: serde_json::json!({}),
         }
-    } else {
-        Outcome::Duplicate
     })
 }
