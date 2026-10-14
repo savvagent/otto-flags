@@ -149,11 +149,19 @@ impl Meter {
                 }
                 return Some(status);
             }
-            Ok(Err(e)) => e.to_string(),
-            Err(_) => "timed out".to_string(),
+            Ok(Err(e)) => Some(e),
+            Err(_) => None,
         };
-        tracing::warn!(org = %org, reason = %failure,
+        // A timeout has no text; it is named as entitlements names it.
+        let (reason, status) = failure
+            .as_ref()
+            .map_or(("timeout", None), crate::error::platform_failure_reason);
+        tracing::warn!(org = %org, reason, status,
             "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
+        if let Some(e) = &failure {
+            tracing::debug!(org = %org, reason, status, error = %e,
+                "could not read usage from the platform; allowing billable calls for {FAIL_OPEN_FOR:?}");
+        }
         if let Ok(mut m) = self.fail_open.lock() {
             m.insert(org, Instant::now() + FAIL_OPEN_FOR);
         }
@@ -254,6 +262,18 @@ pub enum ShipError {
     Db(#[from] sqlx::Error),
 }
 
+impl ShipError {
+    /// A short, text-free reason (and the HTTP status, for a platform status
+    /// error) that is safe to log above debug: the error text can carry SQL,
+    /// schema names, response bodies, and URLs.
+    pub fn failure_reason(&self) -> (&'static str, Option<u16>) {
+        match self {
+            ShipError::Platform(p) => crate::error::platform_failure_reason(p),
+            ShipError::Db(e) => (crate::error::db_failure_reason(e), None),
+        }
+    }
+}
+
 /// Claim a batch of due rows, ship them, delete what the platform answered
 /// for. Returns how many rows were claimed. Never loses a row: on any failure
 /// nothing is deleted and the rows are rescheduled with backoff.
@@ -347,7 +367,9 @@ async fn reschedule(db: &Db, ids: &[i64], error: &str, cfg: &ShipperConfig) {
     .await;
     if let Err(e) = r {
         // The claim lease still holds the rows back; this only delays a retry.
-        tracing::warn!(error = %e, "could not record a usage shipping failure");
+        let reason = crate::error::db_failure_reason(&e);
+        tracing::warn!(reason, "could not record a usage shipping failure");
+        tracing::debug!(reason, error = %e, "could not record a usage shipping failure");
     }
 }
 
@@ -381,7 +403,9 @@ pub async fn run(
                          accumulating in the outbox. Check FLAGS_INTROSPECTION_SECRET"
                     ),
                     other => {
-                        tracing::warn!(error = %other, retry_in = ?wait, "usage shipping failed")
+                        let (reason, status) = other.failure_reason();
+                        tracing::warn!(reason, status, retry_in = ?wait, "usage shipping failed");
+                        tracing::debug!(reason, status, retry_in = ?wait, error = %other, "usage shipping failed");
                     }
                 }
                 wait
@@ -391,7 +415,9 @@ pub async fn run(
             _ = tokio::time::sleep(wait) => {}
             _ = shutdown.changed() => {
                 if let Err(e) = ship_once(&db, &platform, &cfg).await {
-                    tracing::warn!(error = %e, "final usage flush failed; rows stay in the outbox");
+                    let (reason, status) = e.failure_reason();
+                    tracing::warn!(reason, status, "final usage flush failed; rows stay in the outbox");
+                    tracing::debug!(reason, status, error = %e, "final usage flush failed; rows stay in the outbox");
                 }
                 return;
             }
@@ -423,5 +449,16 @@ mod tests {
         ] {
             assert!(!is_billable(t), "{t}");
         }
+    }
+
+    #[test]
+    fn ship_errors_name_their_kind_without_the_text() {
+        let platform = ShipError::Platform(otto_resource::Error::Status {
+            status: 502,
+            body: "secret".into(),
+        });
+        assert_eq!(platform.failure_reason(), ("http_status", Some(502)));
+        let db = ShipError::Db(sqlx::Error::Protocol("secret".into()));
+        assert_eq!(db.failure_reason(), ("protocol", None));
     }
 }

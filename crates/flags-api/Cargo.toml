@@ -24,3 +24,5 @@ tower-http.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true, features = ["util"] }
+tracing-subscriber.workspace = true
+sqlx.workspace = true

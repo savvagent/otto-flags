@@ -23,6 +23,16 @@ fn rejected() -> ApiError {
     )
 }
 
+/// Why a webhook was rejected, without the error text.
+fn rejection_reason(e: &WebhookError) -> &'static str {
+    match e {
+        WebhookError::MalformedHeader => "malformed_header",
+        WebhookError::BadSignature => "bad_signature",
+        WebhookError::Stale => "stale",
+        WebhookError::BadBody(_) => "bad_body",
+    }
+}
+
 pub async fn receive(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -34,21 +44,41 @@ pub async fn receive(
         .ok_or_else(rejected)?;
     let event = match webhook::verify(&state.platform_webhook_secret, signature, &body) {
         Ok(event) => event,
-        Err(WebhookError::BadBody(reason)) => {
-            tracing::error!(%reason, "platform webhook was signed but unreadable");
+        Err(e @ WebhookError::BadBody(_)) => {
+            // The error text is serde's and can quote the body.
+            let reason = rejection_reason(&e);
+            tracing::error!(reason, "platform webhook was signed but unreadable");
+            tracing::debug!(reason, error = %e, "platform webhook was signed but unreadable");
             return Err(ApiError::bad_request(
                 "the webhook body is not a valid event",
             ));
         }
         Err(e) => {
-            tracing::warn!(error = %e, "platform webhook rejected");
+            let reason = rejection_reason(&e);
+            tracing::warn!(reason, "platform webhook rejected");
+            tracing::debug!(reason, error = %e, "platform webhook rejected");
             return Err(rejected());
         }
     };
     let outcome = platform_events::apply(&state.db, &event)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, event_id = %event.id, "could not apply a platform event");
+            let (reason, status) = e.failure_reason();
+            tracing::error!(
+                code = e.code(),
+                reason,
+                status,
+                event_id = %event.id,
+                "could not apply a platform event"
+            );
+            tracing::debug!(
+                code = e.code(),
+                reason,
+                status,
+                event_id = %event.id,
+                error = %e,
+                "could not apply a platform event"
+            );
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "temporarily_unavailable",
@@ -56,4 +86,26 @@ pub async fn receive(
             )
         })?;
     Ok(Json(outcome))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejection_reasons_name_each_variant() {
+        assert_eq!(
+            rejection_reason(&WebhookError::MalformedHeader),
+            "malformed_header"
+        );
+        assert_eq!(
+            rejection_reason(&WebhookError::BadSignature),
+            "bad_signature"
+        );
+        assert_eq!(rejection_reason(&WebhookError::Stale), "stale");
+        assert_eq!(
+            rejection_reason(&WebhookError::BadBody("secret".into())),
+            "bad_body"
+        );
+    }
 }
