@@ -91,8 +91,7 @@ the AC); any change to what operators see at `warn` from the shipping loop; exis
 - New private `fn stored_reason(e: &otto_resource::Error) -> String` using
   `crate::error::platform_failure_reason`.
 
-`crates/flags-server/tests/log_text.rs`: drop `ALLOWED` and the `allowed` check; the module doc's
-mention of exceptions goes with it.
+`crates/flags-server/tests/log_text.rs`: drop `ALLOWED`, its doc comment, and the `allowed` check.
 
 No public interface changes (`stored_reason` is private; `reschedule` is private).
 
@@ -131,8 +130,8 @@ None. No config key, secret, scope, or platform registration.
 ## 11. Testing approach
 
 - **Unit (`usage.rs` tests):** `stored_reason` for a `Status { 502, body: "secret" }` →
-  `"http_status 502"`, `Transport` → `"transport"`, `Unauthorized` → `"unauthorized"`; none
-  contains `secret`.
+  `"http_status 502"`, `Unauthorized` → `"unauthorized"`, `Decode("secret")` → `"decode"`
+  (a `reqwest::Error` for `Transport` cannot be built in a unit test); none contains `secret`.
 - **Log-capture + DB (`crates/flags-server/tests/usage_logs.rs`, its own binary, one
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]` test):** a mock platform whose
   `POST /internal/usage` first answers 502 with a body containing a marker, then answers a receipt
