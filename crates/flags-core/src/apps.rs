@@ -202,7 +202,7 @@ impl AppsExt for Tx<'_> {
         let wanted = name_or_id.trim();
         let org = self.org();
         let id = uuid::Uuid::parse_str(wanted).ok();
-        let found: Option<FlagApp> = if crate::flags::unstorable(wanted) {
+        let found: Option<FlagApp> = if crate::eval::unstorable(wanted) {
             None
         } else {
             sqlx::query_as(&format!(

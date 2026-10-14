@@ -1050,6 +1050,10 @@ async fn mcp_arguments_with_nul_are_not_internal_errors(pool: PgPool) {
     ] {
         let err = tool(&s.app, &t, name, args).await.unwrap_err();
         assert_eq!(err["data"]["code"], "invalid_argument", "{name}: {err}");
+        assert!(
+            err["message"].as_str().unwrap().contains("NUL"),
+            "{name}: {err}"
+        );
     }
 }
 

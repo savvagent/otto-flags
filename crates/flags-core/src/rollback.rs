@@ -591,7 +591,7 @@ impl RollbackExt for Tx<'_> {
         actor: UserId,
     ) -> Result<bool> {
         // No stored policy environment can contain NUL.
-        if crate::flags::unstorable(environment) {
+        if crate::eval::unstorable(environment) {
             return Ok(false);
         }
         let org = self.org();
@@ -643,7 +643,7 @@ impl RollbackExt for Tx<'_> {
 
     async fn find_policy(&mut self, flag: FlagId, environment: &str) -> Result<Option<Policy>> {
         // No stored policy environment can contain NUL.
-        if crate::flags::unstorable(environment) {
+        if crate::eval::unstorable(environment) {
             return Ok(None);
         }
         let org = self.org();

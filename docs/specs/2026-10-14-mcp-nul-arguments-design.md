@@ -110,12 +110,16 @@ path (#60 covered it). Any argument already validated before a statement (sectio
 
 ## 6. Architecture
 
+`crates/flags-core/src/eval.rs` becomes the home of the NUL rule (review: one definition, and no
+`apps → flags` edge): `unstorable` moves here from `flags.rs`, doc generalized ("text no stored
+value can equal"), and every caller (`flags`, `apps`, `rollback`, `telemetry`) uses
+`eval::unstorable`.
+
 `crates/flags-core/src/flags.rs`:
-- `unstorable`: doc comment generalized ("text no stored value can equal").
 - `validate_text`: `Some(s) if s.contains('\0') => Err(Invalid("{what} must not contain NUL
   (U+0000)"))`, checked before the length check.
-- `create_flag`: `if new.configuration.as_ref().is_some_and(eval::contains_nul)` → `Invalid`.
-- `update_flag`: the same check on `patch.configuration`, where the patch is applied after the lock,
+- `validate_configuration(&Value)`: `eval::contains_nul` → `Invalid`; called by `create_flag`.
+- `update_flag`: `validate_configuration` on `patch.configuration`, where the patch is applied after the lock,
   like the other fields (the lock binds no argument but the key, which #60 guards).
 
 `crates/flags-core/src/eval.rs`:
@@ -165,9 +169,9 @@ None.
 - A UUID with a NUL appended does not parse as a UUID; it is not found.
 - NUL inside a nested `configuration` object key, or an array inside a rule value: `contains_nul`
   walks the whole tree. serde_json's parse depth limit (128) bounds the recursion.
-- `archive_flag`/`restore_flag` on a flag already in that state return it unchanged before any
-  statement or reason validation (`set_archived`), so a NUL reason there succeeds as a no-op; no
-  statement binds it, which is all the AC requires.
+- `archive_flag`/`restore_flag` on a flag already in that state return it unchanged before
+  `commit_change`, so `set_archived` validates the reason itself first: a call that changes nothing
+  refuses the same reason a change would.
 - `rollback_flag`'s reason is prefixed (`"rollback to vN: <reason>"`) before `validate_text`; the
   NUL survives the prefix and is refused.
 - Error messages produced by `AppNotFound`/`FlagNotFound` print the name with `{:?}`, so NUL shows

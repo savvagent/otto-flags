@@ -904,6 +904,14 @@ async fn a_key_with_nul_finds_no_flag(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// A write refused because of NUL, not for some other reason.
+fn refused_for_nul(err: &Error) {
+    assert!(
+        matches!(err, Error::Invalid(m) if m.contains("NUL")),
+        "{err:?}"
+    );
+}
+
 // An MCP tool argument with NUL is unstorable: a lookup finds nothing and a
 // write is refused as invalid input, and no statement fails in the transaction
 // (#61).
@@ -955,7 +963,7 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
     ];
     for (new, reason) in bad {
         let err = tx.create_flag(&app, new, actor, reason).await.unwrap_err();
-        assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+        refused_for_nul(&err);
     }
 
     let err = tx
@@ -970,7 +978,7 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    refused_for_nul(&err);
     let err = tx
         .update_flag(
             &app,
@@ -986,12 +994,35 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
-    // The rollback prefix ("rollback to vN: ") keeps the NUL.
+    refused_for_nul(&err);
+    // The rollback prefix ("rollback to vN: ") keeps the NUL. `h` has a
+    // version to roll back to, so the reason is what refuses it.
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "h".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.update_flag(
+        &app,
+        "h",
+        FlagPatch {
+            name: Some("renamed".into()),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
     let err = tx
         .rollback_flag(
             &app,
-            "f",
+            "h",
             None,
             ChangeMeta {
                 reason: Some("r\0".into()),
@@ -1000,7 +1031,22 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    refused_for_nul(&err);
+
+    // Restoring an active flag changes nothing, and still refuses the reason.
+    let err = tx
+        .set_archived(
+            &app,
+            "f",
+            false,
+            ChangeMeta {
+                reason: Some("r\0".into()),
+                ..meta(actor)
+            },
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
 
     let err = tx
         .set_environment(
@@ -1022,7 +1068,7 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    refused_for_nul(&err);
 
     assert!(tx
         .find_policy(flag.id, "production\0")

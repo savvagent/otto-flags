@@ -121,7 +121,7 @@ async fn flag_ids(
     mut keys: Vec<String>,
 ) -> Result<HashMap<String, FlagId>> {
     // Unknown like any other key; binding it would fail the whole batch.
-    keys.retain(|k| !crate::flags::unstorable(k));
+    keys.retain(|k| !crate::eval::unstorable(k));
     let org = tx.org();
     let rows: Vec<(String, FlagId)> = sqlx::query_as(
         "SELECT key, id FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = ANY($3)",

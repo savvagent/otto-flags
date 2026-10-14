@@ -435,13 +435,21 @@ fn parse_variations(v: &Value) -> Option<BTreeMap<String, Variation>> {
 
 // ------------------------------------------------------------------ validation
 
-/// True when `v` holds NUL anywhere, in a string or an object key. Postgres
+/// True for text no stored value can equal: Postgres `text` cannot hold NUL,
+/// so such text names nothing stored, and binding it would fail the statement
+/// (and with it the caller's transaction) instead of finding nothing. Lookups
+/// skip their query for it; writes refuse it as invalid input.
+pub(crate) fn unstorable(s: &str) -> bool {
+    s.contains('\0')
+}
+
+/// [`unstorable`] anywhere in `v`, in a string or an object key: Postgres
 /// `jsonb` refuses `\u0000`, so a write carrying it would fail its statement.
 pub(crate) fn contains_nul(v: &Value) -> bool {
     match v {
-        Value::String(s) => s.contains('\0'),
+        Value::String(s) => unstorable(s),
         Value::Array(a) => a.iter().any(contains_nul),
-        Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || contains_nul(v)),
+        Value::Object(o) => o.iter().any(|(k, v)| unstorable(k) || contains_nul(v)),
         _ => false,
     }
 }
@@ -504,11 +512,8 @@ pub fn validate_env(cfg: &EnvConfig, variations: &Value) -> Result<EnvConfig, St
         return Err(format!("an environment may have at most {MAX_RULES} rules"));
     }
     for (i, rule) in cfg.rules.iter().enumerate() {
-        if rule.attribute.contains('\0')
-            || rule
-                .description
-                .as_deref()
-                .is_some_and(|d| d.contains('\0'))
+        if unstorable(&rule.attribute)
+            || rule.description.as_deref().is_some_and(unstorable)
             || rule.values.iter().any(contains_nul)
         {
             return Err(format!("rule {i}: must not contain NUL (U+0000)"));

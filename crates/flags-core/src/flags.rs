@@ -26,7 +26,7 @@ use sqlx::FromRow;
 
 use crate::apps::FlagApp;
 use crate::error::{on_unique, Error, Result};
-use crate::eval::{self, EnvConfig};
+use crate::eval::{self, unstorable, EnvConfig};
 use crate::ids::{FlagAppId, FlagId};
 use crate::notify;
 
@@ -148,13 +148,6 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
-/// True for text no stored value can equal: Postgres `text` cannot hold NUL,
-/// so such text names nothing stored, and binding it would fail the statement
-/// (and with it the caller's transaction) instead of finding nothing.
-pub(crate) fn unstorable(s: &str) -> bool {
-    s.contains('\0')
-}
-
 fn validate_key(key: &str) -> Result<String> {
     let key = key.trim();
     if key.is_empty() || key.len() > 128 {
@@ -173,7 +166,7 @@ fn validate_key(key: &str) -> Result<String> {
 
 fn validate_text(what: &str, s: Option<String>, max: usize) -> Result<Option<String>> {
     match s.map(|s| s.trim().to_string()) {
-        Some(s) if s.contains('\0') => Err(Error::Invalid(format!(
+        Some(s) if unstorable(&s) => Err(Error::Invalid(format!(
             "{what} must not contain NUL (U+0000)"
         ))),
         Some(s) if s.chars().count() > max => Err(Error::Invalid(format!(
@@ -408,6 +401,10 @@ impl FlagsExt for Tx<'_> {
         archived: bool,
         meta: ChangeMeta,
     ) -> Result<FeatureFlag> {
+        // Checked here too, not only in `commit_change`: a call that changes
+        // nothing returns before it, and must not accept a reason a change
+        // would refuse.
+        validate_text("reason", meta.reason.clone(), MAX_REASON)?;
         let mut flag = lock(self, app, key, meta.expected_version).await?;
         let target = if archived {
             FlagStatus::Archived
