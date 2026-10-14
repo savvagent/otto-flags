@@ -45,7 +45,7 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
 - Modify: `crates/flags-core/src/telemetry.rs` (`record_errors` only)
 - Modify: `crates/flags-core/tests/db.rs` (one new test, beside the existing telemetry tests)
 
-- [ ] **Step 1: Write the test** `error_batches_land_one_row_per_known_event` in
+- [x] **Step 1: Write the test** `error_batches_land_one_row_per_known_event` in
   `crates/flags-core/tests/db.rs` with `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`, following
   the setup of the neighbouring telemetry tests (an org, an app, two flags `f` and `g`, a pinned
   `Tx`). Record one batch with `KeyKind::Server`:
@@ -61,10 +61,10 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
   after the call (not SQL `now()`, which is fixed at the transaction's start; never exact equality,
   Postgres keeps microseconds); every row's
   `reporter` is `server`. Find rows by content (flag and message), never by `id` order.
-- [ ] **Step 2: Run it against the current code; it should pass** (this pins today's behaviour
+- [x] **Step 2: Run it against the current code; it should pass** (this pins today's behaviour
   before the rewrite; if it fails here, the test is wrong: fix the test, not `record_errors`):
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db error_batches_land`
-- [ ] **Step 3: Rewrite `record_errors`** as the spec's §6 describes: keep the key lookup, the
+- [x] **Step 3: Rewrite `record_errors`** as the spec's §6 describes: keep the key lookup, the
   receipt counting, and the `flags` dedup/sort; build `Vec<Uuid>` (flag ids via `.as_uuid()`),
   `Vec<Option<String>>` environment (truncate 64), `Vec<bool>`, `Vec<String>` error_type (truncate
   `MAX_ERROR_TYPE`), `Vec<String>` error_message (truncate `MAX_ERROR_MESSAGE`),
@@ -73,10 +73,10 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
   `sqlx::query(...)` with the SQL in the spec's §6, binding `org`, the seven vectors, and
   `reporter.as_str()` in that order (`$1`..`$9`), executed on `tx.conn()`. The "single statement" criterion is checked by review of
   `record_errors`, not by a test.
-- [ ] **Step 4: Run the new test and every existing telemetry and rollback test:**
+- [x] **Step 4: Run the new test and every existing telemetry and rollback test:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
-- [ ] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
-- [ ] **Step 6: Commit** `crates/flags-core/src/telemetry.rs` and `crates/flags-core/tests/db.rs`
+- [x] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
+- [x] **Step 6: Commit** `crates/flags-core/src/telemetry.rs` and `crates/flags-core/tests/db.rs`
   with exactly this message (no trailers of any kind):
 
   ```
@@ -92,3 +92,7 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit by the
 orchestrator.
+
+Review round (PR #37): explicit `$1::uuid` / `$9::text` casts, and a second test,
+`error_batch_columns_keep_their_own_values`, from the test-coverage review. NUL bytes in SDK text
+(existing behaviour) are #38.

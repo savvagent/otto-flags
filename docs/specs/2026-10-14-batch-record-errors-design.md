@@ -1,6 +1,6 @@
 # Batch error telemetry into one INSERT
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#37)
 **Issue:** #23
 
 ## 1. Brief
@@ -58,6 +58,8 @@ One round trip writes an error batch of any size up to `MAX_BATCH`.
   characters), `sane(occurred_at)`, `reporter`, `Receipt`, and `Recorded.flags` (deduplicated,
   sorted) are unchanged.
 - Every existing telemetry test in `crates/flags-core/tests/db.rs` passes unchanged.
+- A second test, from review, gives every column a distinct value (so a misordered bind shows),
+  checks every truncation cap and the stale-timestamp clamp, and empty and all-unknown batches.
 - A new test records a mixed batch (several flags, NULL and non-NULL `environment` and
   `stack_trace`, an unknown key, an over-long message, a future timestamp) and checks every known
   event landed as its own row with the right values, and the receipt.
@@ -79,7 +81,7 @@ One round trip writes an error batch of any size up to `MAX_BATCH`.
 ```sql
 INSERT INTO flag_errors
   (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter)
-SELECT $1, f, env, en, et, em, st, at, $9
+SELECT $1::uuid, f, env, en, et, em, st, at, $9::text
   FROM UNNEST($2::uuid[], $3::text[], $4::bool[], $5::text[], $6::text[], $7::text[], $8::timestamptz[])
     AS t(f, env, en, et, em, st, at)
 ```
