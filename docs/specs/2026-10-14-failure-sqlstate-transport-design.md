@@ -1,6 +1,6 @@
 # Failure reasons: SQLSTATE and transport sub-kind above debug
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#55)
 **Issue:** #43
 
 ## 1. Brief

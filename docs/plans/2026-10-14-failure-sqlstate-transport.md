@@ -88,7 +88,7 @@ Failure`; Task 2 relies on the log field names `reason`, `status`, `sqlstate`, `
 
 **Model:** sonnet — mechanical across many sites, with a small, fully specified type.
 
-- [ ] **Step 1: Write the failing unit tests** in `crates/flags-core/src/error.rs` `mod tests`:
+- [x] **Step 1: Write the failing unit tests** in `crates/flags-core/src/error.rs` `mod tests`:
 
   - First rename the existing test double `struct Sqlstate(&'static str)` in `mod tests` to
     `FakeDbError` (and its uses in `db()`), so the new `super::Sqlstate` is not shadowed.
@@ -124,11 +124,11 @@ Failure`; Task 2 relies on the log field names `reason`, `status`, `sqlstate`, `
     If `usage_status` maps the unparseable response to something other than `Transport`, print
     it and report NEEDS_CONTEXT instead of changing the expectation.
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib error::`
   Expected: compile errors (`Failure`, `Sqlstate`, `.reason` on a tuple).
 
-- [ ] **Step 3: Implement in `crates/flags-core/src/error.rs`**
+- [x] **Step 3: Implement in `crates/flags-core/src/error.rs`**
 
 ```rust
 /// A text-free description of a failure, for logs above debug (#29, #35, #43).
@@ -214,7 +214,7 @@ impl std::fmt::Debug for Sqlstate {
   `sqlstate` is `Sqlstate::parse(&code)` for `sqlx::Error::Database(db)` with `db.code()` `Some`,
   else `None`. Update its doc comment (it now returns the SQLSTATE too).
 
-- [ ] **Step 4: Update every caller** (field order at each event: existing leading fields such
+- [x] **Step 4: Update every caller** (field order at each event: existing leading fields such
   as `org`/`code`, then `reason, status, sqlstate, transport`, then the rest; debug twins carry
   the same fields plus their existing `error = %e`):
   - `crates/flags-core/src/usage.rs`: `ShipError::failure_reason -> Failure` (`Platform(p) =>
@@ -242,12 +242,12 @@ impl std::fmt::Debug for Sqlstate {
   Run `grep -rn "failure_reason" crates` afterwards: every hit must be a `Failure`, except
   `join_failure_reason` in `crates/flags-server/src/main.rs` (a `JoinError` helper, out of scope).
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib`
   then all gates in Global Constraints (test, lint, format, extra, podman build). Expected: all pass, including
   `crates/flags-server/tests/log_text.rs`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
   `feat(core): log the sqlstate and transport sub-kind with failure reasons` — body: why (an
   operator at `info` can't tell a Postgres restart from a data exception, or a refused connection
   from a timeout), what (one `Failure` type, named 57/25 classes), ends `Fixes #43`. No attribution.
@@ -267,7 +267,7 @@ caching; see its module doc).
 
 **Model:** sonnet — test additions following an existing pattern.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
   - Both files: add a private `Sqlstate(&'static str)` test type implementing
     `sqlx::error::DatabaseError`, modelled on `FakeDbError` in `crates/flags-core/src/error.rs`
     tests but with two fields, a code and a marker: `code()` returns the code, and both
@@ -288,14 +288,14 @@ caching; see its module doc).
   - If either crate's `[dev-dependencies]` lacks `tokio` with `rt`/`net`, or `uuid`, add it from
     the workspace (`tokio = { workspace = true, features = ["full"] }`); never add `reqwest`.
 
-- [ ] **Step 2: Verify they fail without the fields**
+- [x] **Step 2: Verify they fail without the fields**
   Temporarily delete `sqlstate = f.sqlstate(),` from `log_server_failure`'s error event; run
   `cargo test -p flags-mcp --test failure_logs`; expected FAIL naming `sqlstate="57P01"`. Restore
   it. Do the same for the `flags-api` SDK site with `cargo test -p flags-api --test failure_logs`.
 
-- [ ] **Step 3: Run them to verify they pass**, then all gates in Global Constraints (test, lint,
+- [x] **Step 3: Run them to verify they pass**, then all gates in Global Constraints (test, lint,
   format, extra, podman build).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   `test: prove sqlstate and transport fields reach mcp and sdk logs` — body: why, ends
   `Fixes #43`. No attribution.
