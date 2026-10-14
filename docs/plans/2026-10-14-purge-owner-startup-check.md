@@ -50,7 +50,6 @@ rolled-back tenant-shaped transaction (`PurgeReport`), and judges them in a pure
 | **Modify.** `crates/flags-core/tests/db.rs` | DB tests for `check` and `inspect` |
 | **Modify.** `crates/flags-server/src/main.rs` | call the check after the isolation proof; refuse to serve on problems |
 | **Modify.** `docs/deploy/fly.md` | the precondition paragraph names the boot check |
-| **Modify.** `CLAUDE.md` | verify step lists the new boot-log line |
 
 ## Task Order & Rationale
 
@@ -128,7 +127,8 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
 
 `problems()`, in this order:
 1. `owner == None`: one problem only (return immediately): `purge_deleted_org_audit(uuid) does not
-   exist, so every org.deleted would fail: run migrations (0004) against this database before serving`.
+   exist, so every org.deleted would fail: run migrations (0004) against this database before serving (with FLAGS_RUN_MIGRATIONS=false,
+   migrate separately first)`.
 2. owner neither superuser nor BYPASSRLS: `purge_deleted_org_audit(uuid) is owned by {owner:?},
    which is neither a superuser nor BYPASSRLS, so it cannot see the audit trail it purges and
    every org.deleted would fail (SQLSTATE 55000). Hand the function to a role that is exempt
@@ -181,13 +181,15 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
 **Files:**
 - Modify: `crates/flags-server/src/main.rs` (after the `verify_tenant_isolation` block, before `platform_client`)
 - Modify: `docs/deploy/fly.md` (the "migrating role must stay exempt" bullet)
-- Modify: `CLAUDE.md` (Ship > verify: the boot-log list)
 
 **Interfaces:** consumes `flags_core::audit_purge::check` and `PurgeReport::{problems, summary}`.
 
 **Out-of-band / invariants:** none; `main.rs` holds no SQL.
 
 **Model:** haiku — wiring and docs fully specified.
+
+(After the PR opens, the orchestrator adds the final record-as-shipped commit: the spec's
+`**Status:**` becomes `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked.)
 
 - [ ] **Step 1: Wire it** in `main.rs`:
 
@@ -212,9 +214,8 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
   that `flags-server` checks this at boot and refuses to serve otherwise (`refusing to serve: an
   org.deleted could not purge …`), that a healthy boot logs `audit purge ready: …`, and that where
   `otto_app` cannot be assumed and the connecting role owns the function, `BYPASSRLS` on that role
-  is not a fix (the isolation proof refuses it): reassign the function or migrate separately. In
-  `CLAUDE.md` Ship > verify, add `audit purge ready` to the list of boot-log lines
-  `fly logs` must show (after `tenant isolation enforced as role "otto_app"`).
+  is not a fix (the isolation proof refuses it): reassign the function or migrate separately.
+  Quote the summary line exactly as the code logs it. Do not edit `CLAUDE.md`.
 - [ ] **Step 3: Gates:** full test, lint, format, extra, and `podman build -t otto-flags:check .`.
 - [ ] **Step 4: Commit:** `fix(server): refuse to serve when the audit purge cannot run`, body
   explaining why, ending `Fixes #40`.

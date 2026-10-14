@@ -97,8 +97,8 @@ be a new issue.
 - **The judgement is a pure `problems()` method** on a facts struct, like
   `otto_tenant::IsolationReport`, so each failing state is unit-testable without a database, and
   `main.rs` turns problems into the refusal.
-- The `CLAUDE.md` verify step gains the new boot-log line (a section kept current by the PR that
-  changes it).
+- `CLAUDE.md` is not edited by this change: its verify step's boot-log list should gain the new
+  `audit purge ready` line, which is proposed to Rob in the run's report rather than made here.
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 5. Goal and success criteria
@@ -119,7 +119,7 @@ saying why, before binding a port.
 
 **In:** a new `crates/flags-core/src/audit_purge.rs` (facts, judgement, catalog read); the call
 in `crates/flags-server/src/main.rs`; tests in that module and `crates/flags-core/tests/db.rs`;
-the precondition paragraph in `docs/deploy/fly.md`; the boot-log list in `CLAUDE.md`'s verify step.
+the precondition paragraph in `docs/deploy/fly.md`.
 
 **Out:** supporting a non-exempt owner (section 3); changing `0004` or the purge; `otto-tenant`'s
 isolation proof; any production role change.
