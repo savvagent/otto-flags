@@ -314,7 +314,7 @@ pub async fn ship_once(
     let receipt = match platform.ship_usage(&events).await {
         Ok(r) => r,
         Err(e) => {
-            reschedule(db, &ids, &e.to_string(), cfg).await;
+            reschedule(db, &ids, &stored_reason(&e), cfg).await;
             return Err(e.into());
         }
     };
@@ -325,13 +325,18 @@ pub async fn ship_once(
             ids.len()
         );
         tracing::error!("{msg}; keeping every row and retrying");
-        reschedule(db, &ids, &msg, cfg).await;
-        return Err(otto_resource::Error::Decode(msg).into());
+        let err = otto_resource::Error::Decode(msg);
+        reschedule(db, &ids, &stored_reason(&err), cfg).await;
+        return Err(err.into());
     }
 
     let mut tx = db.pool().begin().await?;
     for r in &receipt.rejected {
-        tracing::error!(event_id = %r.event_id, reason = %r.reason,
+        // The platform's reason is its text, not ours: debug only, and kept in
+        // usage_outbox_rejected for operators (#44).
+        tracing::error!(event_id = %r.event_id, reason = "rejected",
+            "the platform refused a usage event; moving it to usage_outbox_rejected");
+        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?r.reason,
             "the platform refused a usage event; moving it to usage_outbox_rejected");
         sqlx::query(
             "INSERT INTO usage_outbox_rejected \
@@ -352,7 +357,7 @@ pub async fn ship_once(
     Ok(ids.len())
 }
 
-async fn reschedule(db: &Db, ids: &[i64], error: &str, cfg: &ShipperConfig) {
+async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {
     let r = sqlx::query(
         "UPDATE usage_outbox SET last_error = $2, \
                 next_attempt_at = now() + make_interval(secs => \
@@ -360,7 +365,7 @@ async fn reschedule(db: &Db, ids: &[i64], error: &str, cfg: &ShipperConfig) {
          WHERE id = ANY($1)",
     )
     .bind(ids)
-    .bind(error.chars().take(500).collect::<String>())
+    .bind(reason)
     .bind(cfg.base_backoff.as_secs_f64())
     .bind(cfg.max_backoff.as_secs_f64())
     .execute(db.pool())
@@ -370,6 +375,16 @@ async fn reschedule(db: &Db, ids: &[i64], error: &str, cfg: &ShipperConfig) {
         let reason = crate::error::db_failure_reason(&e);
         tracing::warn!(reason, "could not record a usage shipping failure");
         tracing::debug!(reason, error = %e, "could not record a usage shipping failure");
+    }
+}
+
+/// What `usage_outbox.last_error` records for a failed shipment: the
+/// failure's name and HTTP status (`http_status 502`), never its text,
+/// which can carry a platform response body or URL (#44).
+fn stored_reason(e: &otto_resource::Error) -> String {
+    match crate::error::platform_failure_reason(e) {
+        (reason, Some(status)) => format!("{reason} {status}"),
+        (reason, None) => reason.to_string(),
     }
 }
 
@@ -428,6 +443,23 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stored_reason_names_the_failure_without_its_text() {
+        let status = otto_resource::Error::Status {
+            status: 502,
+            body: "secret".into(),
+        };
+        assert_eq!(stored_reason(&status), "http_status 502");
+        assert_eq!(
+            stored_reason(&otto_resource::Error::Unauthorized),
+            "unauthorized"
+        );
+        assert_eq!(
+            stored_reason(&otto_resource::Error::Decode("secret".into())),
+            "decode"
+        );
+    }
 
     #[test]
     fn writes_are_billable_and_reads_are_not() {
