@@ -102,11 +102,17 @@ async fn main() -> Result<()> {
     tracing::info!("flushing usage");
     stop.send(true).ok();
     if let Err(e) = shipper.await {
-        tracing::warn!(error = %e, "the usage shipper did not stop cleanly");
+        let reason = join_failure_reason(&e);
+        tracing::warn!(reason, "the usage shipper did not stop cleanly");
+        tracing::debug!(reason, error = %e, "the usage shipper did not stop cleanly");
     }
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "the rollback checker did not stop cleanly"),
+        Ok(Err(e)) => {
+            let reason = join_failure_reason(&e);
+            tracing::warn!(reason, "the rollback checker did not stop cleanly");
+            tracing::debug!(reason, error = %e, "the rollback checker did not stop cleanly");
+        }
         Err(_) => {
             tracing::warn!("the rollback checker did not stop within 5 s; aborting it");
             checker_abort.abort();
@@ -120,6 +126,23 @@ async fn main() -> Result<()> {
 
 const PLATFORM_EVENT_RETENTION_DAYS: i32 = 30;
 
+/// Whether a background task panicked or was cancelled; the panic payload
+/// stays at debug with the rest of the error text.
+fn join_failure_reason(e: &tokio::task::JoinError) -> &'static str {
+    if e.is_panic() {
+        "panicked"
+    } else {
+        "cancelled"
+    }
+}
+
+/// A sweep failure's code and reason at warn, its database text only at debug.
+fn log_sweep_failure(e: &flags_core::Error, what: &'static str) {
+    let (reason, status) = e.failure_reason();
+    tracing::warn!(code = e.code(), reason, status, "{what}");
+    tracing::debug!(code = e.code(), reason, error = %e, "{what}");
+}
+
 /// Hourly retention: platform-event markers, removed-member tombstones, error
 /// reports, and old evaluation buckets.
 async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -127,12 +150,12 @@ async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         match flags_core::platform_events::sweep(&db, PLATFORM_EVENT_RETENTION_DAYS).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept old platform-event records"),
-            Err(e) => tracing::warn!(error = %e, "platform-event sweep failed"),
+            Err(e) => log_sweep_failure(&e, "platform-event sweep failed"),
         }
         match flags_core::telemetry::sweep(&db).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept expired telemetry"),
-            Err(e) => tracing::warn!(error = %e, "telemetry sweep failed"),
+            Err(e) => log_sweep_failure(&e, "telemetry sweep failed"),
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
@@ -155,11 +178,21 @@ async fn check_platform(platform: &otto_resource::PlatformClient, config: &Confi
              no usage can be shipped. Check FLAGS_INTROSPECTION_SECRET and that the resource URI \
              is the one this service was registered with"
         ),
-        Err(e) => tracing::warn!(
-            platform = %config.platform_url,
-            error = %e,
-            "could not reach the otto platform at startup; continuing"
-        ),
+        Err(e) => {
+            let (reason, status) = flags_core::error::platform_failure_reason(&e);
+            tracing::warn!(
+                platform = %config.platform_url,
+                reason,
+                status,
+                "could not reach the otto platform at startup; continuing"
+            );
+            tracing::debug!(
+                platform = %config.platform_url,
+                reason,
+                error = %e,
+                "could not reach the otto platform at startup; continuing"
+            );
+        }
     }
 }
 
@@ -192,5 +225,23 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => tracing::info!("SIGINT; shutting down"),
         _ = terminate => tracing::info!("SIGTERM; shutting down"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn join_failures_name_panic_and_cancel_without_the_payload() {
+        let panicked = tokio::spawn(async { panic!("secret") })
+            .await
+            .expect_err("the task panicked");
+        assert_eq!(join_failure_reason(&panicked), "panicked");
+
+        let pending = tokio::spawn(std::future::pending::<()>());
+        pending.abort();
+        let cancelled = pending.await.expect_err("the task was aborted");
+        assert_eq!(join_failure_reason(&cancelled), "cancelled");
     }
 }
