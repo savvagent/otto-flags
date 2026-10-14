@@ -435,7 +435,6 @@ fn parse_variations(v: &Value) -> Option<BTreeMap<String, Variation>> {
 
 // ------------------------------------------------------------------ validation
 
-/// Validate a flag's variations, returning the canonical JSON to store.
 /// True when `v` holds NUL anywhere, in a string or an object key. Postgres
 /// `jsonb` refuses `\u0000`, so a write carrying it would fail its statement.
 pub(crate) fn contains_nul(v: &Value) -> bool {
@@ -447,6 +446,7 @@ pub(crate) fn contains_nul(v: &Value) -> bool {
     }
 }
 
+/// Validate a flag's variations, returning the canonical JSON to store.
 pub fn validate_variations(v: &Value) -> Result<Value, String> {
     if v.is_null() {
         return Ok(Value::Object(Map::new()));
