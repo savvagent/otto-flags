@@ -862,6 +862,45 @@ async fn flags_are_versioned_and_roll_back(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+// No stored key can contain NUL (Postgres text cannot hold it), so such a key
+// finds nothing; binding it would fail the statement and abort the
+// transaction instead (#45).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_key_with_nul_finds_no_flag(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "f".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert!(tx.find_flag(app.id, "f\0").await.unwrap().is_none());
+    let err = tx
+        .update_flag(
+            &app,
+            "f\0",
+            FlagPatch {
+                name: Some("x".into()),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::FlagNotFound { .. }), "{err:?}");
+    tx.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
     let db = db(pool).await;

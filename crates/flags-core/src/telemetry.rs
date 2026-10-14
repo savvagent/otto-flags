@@ -106,9 +106,8 @@ async fn flag_ids(
     app: FlagAppId,
     mut keys: Vec<String>,
 ) -> Result<HashMap<String, FlagId>> {
-    // No flag key can contain NUL (`flags::validate_key`), so such a key is
-    // unknown like any other; binding it would fail the whole batch.
-    keys.retain(|k| !k.contains('\0'));
+    // Unknown like any other key; binding it would fail the whole batch.
+    keys.retain(|k| !crate::flags::unstorable(k));
     let org = tx.org();
     let rows: Vec<(String, FlagId)> = sqlx::query_as(
         "SELECT key, id FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = ANY($3)",

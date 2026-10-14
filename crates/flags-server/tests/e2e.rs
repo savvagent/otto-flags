@@ -919,6 +919,48 @@ async fn telemetry_with_nul_text_is_accepted(pool: PgPool) {
     assert_eq!(r, json!({"accepted": 1, "unknown_flags": 1}));
 }
 
+/// NUL is valid in a path but not in Postgres text; it used to fail the lookup
+/// with a server error instead of not-found (#45).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn evaluating_a_key_with_nul_is_not_found(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    // The public client key: anyone can send this.
+    let (t, _, _, client_key) = org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;
+
+    for path in [
+        "/api/flags/checkout%00/evaluate",
+        "/api/evaluate/checkout%00",
+    ] {
+        let (status, r) = sdk(&s.app, "POST", path, &client_key, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {r}");
+        assert_eq!(r["error"], "flag_not_found", "{path}: {r}");
+        assert!(
+            !r["error_description"].as_str().unwrap().contains('\0'),
+            "{path}: {r}"
+        );
+    }
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/flags/checkout/evaluate",
+        &client_key,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+
+    let err = tool(
+        &s.app,
+        &t,
+        "get_flag",
+        json!({"app": "web", "key": "checkout\u{0}"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["data"]["code"], "flag_not_found", "{err}");
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn auto_rollback_needs_a_plan_that_includes_it(pool: PgPool) {
     let (url, platform) = start_platform().await;
