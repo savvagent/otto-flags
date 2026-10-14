@@ -1,6 +1,6 @@
 # Answer not-found for a flag key containing NUL
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#60)
 **Issue:** #45
 
 ## 1. Brief

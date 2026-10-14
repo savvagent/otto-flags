@@ -62,7 +62,7 @@ One task: one predicate and its three uses; the tests only make sense together.
 - Modify: `crates/flags-core/tests/db.rs`
 - Modify: `crates/flags-server/tests/e2e.rs`
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `crates/flags-core/tests/db.rs`, after `telemetry_rolls_up_and_feeds_health`'s neighbours (any
     place among the flag tests), `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`
     `a_key_with_nul_finds_no_flag`: `db(pool).await`, `OrgId::new()`, `UserId::new()`, `db.begin(org)`,
@@ -81,13 +81,13 @@ One task: one predicate and its three uses; the tests only make sense together.
     `r["error"] == "flag_not_found"`, and `!r["error_description"].as_str().unwrap().contains('\0')`. Then `/api/flags/checkout/evaluate` → `StatusCode::OK`. Then
     `tool(&s.app, &t, "get_flag", json!({"app": "web", "key": "checkout\u{0}"}))` is `Err(err)` with
     `err["data"]["code"] == "flag_not_found"`.
-- [ ] **Step 2: Run, see them fail:**
+- [x] **Step 2: Run, see them fail:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db a_key_with_nul_finds_no_flag`
   and
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e evaluating_a_key_with_nul_is_not_found`
   — both fail (a database error; a `503 temporarily_unavailable` on the SDK routes and
   `internal_error` over MCP, not not-found).
-- [ ] **Step 3: Implement** in `crates/flags-core/src/flags.rs`:
+- [x] **Step 3: Implement** in `crates/flags-core/src/flags.rs`:
   - Near `validate_key`, add
     ```rust
     /// True for a key no stored flag can have: Postgres `text` cannot hold NUL,
@@ -101,8 +101,8 @@ One task: one predicate and its three uses; the tests only make sense together.
   - `lock`: before the query, `if unstorable(key) { return Err(Error::FlagNotFound { app: app.name.clone(), key: key.trim().to_string() }); }`.
   - `crates/flags-core/src/telemetry.rs`, `flag_ids`: replace `keys.retain(|k| !k.contains('\0'));`
     with `keys.retain(|k| !crate::flags::unstorable(k));`, and shorten its comment to point at `unstorable`.
-- [ ] **Step 4: Run, see them pass:** the Step 2 commands, then all gates (Global Constraints),
+- [x] **Step 4: Run, see them pass:** the Step 2 commands, then all gates (Global Constraints),
   recording pass counts per test binary.
-- [ ] **Step 5: Commit:** `fix(core): answer not-found for a flag key containing nul`, body saying
+- [x] **Step 5: Commit:** `fix(core): answer not-found for a flag key containing nul`, body saying
   why (a public `sdk_` key could turn an unknown-key lookup into a server error and a misleading
   failure log; the MCP tools and writers shared the lookup) and ending `Fixes #45`. No attribution.
