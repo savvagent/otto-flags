@@ -90,6 +90,9 @@ Failure`; Task 2 relies on the log field names `reason`, `status`, `sqlstate`, `
 
 - [ ] **Step 1: Write the failing unit tests** in `crates/flags-core/src/error.rs` `mod tests`:
 
+  - First rename the existing test double `struct Sqlstate(&'static str)` in `mod tests` to
+    `FakeDbError` (and its uses in `db()`), so the new `super::Sqlstate` is not shadowed.
+
   - Change `failure_reasons_name_the_kind_without_the_text` to compare `e.failure_reason().reason`
     and `.status` (keep every existing row and its reason), and `platform_failure_reason(&e).reason`.
   - Add `sqlstate_is_logged_only_when_postgres_raised_it`:
@@ -104,7 +107,7 @@ Failure`; Task 2 relies on the log field names `reason`, `status`, `sqlstate`, `
     read_only_sql_transaction`, `25P02 in_failed_sql_transaction`, `25001
     invalid_transaction_state`.
   - Add `Sqlstate::parse` cases: `"40P01"` ok and `as_str()` round-trips; `""`, `"4000"`,
-    `"400011"`, `"40p01"`, `"40 01"`, `"4000é"` rejected.
+    `"400011"`, `"40p01"`, `"40 01"`, `"4000-"`, `"4000é"` rejected.
   - Add `#[tokio::test] async fn transport_failures_carry_a_sub_kind()`, using real
     `otto_resource::PlatformClient` calls (`usage_status(uuid::Uuid::nil())`) built with
     `ClientConfig::new(base, "https://flags.test/mcp", "secret")` and `timeout` overridden:
@@ -236,11 +239,12 @@ impl std::fmt::Debug for Sqlstate {
     they compile unchanged once the types line up.
   - `crates/flags-server/tests/usage_logs.rs`: `assert_eq!(err.failure_reason(), ("http_status",
     Some(502)))` → assert `.reason` and `.status`; same for the `decode` assertion.
-  Run `grep -rn "failure_reason" crates` afterwards: every hit must be a `Failure`.
+  Run `grep -rn "failure_reason" crates` afterwards: every hit must be a `Failure`, except
+  `join_failure_reason` in `crates/flags-server/src/main.rs` (a `JoinError` helper, out of scope).
 
 - [ ] **Step 5: Run the tests to verify they pass**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib`
-  then the full test gate, clippy, and fmt (Global Constraints). Expected: all pass, including
+  then all gates in Global Constraints (test, lint, format, extra, podman build). Expected: all pass, including
   `crates/flags-server/tests/log_text.rs`.
 
 - [ ] **Step 6: Commit**
@@ -265,14 +269,17 @@ caching; see its module doc).
 
 - [ ] **Step 1: Write the tests**
   - Both files: add a private `Sqlstate(&'static str)` test type implementing
-    `sqlx::error::DatabaseError` (copy the one in `crates/flags-core/src/error.rs` tests; its
-    `message()` returns the marker text so the test can prove the message stays at debug) and a
-    case `Error::Db(sqlx::Error::Database(Box::new(…("57P01", "MARKER_SQLSTATE"))))` with
+    `sqlx::error::DatabaseError`, modelled on `FakeDbError` in `crates/flags-core/src/error.rs`
+    tests but with two fields, a code and a marker: `code()` returns the code, and both
+    `Display` and `message()` write the marker (sqlx formats `Error::Database` through the boxed
+    error's `Display`, so that is what reaches the debug line). Add a case
+    `Error::Db(sqlx::Error::Database(Box::new(FakeDbError("57P01", "MARKER_SQLSTATE"))))` with
     expected fields `code="internal_error" reason="admin_shutdown" sqlstate="57P01"` above debug and
     the marker only at debug. In flags-api, through `ApiError::from`; in flags-mcp, through
     `from_core`.
   - `crates/flags-mcp/tests/failure_logs.rs`: a `from_platform` transport case. Produce the
-    error with a current-thread tokio runtime (`tokio::runtime::Builder::new_current_thread()
+    error before and outside the `capture` closure (so reqwest/hyper events from the connect
+    attempt are not captured; only `from_platform` runs inside it), with a current-thread tokio runtime (`tokio::runtime::Builder::new_current_thread()
     .enable_all().build()`) calling `otto_resource::PlatformClient::usage_status` against a closed
     local port (as in Task 1); expected fields
     `code="platform_unavailable" reason="transport" transport="connect"`. The marker for this
@@ -286,7 +293,8 @@ caching; see its module doc).
   `cargo test -p flags-mcp --test failure_logs`; expected FAIL naming `sqlstate="57P01"`. Restore
   it. Do the same for the `flags-api` SDK site with `cargo test -p flags-api --test failure_logs`.
 
-- [ ] **Step 3: Run them to verify they pass**, then the full gates (Global Constraints).
+- [ ] **Step 3: Run them to verify they pass**, then all gates in Global Constraints (test, lint,
+  format, extra, podman build).
 
 - [ ] **Step 4: Commit**
   `test: prove sqlstate and transport fields reach mcp and sdk logs` — body: why, ends
