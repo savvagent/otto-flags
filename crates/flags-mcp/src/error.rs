@@ -27,7 +27,7 @@ pub(crate) fn log_server_failure(
     detail: &dyn std::fmt::Display,
 ) {
     tracing::error!(code, reason, status, "{what}");
-    tracing::debug!(code, error = %detail, "{what}");
+    tracing::debug!(code, reason, error = %detail, "{what}");
 }
 
 const SURFACED: &str = "server-side failure surfaced to an MCP caller";

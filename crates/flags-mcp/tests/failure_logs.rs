@@ -90,10 +90,12 @@ fn server_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
         (
             // The wire flattens this to an opaque internal error; the log
             // keeps the reason.
-            "pool timed out",
-            r#"code="internal_error" reason="pool_timed_out""#,
+            "MARKER_TENANT",
+            r#"code="internal_error" reason="protocol""#,
             Box::new(|| {
-                let wire = from_tenant(otto_tenant::Error::Db(sqlx::Error::PoolTimedOut));
+                let wire = from_tenant(otto_tenant::Error::Db(sqlx::Error::Protocol(
+                    "MARKER_TENANT".into(),
+                )));
                 let data = wire.data.expect("data");
                 assert_eq!(data["code"], "internal_error");
                 assert_eq!(data["retriable"], false);

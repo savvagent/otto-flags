@@ -142,9 +142,7 @@ impl Error {
             _ => false,
         }
     }
-}
 
-impl Error {
     /// A text-free description of this failure for logs above debug: a fixed
     /// reason we chose, and an HTTP status for a platform failure. Database and
     /// platform text can carry SQL, schema names, response bodies, and URLs, so
@@ -319,7 +317,15 @@ mod tests {
                 "integrity_constraint_violation",
                 None,
             ),
+            (Error::Db(db("40001")), "serialization_failure", None),
+            (Error::Db(db("55P03")), "lock_not_available", None),
+            (Error::Db(db("57014")), "query_canceled", None),
+            (Error::Db(db("42P01")), "undefined_table", None),
+            (Error::Db(db("42703")), "undefined_column", None),
+            (Error::Db(db("08006")), "connection_exception", None),
+            (Error::Db(db("53300")), "insufficient_resources", None),
             (Error::Db(db("XX000")), "database_error", None),
+            (Error::Db(sqlx::Error::RowNotFound), "row_not_found", None),
             (
                 Error::Db(sqlx::Error::Protocol("secret".into())),
                 "protocol",
