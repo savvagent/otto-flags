@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
     // Like isolation, only the running database can say whether it is.
     let purge = flags_core::audit_purge::check(&db)
         .await
-        .context("could not read the audit purge function from the catalog")?;
+        .context("refusing to serve: could not read the audit purge function from the catalog")?;
     let problems = purge.problems();
     if !problems.is_empty() {
         anyhow::bail!(

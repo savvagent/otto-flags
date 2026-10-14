@@ -182,7 +182,7 @@ if !problems.is_empty() {
 tracing::info!("{}", purge.summary());
 ```
 
-Summary, e.g.: `audit purge ready: purge_deleted_org_audit is owned by "flags" (superuser) and
+Summary, e.g.: `audit purge ready: purge_deleted_org_audit(uuid) is owned by "flags" (superuser) and
 executable by "otto_app"`.
 
 No public interface changes beyond the new crate module (additive). No wire, tool, route, config,
