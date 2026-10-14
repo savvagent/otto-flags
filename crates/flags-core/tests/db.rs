@@ -1040,6 +1040,61 @@ async fn health_shows_variation_names_cleaned(pool: PgPool) {
         h.variations,
         BTreeMap::from([("a b".to_string(), 5), ("on".to_string(), 4)])
     );
+    // The name that cleans to nothing is not shown, but still counted.
+    assert_eq!(h.other_variations, 1);
+    tx.commit().await.unwrap();
+}
+
+// A public client key can report any number of distinct variation names. The
+// answer shows the 20 most evaluated, as many as a flag can declare, and sums
+// the rest, so no reporter sizes it (#59).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_shows_at_most_twenty_variations(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let event = |enabled: bool, variation: Option<String>| EvalEvent {
+        flag_key: "f".into(),
+        enabled,
+        variation,
+        environment: "production".into(),
+        at: now,
+    };
+    // vNN is evaluated NN + 1 times.
+    let mut events: Vec<EvalEvent> = (0..30)
+        .flat_map(|i| (0..=i).map(move |_| format!("v{i:02}")))
+        .map(|v| event(true, Some(v)))
+        .collect();
+    events.extend((0..2).map(|_| event(true, None)));
+    events.extend((0..3).map(|_| event(false, None)));
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, events)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!((h.evaluations.enabled, h.evaluations.disabled), (467, 3));
+    let expected: BTreeMap<String, i64> = (10..30).map(|i| (format!("v{i:02}"), i + 1)).collect();
+    assert_eq!(h.variations, expected);
+    // v00..v09: 1 + 2 + ... + 10.
+    assert_eq!(h.other_variations, 55);
     tx.commit().await.unwrap();
 }
 
