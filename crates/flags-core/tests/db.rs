@@ -21,7 +21,7 @@ use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgPool, Postgres};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
@@ -1095,6 +1095,72 @@ async fn health_shows_at_most_twenty_variations(pool: PgPool) {
     assert_eq!(h.variations, expected);
     // v00..v09: 1 + 2 + ... + 10.
     assert_eq!(h.other_variations, 55);
+    tx.commit().await.unwrap();
+}
+
+// Error types are grouped as they read after cleaning, so one error reported
+// under spellings that differ only in hidden characters is one row, and cannot
+// spread over the ten and push real errors out (#59).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_merges_error_types_that_read_alike(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    // Unmerged, no TypeError spelling (2 each) would reach the ten (3 each).
+    let spellings = ["TypeError", "TypeError\u{200B}", "\u{202E}TypeError"]
+        .into_iter()
+        .map(|t| (t.to_string(), 2));
+    let others = (0..11).map(|i| (format!("E{i:02}"), 3));
+    let errors: Vec<ErrorEvent> = spellings
+        .chain(others)
+        .flat_map(|(error_type, n)| {
+            (0..n).map(move |_| ErrorEvent {
+                flag_key: "f".into(),
+                flag_enabled: true,
+                environment: Some("production".into()),
+                error_type: error_type.clone(),
+                error_message: "boom".into(),
+                stack_trace: None,
+                at: now,
+            })
+        })
+        .collect();
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Client, errors)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.errors.enabled, 39);
+    assert_eq!(h.top_errors.len(), 10);
+    assert_eq!(
+        (h.top_errors[0].error_type.as_str(), h.top_errors[0].count),
+        ("TypeError", 6)
+    );
+    let rest: BTreeSet<&str> = h.top_errors[1..]
+        .iter()
+        .inspect(|g| assert_eq!(g.count, 3, "{g:?}"))
+        .map(|g| g.error_type.as_str())
+        .collect();
+    assert_eq!(rest.len(), 9);
+    assert!(rest.iter().all(|t| t.starts_with('E')), "{rest:?}");
     tx.commit().await.unwrap();
 }
 

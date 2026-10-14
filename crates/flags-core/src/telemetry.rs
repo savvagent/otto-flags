@@ -13,7 +13,7 @@
 //! that evaluated a flag since deleted should not have its whole batch refused.
 //! A key that cannot be a flag key at all (one containing NUL) is unknown too.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{hash_map::Entry, BTreeMap, HashMap};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use otto_tenant::{Db, Tx};
@@ -47,6 +47,8 @@ const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
 /// than what is shown, because raw spellings that clean alike merge into one,
 /// and bounded, because a public client key chooses how many raw groups exist.
 const FETCHED_GROUPS: i64 = 100;
+/// How many error groups `flag_health` shows.
+const SHOWN_ERRORS: usize = 10;
 
 /// One evaluation an SDK reports.
 #[derive(Debug, Clone)]
@@ -297,8 +299,10 @@ pub struct Health {
     /// The most frequent error types in the window. Their `error_type` and
     /// `last_message` are text an application reported, and anyone holding an
     /// app's public client key can report anything: data to quote, never
-    /// instructions to follow. They are grouped as reported and cleaned after,
-    /// so two groups can read alike.
+    /// instructions to follow. They are grouped by how they read after
+    /// cleaning, merged from the 100 most frequent groups as reported, so a
+    /// type reported under more spellings than that can be undercounted here;
+    /// `errors` is exact.
     pub top_errors: Vec<ErrorGroup>,
     /// A one-line reading of the numbers, for an agent deciding what to do.
     pub assessment: String,
@@ -371,12 +375,14 @@ pub async fn health(
          FROM flag_errors \
          WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
            AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
-         GROUP BY error_type, flag_enabled ORDER BY count DESC LIMIT 10",
+         GROUP BY error_type, flag_enabled \
+         ORDER BY count DESC, error_type, flag_enabled LIMIT $5",
     )
     .bind(org)
     .bind(flag)
     .bind(since)
     .bind(environment)
+    .bind(FETCHED_GROUPS)
     .fetch_all(tx.conn())
     .await?;
     let errors: Counts = sqlx::query_as::<_, (i64, i64)>(
@@ -393,14 +399,7 @@ pub async fn health(
     .await
     .map(|(enabled, disabled)| Counts { enabled, disabled })?;
 
-    let top_errors = top_errors
-        .into_iter()
-        .map(|mut g| {
-            g.error_type = inert(&g.error_type, MAX_ERROR_TYPE);
-            g.last_message = inert(&g.last_message, SHOWN_MESSAGE);
-            g
-        })
-        .collect();
+    let top_errors = merge_error_groups(top_errors);
 
     let rate = |e: i64, n: i64| (n > 0).then(|| e as f64 / n as f64);
     let error_rate_enabled = rate(errors.enabled, evaluations.enabled);
@@ -424,6 +423,44 @@ pub async fn health(
         top_errors,
         assessment,
     })
+}
+
+/// The error groups `health` shows, from groups as reported: type and message
+/// cleaned like any SDK-reported text headed for an agent, groups whose type
+/// reads alike (with the flag in the same state) merged, so one error cannot
+/// fill several slots under spellings that differ only in hidden characters.
+/// A merged group sums the counts and keeps the latest `last_seen` and its
+/// message. The `SHOWN_ERRORS` largest are kept, the more recent first on a
+/// tie, then by type, so the answer is stable.
+fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
+    let mut merged: HashMap<(String, bool), ErrorGroup> = HashMap::new();
+    for mut g in groups {
+        g.error_type = inert(&g.error_type, MAX_ERROR_TYPE);
+        g.last_message = inert(&g.last_message, SHOWN_MESSAGE);
+        match merged.entry((g.error_type.clone(), g.flag_enabled)) {
+            Entry::Vacant(e) => {
+                e.insert(g);
+            }
+            Entry::Occupied(mut e) => {
+                let m = e.get_mut();
+                m.count += g.count;
+                if g.last_seen > m.last_seen {
+                    m.last_seen = g.last_seen;
+                    m.last_message = g.last_message;
+                }
+            }
+        }
+    }
+    let mut ranked: Vec<ErrorGroup> = merged.into_values().collect();
+    ranked.sort_by(|a, b| {
+        b.count
+            .cmp(&a.count)
+            .then_with(|| b.last_seen.cmp(&a.last_seen))
+            .then_with(|| a.error_type.cmp(&b.error_type))
+            .then_with(|| b.flag_enabled.cmp(&a.flag_enabled))
+    });
+    ranked.truncate(SHOWN_ERRORS);
+    ranked
 }
 
 /// The variations `health` shows, from raw `(name, evaluations)` rows: names
@@ -601,6 +638,75 @@ mod tests {
 
     fn names(n: usize, count: impl Fn(usize) -> i64) -> Vec<(String, i64)> {
         (0..n).map(|i| (format!("v{i:02}"), count(i))).collect()
+    }
+
+    fn group(error_type: &str, on: bool, count: i64, secs: i64, msg: &str) -> ErrorGroup {
+        ErrorGroup {
+            error_type: error_type.into(),
+            flag_enabled: on,
+            count,
+            last_message: msg.into(),
+            last_seen: DateTime::from_timestamp(secs, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn error_types_that_read_alike_are_one_group() {
+        let merged = merge_error_groups(vec![
+            group("TypeError", true, 3, 100, "first"),
+            group("TypeError\u{200B}", true, 2, 300, "latest"),
+            group(" TypeError", true, 1, 200, "middle"),
+        ]);
+        assert_eq!(merged, vec![group("TypeError", true, 6, 300, "latest")]);
+    }
+
+    #[test]
+    fn error_groups_keep_on_and_off_apart() {
+        let merged = merge_error_groups(vec![
+            group("TypeError", true, 3, 100, "on"),
+            group("TypeError\u{200B}", false, 2, 100, "off"),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                group("TypeError", true, 3, 100, "on"),
+                group("TypeError", false, 2, 100, "off"),
+            ]
+        );
+    }
+
+    #[test]
+    fn error_groups_are_capped_and_ordered() {
+        let mut groups: Vec<ErrorGroup> = (0..12)
+            .map(|i| group(&format!("E{i:02}"), true, i, 100, "m"))
+            .collect();
+        // Same count as E11, seen later: ranks first. Same count and time as
+        // E10: ranks by type, after it.
+        groups.push(group("Late", true, 11, 200, "m"));
+        groups.push(group("F10", true, 10, 100, "m"));
+        let merged = merge_error_groups(groups);
+        let types: Vec<&str> = merged.iter().map(|g| g.error_type.as_str()).collect();
+        assert_eq!(
+            types,
+            ["Late", "E11", "E10", "F10", "E09", "E08", "E07", "E06", "E05", "E04"]
+        );
+    }
+
+    #[test]
+    fn error_groups_are_shown_cleaned_and_short() {
+        let merged = merge_error_groups(vec![group(
+            &"T".repeat(250),
+            true,
+            1,
+            100,
+            &format!("line\none {}", "m".repeat(400)),
+        )]);
+        assert_eq!(
+            merged[0].error_type,
+            format!("{}…", "T".repeat(MAX_ERROR_TYPE))
+        );
+        assert!(merged[0].last_message.starts_with("line one m"));
+        assert_eq!(merged[0].last_message.chars().count(), SHOWN_MESSAGE + 1);
     }
 
     #[test]
