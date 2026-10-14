@@ -11,15 +11,19 @@ use sqlx::migrate::Migrator;
 /// as `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`.
 ///
 /// `ignore_missing` lets a release boot against a database that a newer
-/// release has already migrated: Fly's automatic rollback after a failed
-/// `/readyz`, an old machine restarting mid-rollout, or a revert deploy all
+/// release has already migrated: a rollback after a failed `/readyz`, an
+/// old machine restarting mid-rollout, or a revert deploy all
 /// run the previous image against the newer schema. sqlx's default would
 /// refuse with `VersionMissing` and crash-loop every machine. Only unknown
 /// versions are ignored: a known migration whose applied checksum differs
 /// still fails with `VersionMismatch`, and a migration recorded as failed,
-/// known or not, with `Dirty`. Each migration must therefore stay readable
-/// and writable by the previous release (the rollback invariant in
-/// `CLAUDE.md`).
+/// known or not, with `Dirty`. Each migration must stay readable and
+/// writable by the previous release (the rollback invariant in `CLAUDE.md`).
+///
+/// sqlx never records a failed migration itself on Postgres: a migration
+/// (none here is `-- no-transaction`) and its row commit in one transaction,
+/// so a failure leaves neither and the previous release still boots.
+/// Recovery: `docs/deploy/fly.md`, "When a migration fails".
 ///
 /// The cost: sqlx no longer notices an applied migration whose file was
 /// deleted or renamed. CI's `migrations-append-only` job catches any delete

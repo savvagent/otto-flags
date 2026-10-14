@@ -17,9 +17,10 @@ use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use serde_json::json;
-use sqlx::migrate::MigrateError;
+use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres};
+use sqlx::{Connection, PgPool, Postgres};
+use std::borrow::Cow;
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
@@ -357,8 +358,199 @@ async fn a_release_boots_against_a_database_a_newer_release_migrated(pool: PgPoo
     flags_core::migrate(&db(pool).await).await.unwrap();
 }
 
-/// A newer release's migration recorded as failed still refuses to boot,
-/// even though this release does not know its version.
+/// Runs a migrator the way a booting server does: on one session, which then
+/// ends. sqlx returns a migration error without releasing its session-level
+/// advisory lock; in production the process exits and the session with it.
+/// On a pooled connection the lock would outlive the call and block the next
+/// migrator that gets a different connection.
+async fn boot_migrate(migrator: &Migrator, pool: &PgPool) -> Result<(), MigrateError> {
+    let mut conn = pool.acquire().await.unwrap().detach();
+    let result = migrator.run(&mut conn).await;
+    conn.close().await.unwrap();
+    result
+}
+
+/// What a migration that fails in production leaves behind, which the
+/// recovery runbook in `docs/deploy/fly.md` ("When a migration fails")
+/// relies on (#34). sqlx runs each migration and its `_sqlx_migrations` row
+/// in one transaction, so a failure leaves neither: no `success = false`
+/// row, no `Dirty`, and the previous release boots as if the newer one had
+/// never deployed. The newer release retries from scratch on every boot.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_failed_migration_leaves_nothing_and_the_previous_release_boots(pool: PgPool) {
+    let newest = flags_core::MIGRATOR
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .expect("migrations are embedded");
+    let failing = newest + 1;
+    // Fails on data, like a constraint production rows violate: the table
+    // and its row are created first, so a partial apply would be visible.
+    let mut migrations: Vec<Migration> = flags_core::MIGRATOR.iter().cloned().collect();
+    migrations.push(Migration::new(
+        failing,
+        Cow::Borrowed("fails on existing data"),
+        MigrationType::Simple,
+        Cow::Borrowed(
+            "CREATE TABLE half_applied (n int); \
+             INSERT INTO half_applied VALUES (1); \
+             ALTER TABLE half_applied ADD CONSTRAINT negative CHECK (n < 0);",
+        ),
+        false,
+    ));
+    // The corrected change a recovery ships after recording the failed one.
+    let next = failing + 1;
+    migrations.push(Migration::new(
+        next,
+        Cow::Borrowed("the corrected change"),
+        MigrationType::Simple,
+        Cow::Borrowed("CREATE TABLE corrected (n int);"),
+        false,
+    ));
+    // `Migrator::DEFAULT` is doc-hidden in sqlx; `Cargo.lock` pins sqlx, so
+    // an upgrade that drops it fails to compile rather than misbehaving.
+    let newer_release = Migrator {
+        migrations: Cow::Owned(migrations),
+        ignore_missing: true,
+        ..Migrator::DEFAULT
+    };
+
+    let assert_fails = |err: MigrateError| match err {
+        MigrateError::ExecuteMigration(e, v) => {
+            assert_eq!(v, failing);
+            assert_eq!(sqlstate(&e), "23514", "{e}");
+            // The runbook tells the operator to look for this in the log.
+            let shown = MigrateError::ExecuteMigration(e, v).to_string();
+            assert!(
+                shown.starts_with(&format!(
+                    "while executing migration {failing}: error returned from database: "
+                )),
+                "{shown}"
+            );
+        }
+        other => panic!("expected ExecuteMigration({failing}), got {other:?}"),
+    };
+    assert_fails(boot_migrate(&newer_release, &pool).await.unwrap_err());
+
+    // Nothing recorded, nothing half applied.
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM _sqlx_migrations WHERE version >= $1 OR NOT success",
+    )
+    .bind(failing)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, 0, "a failed migration must leave no row");
+    let table: Option<String> = sqlx::query_scalar("SELECT to_regclass('half_applied')::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        table, None,
+        "a failed migration must leave none of its changes"
+    );
+
+    // The previous release boots.
+    boot_migrate(&flags_core::MIGRATOR, &pool).await.unwrap();
+    flags_core::migrate(&db(pool.clone()).await).await.unwrap();
+
+    // The newer release retries from scratch and fails the same way, not
+    // with `Dirty`.
+    assert_fails(boot_migrate(&newer_release, &pool).await.unwrap_err());
+
+    // The runbook's human-only "record as applied" statement, with the
+    // checksum as `sha384sum` prints it: the newer release then boots,
+    // skips the failed migration, and applies the corrected one. The
+    // description differs from sqlx's on purpose: only version and checksum
+    // are compared.
+    let checksum_hex: String = newer_release
+        .iter()
+        .find(|m| m.version == failing)
+        .unwrap()
+        .checksum
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    sqlx::query(
+        "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
+         VALUES ($1, 'recorded by hand', true, decode($2, 'hex'), -1)",
+    )
+    .bind(failing)
+    .bind(&checksum_hex)
+    .execute(&pool)
+    .await
+    .unwrap();
+    boot_migrate(&newer_release, &pool).await.unwrap();
+    let tables: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT to_regclass('half_applied')::text, to_regclass('corrected')::text")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        tables,
+        (None, Some("corrected".to_owned())),
+        "the recorded migration is skipped and the corrected one applied"
+    );
+}
+
+/// The runbook's "nothing is half applied" rests on sqlx committing each
+/// migration with its row. sqlx runs a `-- no-transaction` migration outside
+/// any transaction it opens and records its row separately, so those
+/// guarantees would no longer hold. Adding one means revisiting
+/// `docs/deploy/fly.md` first.
+#[test]
+fn no_migration_runs_outside_a_transaction() {
+    for m in flags_core::MIGRATOR.iter() {
+        assert!(
+            !m.no_tx,
+            "migration {} is -- no-transaction; update the failed-migration runbook",
+            m.version
+        );
+    }
+}
+
+/// The runbook's "record as applied" statement takes the checksum from
+/// `sha384sum <file>`. sqlx's checksum is SHA-384 of the file's bytes;
+/// Postgres' `sha384` checks that for every embedded migration.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn migration_checksums_are_the_sha384_of_their_files(pool: PgPool) {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    for m in flags_core::MIGRATOR.iter() {
+        let prefix = format!("{:04}_", m.version);
+        let matching: Vec<_> = files
+            .iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".sql"))
+            })
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "files for migration {}: {matching:?}",
+            m.version
+        );
+        let path = matching[0];
+        let bytes = std::fs::read(path).unwrap();
+        let digest: Vec<u8> = sqlx::query_scalar("SELECT sha384($1)")
+            .bind(&bytes)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(digest, m.checksum.as_ref(), "{}", path.display());
+    }
+}
+
+/// A migration recorded as failed refuses to boot, even when this release
+/// does not know its version. sqlx never writes such a row on Postgres (see
+/// `a_failed_migration_leaves_nothing_and_the_previous_release_boots`); only
+/// a hand-written row or another tool does. The runbook's human-only
+/// `DELETE` clears it.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_failed_unknown_migration_still_refuses_to_boot(pool: PgPool) {
     let newest = flags_core::MIGRATOR
@@ -376,12 +568,28 @@ async fn a_failed_unknown_migration_still_refuses_to_boot(pool: PgPool) {
     .await
     .unwrap();
 
-    let err = flags_core::MIGRATOR.run(&pool).await.unwrap_err();
+    let err = boot_migrate(&flags_core::MIGRATOR, &pool)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, MigrateError::Dirty(v) if v == newest + 1),
         "expected Dirty({}), got {err:?}",
         newest + 1
     );
+    // The runbook tells the operator to look for this in the log.
+    assert!(
+        err.to_string()
+            .starts_with(&format!("migration {} is partially applied", newest + 1)),
+        "{err}"
+    );
+
+    // The runbook's human-only statement clears it.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = $1 AND success = false")
+        .bind(newest + 1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    boot_migrate(&flags_core::MIGRATOR, &pool).await.unwrap();
 }
 
 /// Ignoring unknown versions must not disable integrity: a known
