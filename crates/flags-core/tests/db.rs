@@ -1162,6 +1162,111 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     tx.rollback().await.unwrap();
 }
 
+/// Audit rows for an org, counted on the (superuser) test pool.
+async fn audit_rows(pool: &PgPool, org: OrgId) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE org_id = $1")
+        .bind(org)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `otto_app` has no DELETE on the append-only audit trail, so the purge goes
+/// through the guarded function; the pool's role must not matter (#21).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn org_deleted_purges_the_audit_trail_as_otto_app(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, other) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    for o in [org, other] {
+        let mut tx = db.begin(o).await.unwrap();
+        tx.create_app("web", &[], actor).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    let other_rows = audit_rows(&pool, other).await;
+    assert!(audit_rows(&pool, org).await > 0);
+    assert!(other_rows > 0);
+
+    let app_db = otto_app_db(&pool).await;
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "org.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    let Outcome::Applied { detail } = platform_events::apply(&app_db, &event).await.unwrap() else {
+        panic!("first delivery should apply");
+    };
+    assert!(detail["audit_events"].as_i64().unwrap() > 0, "{detail}");
+    assert_eq!(audit_rows(&pool, org).await, 0);
+    assert_eq!(audit_rows(&pool, other).await, other_rows);
+    assert_eq!(
+        platform_events::apply(&app_db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    app_db.pool().close().await;
+}
+
+/// The purge function only reaches tombstoned orgs, a caller's temporary
+/// `deleted_orgs` cannot stand in for the real one, and its marker does not
+/// outlive the call (#21).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_only_reaches_deleted_orgs(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    tx.create_app("web", &[], UserId::new()).await.unwrap();
+    tx.commit().await.unwrap();
+    let rows = audit_rows(&pool, org).await;
+    assert!(rows > 0);
+
+    let app_db = otto_app_db(&pool).await;
+    let mut tx = app_db.begin(org).await.unwrap();
+    let purged: i64 = sqlx::query_scalar("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+
+    sqlx::query("CREATE TEMP TABLE deleted_orgs (org_id uuid)")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO pg_temp.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let purged: i64 = sqlx::query_scalar("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(
+        purged, 0,
+        "a temporary deleted_orgs must not satisfy the guard"
+    );
+
+    let marker: Option<String> =
+        sqlx::query_scalar("SELECT current_setting('app.audit_purge', true)")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+    assert_ne!(marker.as_deref(), Some("on"));
+
+    let err = sqlx::query("DELETE FROM audit_events WHERE org_id = $1")
+        .bind(org)
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501");
+    tx.rollback().await.unwrap();
+
+    assert_eq!(audit_rows(&pool, org).await, rows);
+    app_db.pool().close().await;
+}
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn old_rollback_events_are_swept(pool: PgPool) {
     let db = db(pool).await;

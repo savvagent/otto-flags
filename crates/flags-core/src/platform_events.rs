@@ -180,13 +180,13 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
     let mut tx = db.begin(org).await?;
     exclude_requests(&mut tx, org).await?;
 
-    // The audit trail is append-only to a pinned transaction, so it is deleted
-    // unpinned, under the lock above.
-    let audit = sqlx::query("DELETE FROM audit_events WHERE org_id = $1")
+    // The audit trail is append-only to `otto_app`, so it goes through the
+    // migrating role's guarded function (#21), inside the purge transaction so
+    // it is removed atomically with the rest.
+    let audit = sqlx::query_scalar::<_, i64>("SELECT purge_deleted_org_audit($1)")
         .bind(org)
-        .execute(db.pool())
-        .await?
-        .rows_affected();
+        .fetch_one(tx.conn())
+        .await?;
 
     let first = first_delivery(&mut tx, event, "org.deleted").await?;
 
