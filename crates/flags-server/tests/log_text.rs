@@ -31,11 +31,6 @@ const TEXT_FIELDS: &[&str] = &[
 /// Whole arguments that log an error's text through shorthand (`%e`).
 const TEXT_ARGS: &[&str] = &["%e", "?e", "%err", "?err", "%error", "?error"];
 
-/// Known exceptions, by file and the exact field: the platform's per-event
-/// rejection reason is its answer to a successful call, kept for operators
-/// and stored in `usage_outbox_rejected`.
-const ALLOWED: &[(&str, &str)] = &[("flags-core/src/usage.rs", "reason = %r.reason")];
-
 #[test]
 fn no_event_above_debug_logs_error_text() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -61,11 +56,8 @@ fn no_event_above_debug_logs_error_text() {
             .replace('\\', "/");
         for args in events_above_debug(&source) {
             let flat = args.split_whitespace().collect::<Vec<_>>().join(" ");
-            let allowed = ALLOWED
-                .iter()
-                .any(|(f, field)| name == *f && flat.contains(field));
             let shorthand = flat.split(',').any(|a| TEXT_ARGS.contains(&a.trim()));
-            if !allowed && (shorthand || TEXT_FIELDS.iter().any(|t| flat.contains(t))) {
+            if shorthand || TEXT_FIELDS.iter().any(|t| flat.contains(t)) {
                 found.push(format!("{name}: {flat}"));
             }
         }
