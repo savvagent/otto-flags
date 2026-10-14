@@ -71,18 +71,19 @@ One task: a contained check in one function and the test that proves it.
     - `start_platform`, `server(pool, &url)`. Insert row A (due) and row B with
       `next_attempt_at = now() + interval '1 hour'`, both via
       `INSERT INTO usage_outbox (org_id, user_id, tool, billable[, next_attempt_at]) VALUES (...) RETURNING event_id`.
-    - Helper closures/fns for: count of `usage_outbox`, count of `usage_outbox_rejected`, and
+    - Small `async fn` helpers taking `&otto_tenant::Db` (or `&PgPool`) for: count of `usage_outbox`, count of `usage_outbox_rejected`, and
       making every row due (`UPDATE usage_outbox SET next_attempt_at = now()`).
     - Case 1 (outside the batch): set `receipt = Some(UsageReceipt { accepted: 0, duplicates: 0,
       rejected: vec![RejectedEvent { event_id: b, reason: "x".into() }] })`. `ship_once(&s.db,
       &s.platform, &Default::default())` is `Err`, `failure_reason().reason == "decode"`;
-      `usage_outbox` count 2; A's `last_error` is `Some("decode")`; `usage_outbox_rejected` count 0.
+      `usage_outbox` count 2; A's `last_error` is `Some("decode")`; B is untouched (`last_error` is `None`, `attempts` 0);
+      `usage_outbox_rejected` count 0.
     - Case 2 (repeated): make all due; receipt `{accepted: 0, duplicates: 0, rejected: [A, A]}`.
       `ship_once` is `Err` with reason `decode`; `usage_outbox` count 2; `usage_outbox_rejected`
       count 0.
     - Case 3 (control): make all due; receipt `{accepted: 1, duplicates: 0, rejected: [A]}`.
-      `ship_once` returns `Ok(2)`; `usage_outbox_rejected` has exactly one row and its `event_id`
-      is A; `usage_outbox` count 0.
+      `ship_once` returns `Ok(2)`; `usage_outbox_rejected` has exactly one row, its `event_id`
+      is A and its `reason` is `"x"`; `usage_outbox` count 0.
 - [ ] **Step 2: Run, see it fail:**
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e a_receipt_naming_events_outside_the_batch_moves_nothing`
   — case 1 fails (`ship_once` returns `Ok(1)` and copies B into `usage_outbox_rejected`).
@@ -102,6 +103,8 @@ One task: a contained check in one function and the test that proves it.
   - The insert: `... FROM usage_outbox WHERE event_id = $1 AND id = ANY($3)`, `.bind(&ids)` third;
     note in the comment that the insert can only reach this batch's rows.
   - `use std::collections::{HashMap, HashSet};`
+  - The per-rejection `error!`/`debug!` logs stay inside the insert loop (not in the helper), so a
+    refused receipt's ids are never logged.
 - [ ] **Step 4: Run, see it pass:** the Step 2 command, then all gates (Global Constraints),
   recording pass counts per test binary. `usage_logs` and the existing e2e usage tests must pass
   unchanged.

@@ -1,6 +1,6 @@
 # Check the rejected event ids in the platform's usage receipt
 
-**Status:** DRAFT
+**Status:** APPROVED
 **Issue:** #63
 
 ## 1. Brief
@@ -44,6 +44,8 @@ None. The code at `crates/flags-core/src/usage.rs:326-358` matches the brief.
 - **Keep the `AND id = ANY($3)` guard as well**, though validation makes it redundant: the insert
   then cannot reach outside the batch even if the check above it is later changed (defence in
   depth the issue asks for).
+- `event_id` is unique in `usage_outbox` (it is, by constraint), so a set of the batch's ids is
+  exact.
 - Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
@@ -75,6 +77,8 @@ existing `usage_outbox_rejected` rows; any schema change (no unique constraint o
   `Decode` error, exactly as the miscount path does. The two checks share one small helper that
   builds the error, logs, and reschedules, so the paths cannot drift.
 - The insert gains `AND id = ANY($3)` bound to `&ids`.
+- The per-rejection `error!`/`debug!` logs stay in the insert loop, after validation, so a refused
+  receipt's ids are never logged.
 
 No public interface change; `ShipError` and the receipt types are unchanged.
 
@@ -112,7 +116,7 @@ e2e (`crates/flags-server/tests/e2e.rs`, its mock platform): the mock `Platform`
 1. Insert row A (due) and row B with `next_attempt_at = now() + interval '1 hour'` (not due).
    Receipt `{accepted: 0, duplicates: 0, rejected: [B]}`. `ship_once` errors with
    `failure_reason().reason == "decode"`; `usage_outbox` still has 2 rows; A's `last_error` is
-   `decode`; `usage_outbox_rejected` is empty.
+   `decode`; B is untouched (`last_error IS NULL`, `attempts` 0); `usage_outbox_rejected` is empty.
 2. Make both rows due (batch A, B). Receipt `{accepted: 0, duplicates: 0, rejected: [A, A]}`
    (count 2 matches the batch). `ship_once` errors with `decode`; 2 rows remain;
    `usage_outbox_rejected` is empty.
