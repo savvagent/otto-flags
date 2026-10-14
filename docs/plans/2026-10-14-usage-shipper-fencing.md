@@ -43,6 +43,11 @@ platform in tests), tokio.
   per-row statements added); platform text stays out of logs above `debug` (#44).
 - Out-of-band: migration `0005` applies at boot (verified post-deploy from the logs). Nothing
   human-only.
+- Run `cargo fmt --all` before the format check: some code in this plan is pasted wider than
+  rustfmt's line width.
+- After Task 3 the orchestrator runs every gate once more on the final head, including
+  `podman build -t otto-flags:check .`, and before merge adds the design-doc close-out commit (spec
+  `**Status:**` -> `IMPLEMENTED (#<PR>)`, plan boxes ticked).
 - Commit format: `<type>(<scope>): <imperative, lower-case>`; body explains why and ends with
   `Fixes #67` and/or `Fixes #68` as the task relates. No attribution of any kind (no
   Co-Authored-By, no "Generated with", no credit markers).
@@ -402,6 +407,7 @@ async fn the_usage_shipper_sets_the_maintenance_marker(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(rejected, vec![refused]);
+    db.pool().close().await;
 }
 ```
 
@@ -567,7 +573,7 @@ git commit -m "fix(core): fence usage shipper writes and run them as maintenance
   requiring the marker, add: "Migration `0005` (#68) does the same for `usage_outbox` and
   `usage_outbox_rejected`, for every command, and the usage shipper runs in a maintenance
   transaction. Under the superuser attach role RLS does not apply, so this changes nothing in
-  production today; under a non-exempt pool role, a release older than `0005`'s ships no usage
+  production today; under a non-exempt pool role, a release without this change ships no usage
   while it runs against that schema (rollout overlap, rollback), and the rows wait in the outbox
   until a newer release ships them."
 - [ ] **Step 2: Check** with `git diff docs/deploy/fly.md` that only that bullet changed.
