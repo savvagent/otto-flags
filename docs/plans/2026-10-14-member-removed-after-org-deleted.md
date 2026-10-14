@@ -68,11 +68,13 @@ One task: one function and the tests that prove it.
   - `let app_db = otto_app_db(&pool).await;` Build and apply an `org.deleted` event for `org`
     through `app_db` exactly as `org_deleted_purges_the_audit_trail_as_otto_app` does; assert it is
     `Outcome::Applied { .. }` and `audit_rows(&pool, org).await == 0`.
-  - Build a `member.removed` event (`json!({"org_id": org.as_uuid(), "user_id": UserId::new().as_uuid()})`,
+  - Build a `member.removed` event (`let user = UserId::new();`
+    `json!({"org_id": org.as_uuid(), "user_id": user.as_uuid()})`,
     as in `a_removed_member_is_refused_but_others_are_not`), apply it through `app_db`; assert
     `Outcome::Ignored`; assert `audit_rows(&pool, org).await == 0`.
-  - Assert the marker exists: `SELECT count(*) FROM platform_events WHERE event_id = $1` on `pool`
-    (bind the event's id, `event.id`) equals 1.
+  - Assert the marker exists: `SELECT count(*) FROM platform_events WHERE event_id = $1` on the
+    superuser test `pool` (not `app_db`, whose RLS would hide the row; bind `event.id`) equals 1.
+  - Assert the removed user is still refused: `platform_events::revoked(&db, org, user)` is true.
   - Apply the same `member.removed` again; assert `Outcome::Duplicate` and
     `audit_rows(&pool, org).await == 0`.
   - `app_db.pool().close().await;` at the end (see `otto_app_db`'s doc).
@@ -92,11 +94,11 @@ One task: one function and the tests that prove it.
     row would outlive its org's purge (#41).
   - Write the audit entry only when `first && !deleted`.
   - After commit, log `tracing::info!(org = %org, event_id = %event.id, "member.removed for a deleted org; ignored")`
-    when `deleted`, else the existing line.
+    when `deleted`, instead of (not in addition to) the existing line, which stays for the other cases.
   - Return `Outcome::Duplicate` when `!first`, `Outcome::Ignored` when `deleted`, else
     `Outcome::Applied { detail: json!({}) }`.
-  - Module doc table, `member.removed` row: append "For an org already deleted, only the dedupe
-    marker is written (#41)."
+  - Module doc table, `member.removed` row: append "For an org already deleted, nothing is written
+    but the dedupe marker (#41)."
 - [ ] **Step 5: Run and see both tests pass** (same two commands as Step 3).
 - [ ] **Step 6: Run every gate** (Global Constraints) and report pass counts per test binary.
 - [ ] **Step 7: Commit** the two files with exactly this message (no trailers of any kind):
