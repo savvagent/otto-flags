@@ -4039,7 +4039,7 @@ async fn audit_purge_check_passes_on_a_migrated_database(pool: PgPool) {
     assert_eq!(report.problems(), Vec::<String>::new());
     assert_eq!(report.tenant_role, "otto_app");
     assert!(report.owner.is_some());
-    assert!(report.owner_is_superuser);
+    assert!(report.owner_is_superuser || report.owner_bypasses_rls);
     assert!(report.executable);
 }
 

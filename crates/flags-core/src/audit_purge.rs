@@ -7,14 +7,16 @@
 //! It refuses to run for any other owner (SQLSTATE 55000), because a purge
 //! that sees no rows would delete nothing and report success.
 //!
-//! The owner is whoever ran the migration, which is the role the server
-//! connects as. A deployment that connects as a role subject to RLS therefore
-//! boots, serves, and fails its first `org.deleted`, long after the deploy that
-//! caused it. A non-exempt owner is deliberately unsupported (the design's
-//! section 3): there is no fallback purge path. Instead the server calls
-//! [`check`] at startup and refuses to serve when [`PurgeReport::problems`] is
-//! not empty, so the misconfiguration surfaces on the deploy that introduced
-//! it and the previous release keeps serving.
+//! The owner is the role that ran migration 0004: by default the role the
+//! server connects as, since migrations run at boot. A deployment migrating as
+//! a role subject to RLS would boot, serve, and fail its first `org.deleted`,
+//! long after the deploy that caused it. A non-exempt owner is deliberately
+//! unsupported (section 3 of
+//! `docs/specs/2026-10-14-purge-owner-startup-check-design.md`): there is no
+//! fallback purge path. Instead the server calls [`check`] at startup and
+//! refuses to serve when [`PurgeReport::problems`] is not empty, so the
+//! misconfiguration surfaces on the deploy that introduced it, which rolls
+//! back, rather than on a customer's deletion.
 //!
 //! The check reads catalogs only, in a transaction it rolls back.
 
@@ -59,12 +61,11 @@ impl PurgeReport {
     /// ```
     pub fn problems(&self) -> Vec<String> {
         let Some(owner) = &self.owner else {
-            return vec![
-                "purge_deleted_org_audit(uuid) does not exist, so every org.deleted \
-                         would fail: run migrations (0004) against this database before \
-                         serving (with FLAGS_RUN_MIGRATIONS=false, migrate separately first)"
-                    .to_string(),
-            ];
+            return vec![String::from(
+                "purge_deleted_org_audit(uuid) does not exist, so every org.deleted would \
+                 fail: run migrations (0004) against this database before serving (with \
+                 FLAGS_RUN_MIGRATIONS=false, migrate separately first)",
+            )];
         };
         let mut problems = Vec::new();
         if !self.owner_is_superuser && !self.owner_bypasses_rls {
@@ -136,8 +137,7 @@ pub async fn inspect(conn: &mut PgConnection) -> Result<PurgeReport> {
     )
     .bind(FUNCTION)
     .fetch_one(conn)
-    .await
-    .map_err(otto_tenant::Error::from)?;
+    .await?;
     Ok(PurgeReport {
         owner,
         owner_is_superuser: superuser.unwrap_or(false),
@@ -150,9 +150,11 @@ pub async fn inspect(conn: &mut PgConnection) -> Result<PurgeReport> {
 /// [`inspect`] in a throwaway tenant transaction, which is rolled back.
 pub async fn check(db: &Db) -> Result<PurgeReport> {
     let mut tx = db.begin(OrgId::new()).await?;
-    let report = inspect(tx.conn()).await;
+    // On an error the dropped transaction rolls back, and the inspect error
+    // is the one worth reporting.
+    let report = inspect(tx.conn()).await?;
     tx.rollback().await?;
-    report
+    Ok(report)
 }
 
 #[cfg(test)]
