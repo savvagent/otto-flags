@@ -269,7 +269,8 @@ Gates: test, lint, format, extra (no modified migration), and the `crates/**` po
     empty. Release B: `Ok(1)`; exactly one rejected row for the event; `usage_outbox` empty.
     Without fencing, A deletes and records the row (fails the first assertion).
   - New `the_usage_shipper_sets_the_maintenance_marker` (#68): a second pool on the test database
-    whose connections run `SET ROLE otto_app` after connect. An unmarked unpinned `count(*)` on
+    whose connections run `SET ROLE otto_app` after connect (built in the test itself; the
+    `db.rs` helpers live in another test binary). An unmarked unpinned `count(*)` on
     that pool is 0 (the role is subject to RLS). Two rows, one rejected by the mock via a fixed
     receipt (`accepted: 1, rejected: [second]`): `ship_once` on a `Db` from that pool returns 2;
     `usage_outbox` is empty and `usage_outbox_rejected` holds the one row (read on the superuser
