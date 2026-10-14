@@ -4,6 +4,7 @@
 
 use chrono::Utc;
 use flags_core::apps::{AppsExt, Rotate};
+use flags_core::audit_purge;
 use flags_core::eval::{Context, Operator, Rule};
 use flags_core::flags::{ChangeMeta, EnvPatch, FlagPatch, FlagsExt, NewFlag};
 use flags_core::keys::KeyKind;
@@ -4030,4 +4031,83 @@ async fn unmarked_unpinned_deletes_touch_nothing(pool: PgPool) {
     }
     tx.rollback().await.unwrap();
     app_db.pool().close().await;
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_passes_on_a_migrated_database(pool: PgPool) {
+    let report = audit_purge::check(&Db::from_pool(pool)).await.unwrap();
+    assert_eq!(report.problems(), Vec::<String>::new());
+    assert_eq!(report.tenant_role, "otto_app");
+    assert!(report.owner.is_some());
+    assert!(report.owner_is_superuser);
+    assert!(report.executable);
+}
+
+/// Runs `inspect` as `otto_app` after making a throwaway role the function's
+/// owner. Everything is transactional and rolled back, so a failed run leaves
+/// no cluster-wide role behind.
+async fn inspect_with_owner(pool: &PgPool, attributes: &str) -> (String, audit_purge::PurgeReport) {
+    let role = format!("purge_owner_{}", uuid::Uuid::new_v4().simple());
+    let mut tx = pool.begin().await.unwrap();
+    for statement in [
+        format!("CREATE ROLE {role} NOLOGIN {attributes}"),
+        format!("ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO {role}"),
+        "SET LOCAL ROLE otto_app".to_string(),
+    ] {
+        sqlx::query(&statement).execute(&mut *tx).await.unwrap();
+    }
+    let report = audit_purge::inspect(&mut tx).await.unwrap();
+    tx.rollback().await.unwrap();
+    (role, report)
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_reports_an_owner_subject_to_rls(pool: PgPool) {
+    let (role, report) = inspect_with_owner(&pool, "NOSUPERUSER NOBYPASSRLS").await;
+    assert_eq!(report.owner.as_deref(), Some(role.as_str()));
+    assert!(!report.owner_is_superuser && !report.owner_bypasses_rls);
+    let problems = report.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains(&role), "{problems:?}");
+}
+
+/// `otto_app`'s grant survives the owner change, so this exercises only the
+/// exemption branch.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_accepts_a_bypassrls_owner(pool: PgPool) {
+    let (_, report) = inspect_with_owner(&pool, "NOSUPERUSER BYPASSRLS").await;
+    assert!(!report.owner_is_superuser && report.owner_bypasses_rls);
+    assert_eq!(report.problems(), Vec::<String>::new());
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_reports_a_tenant_role_without_execute(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    for statement in [
+        "REVOKE EXECUTE ON FUNCTION purge_deleted_org_audit(uuid) FROM otto_app",
+        "SET LOCAL ROLE otto_app",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    let report = audit_purge::inspect(&mut tx).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert!(!report.executable);
+    let problems = report.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("GRANT EXECUTE"), "{problems:?}");
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_reports_a_missing_function(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("DROP FUNCTION purge_deleted_org_audit(uuid)")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let report = audit_purge::inspect(&mut tx).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(report.owner, None);
+    let problems = report.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].contains("does not exist"), "{problems:?}");
 }
