@@ -6,9 +6,11 @@
 **Goal:** `flags-mcp` logs database and platform failures by a text-free code at `error`, and their
 text only at `debug`; tool and HTTP responses are unchanged.
 
-**Architecture:** Two `pub(crate)` helpers in `crates/flags-mcp/src/error.rs`
-(`platform_code`, `log_server_failure`); the two logging sites there and the two in
-`crates/flags-mcp/src/auth.rs` call `log_server_failure`. A unit test captures `tracing` output.
+**Architecture:** Task 1 adds the logging helper in `crates/flags-mcp/src/error.rs` and routes the
+two sites there and the two in `crates/flags-mcp/src/auth.rs` through it. Task 2 (from PR review)
+moves the text-free reason into `flags-core` (`Error::failure_reason`,
+`error::platform_failure_reason`) so database failures are told apart too and platform reasons have
+one definition, and moves the log-capture test into its own binary.
 
 **Tech Stack:** Rust (stable, MSRV 1.88), tracing 0.1, tracing-subscriber 0.3 (dev only).
 
@@ -107,3 +109,35 @@ text only at `debug`; tool and HTTP responses are unchanged.
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit, before
 merge, by the orchestrator, not by this task.
+
+### Task 2: Failure reasons in flags-core (PR review round)
+
+**Model:** opus (done by the orchestrator, with the review findings in hand)
+
+Findings addressed: every database failure logged as `internal_error` (rust-pro,
+silent-failure-hunter); platform status dropped above debug (security, silent-failure-hunter); a
+second list of platform reasons beside `entitlements::failure_reason` (architect); `from_tenant`
+flattening tenant database errors into `Config` text (silent-failure-hunter); the log-capture test
+flaking about 1 run in 20–40 through tracing's callsite-interest cache (pr-test-analyzer); no test
+of the `Error::Platform` path through `from_core` (architect, pr-test-analyzer); spec and plan stale
+after a507905 (comment-analyzer, architect).
+
+**Files:**
+- Modify: `crates/flags-core/src/error.rs` (`Error::failure_reason`, `platform_failure_reason`,
+  `db_failure_reason`, unit test)
+- Modify: `crates/flags-core/src/entitlements.rs` (use the moved function; its test moves too)
+- Modify: `crates/flags-mcp/src/error.rs` (`log_server_failure` takes `(reason, status)`; drop
+  `platform_code`/`log_code`; `respond` split out; `from_tenant` by value; wire test for it)
+- Modify: `crates/flags-mcp/src/auth.rs`, `crates/flags-mcp/src/server.rs`
+- Create: `crates/flags-mcp/tests/failure_logs.rs` (the capture test, alone in its binary)
+- Modify: the spec, and this plan
+
+- [ ] **Step 1:** Write `failure_reasons_name_the_kind_without_the_text` in flags-core and the
+  capture test in `tests/failure_logs.rs`; see them fail to compile.
+- [ ] **Step 2:** Implement as the spec's §3 and §6 describe.
+- [ ] **Step 3:** `cargo test -p flags-mcp` and `cargo test -p flags-core --lib` pass; run
+  `cargo test -p flags-mcp` 60 times with no failure.
+- [ ] **Step 4:** Run every gate (Task 1, Step 5) and report pass counts per test binary.
+- [ ] **Step 5:** Commit `fix(core): name database and platform failures for logs without their
+  text`, body ending `Fixes #29`; no trailers.
+

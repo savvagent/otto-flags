@@ -243,7 +243,8 @@ pub async fn require_bearer(
                 Err(e) => {
                     crate::error::log_server_failure(
                         "could not check the revocation tombstones",
-                        crate::error::log_code(&e),
+                        e.code(),
+                        e.failure_reason(),
                         &e,
                     );
                     return unavailable();
@@ -273,7 +274,8 @@ pub async fn require_bearer(
         Err(e) => {
             crate::error::log_server_failure(
                 "token introspection failed",
-                crate::error::platform_code(&e),
+                "platform_unavailable",
+                flags_core::error::platform_failure_reason(&e),
                 &e,
             );
             unavailable()

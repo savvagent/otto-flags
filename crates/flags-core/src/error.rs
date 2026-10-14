@@ -144,6 +144,65 @@ impl Error {
     }
 }
 
+impl Error {
+    /// A text-free description of this failure for logs above debug: a fixed
+    /// reason we chose, and an HTTP status for a platform failure. Database and
+    /// platform text can carry SQL, schema names, response bodies, and URLs, so
+    /// it is logged only at debug; this is what an operator reads at `info`.
+    pub fn failure_reason(&self) -> (&'static str, Option<u16>) {
+        match self {
+            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => (db_failure_reason(e), None),
+            Error::Platform(p) => platform_failure_reason(p),
+            _ => (self.code(), None),
+        }
+    }
+}
+
+/// [`Error::failure_reason`] for a platform failure the caller holds unwrapped.
+pub fn platform_failure_reason(e: &otto_resource::Error) -> (&'static str, Option<u16>) {
+    use otto_resource::Error as E;
+    match e {
+        E::Status { status, .. } => ("http_status", Some(*status)),
+        E::Transport(_) => ("transport", None),
+        E::Decode(_) => ("decode", None),
+        E::Unauthorized => ("unauthorized", None),
+        E::NotFound => ("not_found", None),
+        E::InvalidUrl(_) => ("invalid_url", None),
+    }
+}
+
+/// The sqlx variant, or for an error Postgres raised, its condition name from
+/// the SQLSTATE: never the message, which can quote values and schema.
+fn db_failure_reason(e: &sqlx::Error) -> &'static str {
+    match e {
+        sqlx::Error::PoolTimedOut => "pool_timed_out",
+        sqlx::Error::PoolClosed => "pool_closed",
+        sqlx::Error::Io(_) => "io",
+        sqlx::Error::Tls(_) => "tls",
+        sqlx::Error::Protocol(_) => "protocol",
+        sqlx::Error::RowNotFound => "row_not_found",
+        sqlx::Error::TypeNotFound { .. }
+        | sqlx::Error::ColumnIndexOutOfBounds { .. }
+        | sqlx::Error::ColumnNotFound(_)
+        | sqlx::Error::ColumnDecode { .. }
+        | sqlx::Error::Decode(_) => "decode",
+        sqlx::Error::Database(db) => match db.code().as_deref() {
+            Some("40001") => "serialization_failure",
+            Some("40P01") => "deadlock_detected",
+            Some("55P03") => "lock_not_available",
+            Some("57014") => "query_canceled",
+            Some("42501") => "insufficient_privilege",
+            Some("42P01") => "undefined_table",
+            Some("42703") => "undefined_column",
+            Some(c) if c.starts_with("23") => "integrity_constraint_violation",
+            Some(c) if c.starts_with("08") => "connection_exception",
+            Some(c) if c.starts_with("53") => "insufficient_resources",
+            _ => "database_error",
+        },
+        _ => "other",
+    }
+}
+
 /// SQLSTATEs that a later attempt can avoid: serialization_failure,
 /// deadlock_detected, lock_not_available (`lock_timeout`), and query_canceled
 /// (`statement_timeout`).
@@ -246,6 +305,61 @@ mod tests {
             Error::Invalid("bad".into()),
         ] {
             assert!(!permanent.is_transient(), "{permanent:?}");
+        }
+    }
+
+    #[test]
+    fn failure_reasons_name_the_kind_without_the_text() {
+        let cases = [
+            (Error::Db(sqlx::Error::PoolTimedOut), "pool_timed_out", None),
+            (Error::Db(db("40P01")), "deadlock_detected", None),
+            (Error::Db(db("42501")), "insufficient_privilege", None),
+            (
+                Error::Db(db("23505")),
+                "integrity_constraint_violation",
+                None,
+            ),
+            (Error::Db(db("XX000")), "database_error", None),
+            (
+                Error::Db(sqlx::Error::Protocol("secret".into())),
+                "protocol",
+                None,
+            ),
+            (
+                Error::Tenant(otto_tenant::Error::Db(sqlx::Error::PoolClosed)),
+                "pool_closed",
+                None,
+            ),
+            (
+                Error::Platform(otto_resource::Error::Status {
+                    status: 503,
+                    body: "secret".into(),
+                }),
+                "http_status",
+                Some(503),
+            ),
+            (
+                Error::Platform(otto_resource::Error::Unauthorized),
+                "unauthorized",
+                None,
+            ),
+            (
+                Error::Tenant(otto_tenant::Error::Config("secret".into())),
+                "internal_error",
+                None,
+            ),
+            (Error::AccessRevoked, "access_revoked", None),
+        ];
+        for (e, reason, status) in cases {
+            assert_eq!(e.failure_reason(), (reason, status), "{e:?}");
+        }
+        use otto_resource::Error as P;
+        for (e, reason) in [
+            (P::NotFound, "not_found"),
+            (P::Decode("secret".into()), "decode"),
+            (P::InvalidUrl("secret".into()), "invalid_url"),
+        ] {
+            assert_eq!(platform_failure_reason(&e), (reason, None));
         }
     }
 
