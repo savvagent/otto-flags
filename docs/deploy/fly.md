@@ -32,6 +32,14 @@ database alone, so a platform outage does not affect flag evaluation.
   shared. Split onto a dedicated instance before real customers.
 - **Migrations** are otto-flags' own (`crates/flags-core/migrations`) and run at boot under
   an advisory lock. Never run the platform's migrations here.
+- **The migrating role must stay exempt from RLS** (superuser or `BYPASSRLS`), as the attach
+  role is. Migration `0004` (#21) makes it the owner of `purge_deleted_org_audit`, the only way
+  the `org.deleted` purge can remove a deleted org's append-only audit trail. Under an owner
+  that is not exempt, the function refuses (SQLSTATE `55000`) and every `org.deleted` delivery
+  fails until the owner changes. Before moving off the superuser attach role (for example onto
+  a dedicated instance), either give the new migrating role `BYPASSRLS`, or reassign the
+  function to one that has it (`ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO …`,
+  human-only), or run migrations separately as such a role (`FLAGS_RUN_MIGRATIONS=false`).
 
 ## Secrets
 

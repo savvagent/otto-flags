@@ -1157,8 +1157,169 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, 0);
+    // The audit trail goes too, here on the superuser pool (see
+    // org_deleted_purges_the_audit_trail_as_otto_app for otto_app).
+    let audit: i64 = sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE org_id = $1")
+        .bind(org)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(audit, 0);
     let mut tx = begin_live(&db, other, None).await.unwrap();
     assert_eq!(tx.list_apps().await.unwrap().len(), 1);
+    tx.rollback().await.unwrap();
+}
+
+/// Audit rows for an org, counted on the (superuser) test pool.
+async fn audit_rows(pool: &PgPool, org: OrgId) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE org_id = $1")
+        .bind(org)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `otto_app` has no DELETE on the append-only audit trail, so the purge goes
+/// through the guarded function; the pool's role must not matter (#21).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn org_deleted_purges_the_audit_trail_as_otto_app(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, other) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    for o in [org, other] {
+        let mut tx = db.begin(o).await.unwrap();
+        tx.create_app("web", &[], actor).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    let (rows, other_rows) = (audit_rows(&pool, org).await, audit_rows(&pool, other).await);
+    assert!(rows > 0 && other_rows > 0);
+
+    let app_db = otto_app_db(&pool).await;
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "org.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    let Outcome::Applied { detail } = platform_events::apply(&app_db, &event).await.unwrap() else {
+        panic!("first delivery should apply");
+    };
+    assert_eq!(detail["audit_events"], rows, "{detail}");
+    assert_eq!(audit_rows(&pool, org).await, 0);
+    assert_eq!(audit_rows(&pool, other).await, other_rows);
+    assert_eq!(
+        platform_events::apply(&app_db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    assert_eq!(audit_rows(&pool, other).await, other_rows);
+    app_db.pool().close().await;
+}
+
+/// The purge function only reaches the pinned org once it is tombstoned, and
+/// only the real `deleted_orgs` counts: the body names it by schema, so a
+/// caller's temporary table cannot stand in for it (#21).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_only_reaches_deleted_orgs(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, dead) = (OrgId::new(), OrgId::new());
+    for o in [org, dead] {
+        let mut tx = db.begin(o).await.unwrap();
+        tx.create_app("web", &[], UserId::new()).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    let (rows, dead_rows) = (audit_rows(&pool, org).await, audit_rows(&pool, dead).await);
+    assert!(rows > 0 && dead_rows > 0);
+    // Another org, tombstoned: still out of reach from a transaction pinned
+    // to `org`.
+    sqlx::query("INSERT INTO deleted_orgs (org_id) VALUES ($1)")
+        .bind(dead)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let app_db = otto_app_db(&pool).await;
+    let mut tx = app_db.begin(org).await.unwrap();
+    let purged: i64 = sqlx::query_scalar("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+
+    sqlx::query("CREATE TEMP TABLE deleted_orgs (org_id uuid)")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO pg_temp.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let purged: i64 = sqlx::query_scalar("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(
+        purged, 0,
+        "a temporary deleted_orgs must not satisfy the guard"
+    );
+
+    sqlx::query("SAVEPOINT other_org")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    let err = sqlx::query_scalar::<_, i64>("SELECT purge_deleted_org_audit($1)")
+        .bind(dead)
+        .fetch_one(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501", "only the pinned org: {err}");
+    sqlx::query("ROLLBACK TO SAVEPOINT other_org")
+        .execute(tx.conn())
+        .await
+        .unwrap();
+
+    let err = sqlx::query("DELETE FROM audit_events WHERE org_id = $1")
+        .bind(org)
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501");
+    tx.rollback().await.unwrap();
+
+    assert_eq!(audit_rows(&pool, org).await, rows);
+    assert_eq!(audit_rows(&pool, dead).await, dead_rows);
+    app_db.pool().close().await;
+}
+
+/// An owner subject to row-level security would see no audit rows and purge
+/// nothing in silence, so the function refuses to run for one (#21). All in
+/// one transaction that is rolled back: `CREATE ROLE` is transactional, so a
+/// failing run leaves no cluster-wide role behind.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_refuses_an_owner_subject_to_rls(pool: PgPool) {
+    let org = OrgId::new();
+    let role = format!("purge_owner_{}", uuid::Uuid::new_v4().simple());
+    let mut tx = pool.begin().await.unwrap();
+    for statement in [
+        format!("CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS"),
+        format!("ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO {role}"),
+    ] {
+        sqlx::query(&statement).execute(&mut *tx).await.unwrap();
+    }
+    sqlx::query("SELECT set_config('app.org_id', $1, true)")
+        .bind(org.to_string())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let err = sqlx::query_scalar::<_, i64>("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "55000", "{err}");
     tx.rollback().await.unwrap();
 }
 
