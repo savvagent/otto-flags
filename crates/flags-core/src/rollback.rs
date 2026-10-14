@@ -590,6 +590,10 @@ impl RollbackExt for Tx<'_> {
         environment: &str,
         actor: UserId,
     ) -> Result<bool> {
+        // No stored policy environment can contain NUL.
+        if crate::eval::unstorable(environment) {
+            return Ok(false);
+        }
         let org = self.org();
         let removed: Option<Uuid> = sqlx::query_scalar(
             "DELETE FROM rollback_policies WHERE org_id = $1 AND flag_id = $2 AND environment = $3 \
@@ -638,6 +642,10 @@ impl RollbackExt for Tx<'_> {
     }
 
     async fn find_policy(&mut self, flag: FlagId, environment: &str) -> Result<Option<Policy>> {
+        // No stored policy environment can contain NUL.
+        if crate::eval::unstorable(environment) {
+            return Ok(None);
+        }
         let org = self.org();
         Ok(sqlx::query_as(&format!(
             "SELECT {POLICY_COLS} FROM rollback_policies p \

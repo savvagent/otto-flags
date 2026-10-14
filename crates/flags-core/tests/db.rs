@@ -904,6 +904,212 @@ async fn a_key_with_nul_finds_no_flag(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// A write refused because of NUL, not for some other reason.
+fn refused_for_nul(err: &Error) {
+    assert!(
+        matches!(err, Error::Invalid(m) if m.contains("NUL")),
+        "{err:?}"
+    );
+}
+
+// An MCP tool argument with NUL is unstorable: a lookup finds nothing and a
+// write is refused as invalid input, and no statement fails in the transaction
+// (#61).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    for name in ["web\0", " \0"] {
+        let err = tx.resolve_app(name).await.unwrap_err();
+        assert!(matches!(err, Error::AppNotFound { .. }), "{err:?}");
+    }
+
+    let new_flag = |f: fn(&mut NewFlag)| {
+        let mut n = NewFlag {
+            key: "g".into(),
+            ..Default::default()
+        };
+        f(&mut n);
+        n
+    };
+    let bad: Vec<(NewFlag, Option<String>)> = vec![
+        (new_flag(|n| n.name = Some("n\0".into())), None),
+        (new_flag(|n| n.description = Some("d\0".into())), None),
+        (new_flag(|_| {}), Some("r\0".into())),
+        (
+            new_flag(|n| n.variations = Some(json!({"on": {"description": "\u{0}"}}))),
+            None,
+        ),
+        (
+            new_flag(|n| n.configuration = Some(json!({"k": "\u{0}"}))),
+            None,
+        ),
+    ];
+    for (new, reason) in bad {
+        let err = tx.create_flag(&app, new, actor, reason).await.unwrap_err();
+        refused_for_nul(&err);
+    }
+
+    let err = tx
+        .update_flag(
+            &app,
+            "f",
+            FlagPatch {
+                configuration: Some(json!(["\u{0}"])),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
+    let err = tx
+        .update_flag(
+            &app,
+            "f",
+            FlagPatch {
+                name: Some("renamed".into()),
+                ..Default::default()
+            },
+            ChangeMeta {
+                reason: Some("r\0".into()),
+                ..meta(actor)
+            },
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
+    // The rollback prefix ("rollback to vN: ") keeps the NUL. `h` has a
+    // version to roll back to, so the reason is what refuses it.
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "h".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.update_flag(
+        &app,
+        "h",
+        FlagPatch {
+            name: Some("renamed".into()),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    let err = tx
+        .rollback_flag(
+            &app,
+            "h",
+            None,
+            ChangeMeta {
+                reason: Some("r\0".into()),
+                ..meta(actor)
+            },
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
+
+    // Restoring an active flag changes nothing, and still refuses the reason.
+    let err = tx
+        .set_archived(
+            &app,
+            "f",
+            false,
+            ChangeMeta {
+                reason: Some("r\0".into()),
+                ..meta(actor)
+            },
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
+
+    let err = tx
+        .set_environment(
+            &app,
+            "f",
+            "production",
+            EnvPatch {
+                rules: Some(vec![Rule {
+                    attribute: "plan".into(),
+                    operator: Operator::Equals,
+                    values: vec![json!("a\u{0}")],
+                    enabled: None,
+                    variation: None,
+                    description: None,
+                }]),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap_err();
+    refused_for_nul(&err);
+
+    assert!(tx
+        .find_policy(flag.id, "production\0")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!tx
+        .remove_policy(&flag, "production\0", actor)
+        .await
+        .unwrap());
+
+    let now = Utc::now();
+    let event = |environment: &str| EvalEvent {
+        flag_key: "f".into(),
+        enabled: true,
+        variation: None,
+        environment: environment.into(),
+        at: now,
+    };
+    let events = (0..2)
+        .map(|_| event("production\0"))
+        .chain((0..3).map(|_| event("production")))
+        .collect();
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events)
+        .await
+        .unwrap();
+    let h = telemetry::health(&mut tx, flag.id, Some("production\0"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.evaluations.enabled, 2);
+    assert!(!h.environment.unwrap().contains('\0'));
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.evaluations.enabled, 3);
+
+    // Nothing changed, and no statement failed in the transaction.
+    assert_eq!(tx.find_flag(app.id, "f").await.unwrap().unwrap().version, 1);
+    tx.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
     let db = db(pool).await;

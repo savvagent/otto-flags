@@ -202,14 +202,18 @@ impl AppsExt for Tx<'_> {
         let wanted = name_or_id.trim();
         let org = self.org();
         let id = uuid::Uuid::parse_str(wanted).ok();
-        let found: Option<FlagApp> = sqlx::query_as(&format!(
-            "SELECT {COLS} FROM flag_apps WHERE org_id = $1 AND (name = $2 OR id = $3)"
-        ))
-        .bind(org)
-        .bind(wanted)
-        .bind(id)
-        .fetch_optional(self.conn())
-        .await?;
+        let found: Option<FlagApp> = if crate::eval::unstorable(wanted) {
+            None
+        } else {
+            sqlx::query_as(&format!(
+                "SELECT {COLS} FROM flag_apps WHERE org_id = $1 AND (name = $2 OR id = $3)"
+            ))
+            .bind(org)
+            .bind(wanted)
+            .bind(id)
+            .fetch_optional(self.conn())
+            .await?
+        };
         if let Some(app) = found {
             return Ok(app);
         }

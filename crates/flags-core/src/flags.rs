@@ -26,7 +26,7 @@ use sqlx::FromRow;
 
 use crate::apps::FlagApp;
 use crate::error::{on_unique, Error, Result};
-use crate::eval::{self, EnvConfig};
+use crate::eval::{self, unstorable, EnvConfig};
 use crate::ids::{FlagAppId, FlagId};
 use crate::notify;
 
@@ -148,13 +148,6 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
-/// True for a key no stored flag can have: Postgres `text` cannot hold NUL,
-/// so such a key names no flag, and binding it would fail the statement (and
-/// with it the caller's transaction) instead of finding nothing.
-pub(crate) fn unstorable(key: &str) -> bool {
-    key.contains('\0')
-}
-
 fn validate_key(key: &str) -> Result<String> {
     let key = key.trim();
     if key.is_empty() || key.len() > 128 {
@@ -173,12 +166,26 @@ fn validate_key(key: &str) -> Result<String> {
 
 fn validate_text(what: &str, s: Option<String>, max: usize) -> Result<Option<String>> {
     match s.map(|s| s.trim().to_string()) {
+        Some(s) if unstorable(&s) => Err(Error::Invalid(format!(
+            "{what} must not contain NUL (U+0000)"
+        ))),
         Some(s) if s.chars().count() > max => Err(Error::Invalid(format!(
             "{what} must be {max} characters or fewer"
         ))),
         Some(s) if s.is_empty() => Ok(None),
         other => Ok(other),
     }
+}
+
+/// Postgres `jsonb` cannot hold NUL, so configuration carrying it is refused
+/// rather than failing the write's statement.
+fn validate_configuration(c: &Value) -> Result<()> {
+    if eval::contains_nul(c) {
+        return Err(Error::Invalid(
+            "configuration must not contain NUL (U+0000)".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn invalid(e: String) -> Error {
@@ -269,6 +276,9 @@ impl FlagsExt for Tx<'_> {
         let reason = validate_text("reason", reason, MAX_REASON)?;
         let variations =
             eval::validate_variations(&new.variations.unwrap_or(Value::Null)).map_err(invalid)?;
+        if let Some(c) = &new.configuration {
+            validate_configuration(c)?;
+        }
         // Every environment the app knows starts present and off, so the
         // flag's state is explicit everywhere rather than "not configured".
         let environments: Map<String, Value> = app
@@ -367,6 +377,7 @@ impl FlagsExt for Tx<'_> {
             flag.variations = v;
         }
         if let Some(c) = patch.configuration {
+            validate_configuration(&c)?;
             flag.configuration = (!c.is_null()).then_some(c);
         }
         commit_change(self, flag, "update", &meta).await
@@ -390,6 +401,10 @@ impl FlagsExt for Tx<'_> {
         archived: bool,
         meta: ChangeMeta,
     ) -> Result<FeatureFlag> {
+        // Checked here too, not only in `commit_change`: a call that changes
+        // nothing returns before it, and must not accept a reason a change
+        // would refuse.
+        validate_text("reason", meta.reason.clone(), MAX_REASON)?;
         let mut flag = lock(self, app, key, meta.expected_version).await?;
         let target = if archived {
             FlagStatus::Archived
