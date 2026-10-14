@@ -197,35 +197,51 @@ pub async fn record_errors(
     keys.dedup();
     let ids = flag_ids(tx, app, keys).await?;
     let now = Utc::now();
-    let org = tx.org();
     let mut receipt = Receipt::default();
     let mut flags = vec![];
+    let (mut f, mut env, mut en, mut et, mut em, mut st, mut at) =
+        (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
     for e in events {
         let Some(id) = ids.get(&e.flag_key) else {
             receipt.unknown_flags += 1;
             continue;
         };
         flags.push(*id);
-        sqlx::query(
-            "INSERT INTO flag_errors \
-               (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        )
-        .bind(org)
-        .bind(id)
-        .bind(e.environment.as_deref().map(|s| truncate(s, 64)))
-        .bind(e.flag_enabled)
-        .bind(truncate(&e.error_type, MAX_ERROR_TYPE))
-        .bind(truncate(&e.error_message, MAX_ERROR_MESSAGE))
-        .bind(e.stack_trace.as_deref().map(|s| truncate(s, MAX_STACK)))
-        .bind(sane(e.at, now))
-        .bind(reporter.as_str())
-        .execute(tx.conn())
-        .await?;
+        f.push(id.as_uuid());
+        env.push(e.environment.as_deref().map(|s| truncate(s, 64)));
+        en.push(e.flag_enabled);
+        et.push(truncate(&e.error_type, MAX_ERROR_TYPE));
+        em.push(truncate(&e.error_message, MAX_ERROR_MESSAGE));
+        st.push(e.stack_trace.as_deref().map(|s| truncate(s, MAX_STACK)));
+        at.push(sane(e.at, now));
         receipt.accepted += 1;
     }
     flags.sort();
     flags.dedup();
+    if f.is_empty() {
+        return Ok(Recorded { receipt, flags });
+    }
+
+    // One statement however many events: a batch must not hold a pooled
+    // connection for a round trip per event.
+    sqlx::query(
+        "INSERT INTO flag_errors \
+           (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter) \
+         SELECT $1, f, env, en, et, em, st, at, $9 \
+           FROM UNNEST($2::uuid[], $3::text[], $4::bool[], $5::text[], $6::text[], $7::text[], $8::timestamptz[]) \
+             AS t(f, env, en, et, em, st, at)",
+    )
+    .bind(tx.org())
+    .bind(f)
+    .bind(env)
+    .bind(en)
+    .bind(et)
+    .bind(em)
+    .bind(st)
+    .bind(at)
+    .bind(reporter.as_str())
+    .execute(tx.conn())
+    .await?;
     Ok(Recorded { receipt, flags })
 }
 
