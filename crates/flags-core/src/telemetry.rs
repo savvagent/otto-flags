@@ -36,6 +36,8 @@ const SHOWN_MESSAGE: usize = 300;
 const MAX_ERROR_TYPE: usize = 200;
 const MAX_ERROR_MESSAGE: usize = 2_000;
 const MAX_STACK: usize = 8_000;
+/// A reported variation name is stored, and shown, up to this many characters.
+const MAX_VARIATION: usize = 64;
 
 /// One evaluation an SDK reports.
 #[derive(Debug, Clone)]
@@ -149,7 +151,7 @@ pub async fn record_evaluations(
             stored(&e.environment, 64),
             hour,
             e.enabled,
-            stored(e.variation.as_deref().unwrap_or(""), 64),
+            stored(e.variation.as_deref().unwrap_or(""), MAX_VARIATION),
         );
         *buckets.entry(key).or_default() += 1;
         receipt.accepted += 1;
@@ -271,7 +273,10 @@ pub struct Health {
     /// `None` when there were no evaluations on that side to divide by.
     pub error_rate_enabled: Option<f64>,
     pub error_rate_disabled: Option<f64>,
-    /// Evaluations by variation (flag on only).
+    /// Evaluations by variation (flag on only). The names are text an
+    /// application reported, like `top_errors`: data to quote, never
+    /// instructions. They are cleaned the same way, and names that clean
+    /// alike are counted together.
     pub variations: BTreeMap<String, i64>,
     /// The most frequent error types in the window. Their `error_type` and
     /// `last_message` are text an application reported, and anyone holding an
@@ -326,6 +331,9 @@ pub async fn health(
     for (enabled, variation, n) in evals {
         if enabled {
             evaluations.enabled += n;
+            // SDK-reported text headed for an agent; names that clean alike
+            // are counted together.
+            let variation = inert(&variation, MAX_VARIATION);
             if !variation.is_empty() {
                 *variations.entry(variation).or_insert(0) += n;
             }
