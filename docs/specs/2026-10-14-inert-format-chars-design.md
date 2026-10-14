@@ -91,9 +91,12 @@ hidden in it.
 **In:** `inert`, `health`'s variation keys, and their tests, in `crates/flags-core/src/telemetry.rs`
 and `crates/flags-core/tests/db.rs`.
 
-**Out:** what `record_errors` stores; any other text an agent sees (flag names, descriptions,
-rollback reasons are written by authenticated agents, not public keys); the MCP schema docs, which
-already call this text untrusted.
+Also `HEALTH_PROVENANCE` (`crates/flags-mcp/src/tools/out.rs`), which tells the agent to treat
+error types and messages as quoted data: it names variation names too, since they are the same kind
+of text.
+
+**Out:** what `record_errors` and `record_evaluations` store; any other text an agent sees (flag
+names, descriptions, rollback reasons are written by authenticated agents, not public keys).
 
 ## 6. Architecture
 
