@@ -1,6 +1,6 @@
 # Keep invisible format characters out of reported text shown to agents
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#58)
 **Issue:** #47
 
 ## 1. Brief
