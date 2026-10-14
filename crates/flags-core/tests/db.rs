@@ -1772,27 +1772,37 @@ async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
         Utc::now(),
         &json!({"org_id": org.as_uuid(), "user_id": gone.as_uuid()}),
     );
-    let outcome = platform_events::apply(&db, &otto_resource::webhook::parse(&body).unwrap())
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    let audited = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM audit_events \
+             WHERE org_id = $1 AND action = 'platform.member.removed'",
+        )
+        .bind(org)
+        .fetch_one(&pool)
         .await
-        .unwrap();
-    assert_eq!(outcome, Outcome::Applied { detail: json!({}) });
-    let audited: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM audit_events \
-         WHERE org_id = $1 AND action = 'platform.member.removed'",
-    )
-    .bind(org)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(audited, 1);
+        .unwrap()
+    };
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Applied { detail: json!({}) }
+    );
+    assert_eq!(audited().await, 1);
+    // A redelivery is recognised and audits nothing more.
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    assert_eq!(audited().await, 1);
     assert!(platform_events::revoked(&db, org, gone).await.unwrap());
     assert!(!platform_events::revoked(&db, org, stays).await.unwrap());
     assert!(begin_live(&db, org, Some(stays)).await.is_ok());
 }
 
 /// A `member.removed` delivered after its org's `org.deleted` must not write
-/// an audit row into the purged org: nothing would remove it (#41). Only the
-/// dedupe marker is kept, and the user stays refused.
+/// an audit row into the purged org: nothing would remove it short of a
+/// redelivered `org.deleted` (#41). The dedupe marker is still recorded, and
+/// so is the short-lived `removed_members` row, as for a live org.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn member_removed_after_org_deleted_writes_no_audit_row(pool: PgPool) {
     let db = db(pool.clone()).await;
@@ -1838,7 +1848,15 @@ async fn member_removed_after_org_deleted_writes_no_audit_row(pool: PgPool) {
             .await
             .unwrap();
     assert_eq!(markers, 1);
-    assert!(platform_events::revoked(&db, org, user).await.unwrap());
+    let removed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM removed_members WHERE org_id = $1 AND user_id = $2",
+    )
+    .bind(org)
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(removed, 1);
 
     assert_eq!(
         platform_events::apply(&app_db, &event).await.unwrap(),

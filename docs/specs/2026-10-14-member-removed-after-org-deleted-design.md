@@ -79,8 +79,9 @@ tx.commit().await?;
 The outcome becomes `Ignored` when `deleted && first`, `Duplicate` when `!first`, `Applied`
 otherwise. The info log distinguishes the deleted-org case ("member.removed for a deleted org;
 ignored", with `first`) from the normal one. The module doc's `member.removed` row adds: "For an
-org already deleted, nothing is written but the dedupe marker and the short-lived removed-member
-tombstone (#41)." `Outcome::Ignored`'s doc widens to cover an event for a deleted org.
+org already deleted, nothing is written but the dedupe marker and a `removed_members` row that
+expires in minutes (#41)." `Outcome::Ignored`'s doc widens to cover the first delivery of a
+`member.removed` for a deleted org.
 
 Ordering against a concurrent `org.deleted`: `org_deleted` commits its tombstone on its own, then
 takes the same lock exclusively for the purge. If `member_removed` holds the lock first and the
@@ -125,11 +126,11 @@ production.
 - `crates/flags-core/tests/db.rs`, `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`,
   `member_removed_after_org_deleted_writes_no_audit_row`, using `otto_app_db`: create an app in the
   org (audit rows exist), apply `org.deleted`, apply `member.removed` for the org (`Ignored`),
-  `audit_rows(&pool, org) == 0`, redeliver (`Duplicate`), still 0, and the `platform_events` marker
-  for the event exists.
+  `audit_rows(&pool, org) == 0`, the `platform_events` marker and the `removed_members` row for the
+  event exist (counted on the superuser pool), redeliver (`Duplicate`), still 0.
 - Extend `a_removed_member_is_refused_but_others_are_not` to assert its outcome is `Applied` and
-  that exactly one `platform.member.removed` audit row exists for the org, pinning the live-org
-  behaviour.
+  that exactly one `platform.member.removed` audit row exists for the org, and that a redelivery is
+  `Duplicate` with the count still 1, pinning the live-org behaviour.
 - Gates: test (with `DATABASE_URL`), clippy, fmt, the migrations guard, and `podman build`.
 
 ## 12. Risks and open questions

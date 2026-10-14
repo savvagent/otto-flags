@@ -115,8 +115,14 @@ One task: one function and the tests that prove it.
   Fixes #41
   ```
 
-Quality review (orchestrator fix): the module doc names the `removed_members` row too,
-`Outcome::Ignored`'s doc covers a deleted org, and the deleted-org log line carries `first`.
+Quality review (done): the module doc names the `removed_members` row too, `Outcome::Ignored`'s
+doc covers a deleted org, and the deleted-org log line carries `first`.
+
+PR review round (#48, done): the late-event test counts the `removed_members` row on the
+superuser pool instead of asserting `revoked` (which the org tombstone alone satisfies); the
+live-org test also redelivers (`Duplicate`, audit count still 1); the ordering comment names READ
+COMMITTED and why the check follows `first_delivery`; `Outcome::Ignored`'s doc names
+`member.removed`. The pre-existing `Outcome::Duplicate` doc inaccuracy is a separate issue.
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit by the
 orchestrator.

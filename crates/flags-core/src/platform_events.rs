@@ -10,7 +10,7 @@
 //! | Event | Effect |
 //! |---|---|
 //! | `org.deleted` | Every row this database holds for the org is deleted, its SDK keys stop resolving at once, and its tokens are refused. Only the dedupe marker and the tombstone survive. |
-//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. For an org already deleted, nothing is written but the dedupe marker and the short-lived removed-member tombstone (#41). |
+//! | `member.removed` | The user's cached token is refused for a few minutes, until the platform's own introspection stops vouching for it. Flags they changed keep their history. For an org already deleted, nothing is written but the dedupe marker and a `removed_members` row that expires in minutes (#41). |
 //! | `team.deleted` | Nothing: otto-flags has no team-scoped data. Acknowledged. |
 //!
 //! # Why requests take a lock
@@ -41,9 +41,10 @@ pub enum Outcome {
     /// An earlier delivery already applied this event. The cleanup was re-run
     /// anyway (it is idempotent) to catch work that raced the first run.
     Duplicate,
-    /// An event this version does not act on, or one for an org already
-    /// deleted here. Acknowledged, not failed: failing it would only make
-    /// the platform retry it forever.
+    /// An event this version does not act on, or the first delivery of a
+    /// `member.removed` for an org already deleted here (a redelivery is
+    /// `Duplicate`). Acknowledged, not failed: failing it would only make the
+    /// platform retry it forever.
     Ignored,
 }
 
@@ -244,10 +245,13 @@ async fn member_removed(
     let mut tx = db.begin(org).await?;
     exclude_requests(&mut tx, org).await?;
     let first = first_delivery(&mut tx, event, "member.removed").await?;
-    // Under the exclusive lifecycle lock, so a tombstone committed before this
-    // point is seen; one committed later is followed by a purge that removes
-    // whatever this writes. Without the check a late event's audit row would
-    // outlive its org's purge (#41).
+    // Read under the exclusive lifecycle lock, in a READ COMMITTED transaction
+    // (each statement takes a fresh snapshot), so a tombstone committed before
+    // this read is seen; one committed after it is followed by a purge that
+    // takes the same lock once this commits and removes whatever this writes.
+    // Without the check a late event's audit row would outlive its org's purge
+    // (#41). It follows `first_delivery` because the marker is recorded either
+    // way.
     let deleted = revoked_on(tx.conn(), org, None).await?;
     if first && !deleted {
         tx.audit(
