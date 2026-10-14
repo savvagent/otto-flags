@@ -2,14 +2,16 @@
 //! and the health summary agents read from them.
 //!
 //! Evaluations are folded into hourly buckets as they arrive (see the baseline
-//! migration for why raw rows are not kept). Errors are kept raw, truncated,
-//! for [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
+//! migration for why raw rows are not kept). Errors are kept as reported, one
+//! row each, truncated and with NUL replaced (see `stored`), for
+//! [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
 //! for [`EVAL_RETENTION_DAYS`]. [`sweep`] enforces all three.
 //!
 //! Telemetry names flags by key and the key resolves within the reporting
 //! app, so an app can only ever count against its own flags. Unknown keys are
 //! dropped and counted in the receipt rather than failing the batch: an SDK
 //! that evaluated a flag since deleted should not have its whole batch refused.
+//! A key that cannot be a flag key at all (one containing NUL) is unknown too.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -73,8 +75,16 @@ pub struct Recorded {
     pub flags: Vec<FlagId>,
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
+/// Reported text as it is stored: capped at `max` characters, with NUL
+/// replaced by U+FFFD. Postgres `text` cannot hold NUL, which is valid in JSON
+/// and Rust strings, so one NUL would fail the whole batch. It is replaced
+/// rather than dropped so a malformed value never merges into a real
+/// environment or variation (#38).
+fn stored(s: &str, max: usize) -> String {
+    s.chars()
+        .take(max)
+        .map(|c| if c == '\0' { '\u{FFFD}' } else { c })
+        .collect()
 }
 
 /// Timestamps from a client are only roughly trusted: one in the future or
@@ -91,8 +101,11 @@ fn sane(at: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
 async fn flag_ids(
     tx: &mut Tx<'_>,
     app: FlagAppId,
-    keys: Vec<String>,
+    mut keys: Vec<String>,
 ) -> Result<HashMap<String, FlagId>> {
+    // No flag key can contain NUL (`flags::validate_key`), so such a key is
+    // unknown like any other; binding it would fail the whole batch.
+    keys.retain(|k| !k.contains('\0'));
     let org = tx.org();
     let rows: Vec<(String, FlagId)> = sqlx::query_as(
         "SELECT key, id FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = ANY($3)",
@@ -133,10 +146,10 @@ pub async fn record_evaluations(
             .unwrap_or(now);
         let key = (
             *id,
-            truncate(&e.environment, 64),
+            stored(&e.environment, 64),
             hour,
             e.enabled,
-            truncate(e.variation.as_deref().unwrap_or(""), 64),
+            stored(e.variation.as_deref().unwrap_or(""), 64),
         );
         *buckets.entry(key).or_default() += 1;
         receipt.accepted += 1;
@@ -208,11 +221,11 @@ pub async fn record_errors(
         };
         flags.push(*id);
         f.push(id.as_uuid());
-        env.push(e.environment.as_deref().map(|s| truncate(s, 64)));
+        env.push(e.environment.as_deref().map(|s| stored(s, 64)));
         en.push(e.flag_enabled);
-        et.push(truncate(&e.error_type, MAX_ERROR_TYPE));
-        em.push(truncate(&e.error_message, MAX_ERROR_MESSAGE));
-        st.push(e.stack_trace.as_deref().map(|s| truncate(s, MAX_STACK)));
+        et.push(stored(&e.error_type, MAX_ERROR_TYPE));
+        em.push(stored(&e.error_message, MAX_ERROR_MESSAGE));
+        st.push(e.stack_trace.as_deref().map(|s| stored(s, MAX_STACK)));
         at.push(sane(e.at, now));
         receipt.accepted += 1;
     }
@@ -491,6 +504,13 @@ pub async fn sweep(db: &Db) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nul_is_replaced_and_text_capped() {
+        assert_eq!(stored("a\0b\0", 10), "a\u{FFFD}b\u{FFFD}");
+        assert_eq!(stored("\0\0\0", 2), "\u{FFFD}\u{FFFD}");
+        assert_eq!(stored("abc", 2), "ab");
+    }
 
     #[test]
     fn a_clear_regression_is_called_out() {

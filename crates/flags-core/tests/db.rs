@@ -1067,6 +1067,136 @@ async fn error_batch_columns_keep_their_own_values(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// Postgres `text` cannot hold NUL, which JSON and Rust strings can: one in
+/// any reported field used to fail the whole batch (#38). It is stored as
+/// U+FFFD, and a flag key containing one is simply unknown.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn telemetry_text_with_nul_is_stored_replaced(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let f = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap()
+        .id;
+
+    let error = |key: &str, plain: bool| ErrorEvent {
+        flag_key: key.into(),
+        flag_enabled: true,
+        environment: Some(if plain { "prod" } else { "prod\0x" }.into()),
+        error_type: if plain { "T" } else { "Type\0Error" }.into(),
+        error_message: if plain { "m" } else { "bad\0message" }.into(),
+        stack_trace: Some(if plain { "s" } else { "at\0main" }.into()),
+        at: Utc::now(),
+    };
+    let recorded = telemetry::record_errors(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        vec![error("f", false), error("f\0", true)],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded.receipt,
+        telemetry::Receipt {
+            accepted: 1,
+            unknown_flags: 1
+        }
+    );
+    assert_eq!(recorded.flags, vec![f]);
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT environment, error_type, error_message, stack_trace FROM flag_errors",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![(
+            "prod\u{FFFD}x".to_string(),
+            "Type\u{FFFD}Error".to_string(),
+            "bad\u{FFFD}message".to_string(),
+            "at\u{FFFD}main".to_string()
+        )]
+    );
+
+    // A batch naming only NUL keys is all unknown and writes nothing.
+    let recorded =
+        telemetry::record_errors(&mut tx, app.id, KeyKind::Server, vec![error("f\0", true)])
+            .await
+            .unwrap();
+    assert_eq!(
+        recorded.receipt,
+        telemetry::Receipt {
+            accepted: 0,
+            unknown_flags: 1
+        }
+    );
+    assert!(recorded.flags.is_empty());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM flag_errors")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let now = Utc::now();
+    let eval = |key: &str| EvalEvent {
+        flag_key: key.into(),
+        enabled: true,
+        variation: Some("v\0one".into()),
+        environment: "stag\0ing".into(),
+        at: now,
+    };
+    // Replaced, not dropped: a plain "staging" / "vone" event keeps its own
+    // bucket rather than merging with the malformed one.
+    let plain = EvalEvent {
+        environment: "staging".into(),
+        variation: Some("vone".into()),
+        ..eval("f")
+    };
+    let recorded = telemetry::record_evaluations(
+        &mut tx,
+        app.id,
+        KeyKind::Server,
+        vec![eval("f"), eval("f"), eval("f\0"), plain],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded.receipt,
+        telemetry::Receipt {
+            accepted: 3,
+            unknown_flags: 1
+        }
+    );
+    let rows: Vec<(String, String, i64)> = sqlx::query_as(
+        "SELECT environment, variation, count FROM flag_eval_hourly ORDER BY count DESC",
+    )
+    .fetch_all(tx.conn())
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            ("stag\u{FFFD}ing".to_string(), "v\u{FFFD}one".to_string(), 2),
+            ("staging".to_string(), "vone".to_string(), 1),
+        ]
+    );
+    tx.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     let db = db(pool).await;
