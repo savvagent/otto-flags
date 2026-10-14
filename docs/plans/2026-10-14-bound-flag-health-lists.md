@@ -69,7 +69,8 @@ public shape.
     (BTreeMap<String, i64>, i64)`:
     - 25 distinct names with counts 25..=1 and `named_total` = their sum: 20 names shown (counts
       25..=6), remainder = 5+4+3+2+1 = 15.
-    - Ties at the cut: 21 names all count 1 → the 20 alphabetically first are kept, remainder 1.
+    - Ties at the cut: 21 names all count 1, `named_total = 21` → the 20 alphabetically first are
+      kept, remainder 1.
     - Merge before cap: `"a\u{200B}b"` (1) and `"a\u{202E}b"` (1) become `"a b"` → 2.
     - A name that cleans to nothing (`"\u{200B}"`) is not shown and counts in the remainder.
     - `named_total` larger than the fetched rows (rows not fetched): the difference is in the
@@ -135,7 +136,9 @@ public shape.
       then type.
     - `last_message` is shown cleaned and capped at `SHOWN_MESSAGE` (+ ellipsis), `error_type` at
       `MAX_ERROR_TYPE`.
-  - `crates/flags-core/tests/db.rs` test `health_merges_error_types_that_read_alike` (doc: error
+  - `crates/flags-core/tests/db.rs` test `health_merges_error_types_that_read_alike`, set up like
+    `health_shows_variation_names_cleaned` and calling
+    `telemetry::health(&mut tx, flag.id, Some("production"), 24)` (doc: error
     types are grouped as they read after cleaning, so one error spread over spellings that differ
     only in hidden characters is one row and cannot push real errors out of the ten (#59)). Record
     with `KeyKind::Client`, flag on, environment `production`: 3 spellings of `TypeError` that
@@ -144,7 +147,7 @@ public shape.
     reach the ten). Assert `h.top_errors.len() == 10`, `h.top_errors[0].error_type == "TypeError"`
     with `count == 6`, exactly one `top_errors` entry reads `"TypeError"`, and the other 9 entries
     are distinct `E..` types with `count == 3`. `h.errors.enabled == 39`.
-- [ ] **Step 2: Run, see them fail:**
+- [ ] **Step 2: Run, see them fail** (compile errors count as failing):
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core health_merges`
 - [ ] **Step 3: Implement:**
   - `SHOWN_ERRORS: usize = 10` constant.
