@@ -240,6 +240,19 @@ In `crates/flags-core/tests/db.rs` with `#[sqlx::test(migrator = "flags_core::MI
 
 ## 12. Risks and open questions
 
+- **Forged tombstone (accepted).** `otto_app` has INSERT on `deleted_orgs` (the purge's own
+  tombstone write needs it when the pool runs as `otto_app`), so SQL running as `otto_app` could
+  tombstone a live org and then call the purge, erasing an append-only trail the role cannot
+  otherwise delete. Raised by an automated commit review. Accepted because:
+  - nothing in the database can tell a platform-verified tombstone from a forged one, and the
+    AC requires the purge to work for an `otto_app` pool;
+  - it needs arbitrary SQL, and arbitrary SQL inside a tenant transaction can already
+    `RESET ROLE` to the pool's session role (production's superuser attach role), so `otto_app`
+    is a guard against code bugs, not injection;
+  - no plausible bug writes a tombstone for a live org and then calls the purge, and a forged
+    tombstone permanently locks the org out (keys and tokens refused), which is not silent.
+  The migration's header comment records the same reasoning.
+
 - The `TO CURRENT_USER` policies are not exercised by a test (the test cluster's migrating role is
   a superuser). If production's migrating role ever stopped being exempt, the purge depends on
   them; their logic is two lines and reviewed.
