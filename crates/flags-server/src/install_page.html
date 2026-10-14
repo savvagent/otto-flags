@@ -104,8 +104,8 @@ footer code { color: var(--ink); background: var(--raised); padding: 1px 4px; bo
 
 <h2 id="address-heading">Connector address</h2>
 <div class="copy">
-<code class="value" id="connector-url" tabindex="0" aria-labelledby="address-heading">{{CONNECTOR_URL}}</code>
-<button type="button" data-copy="connector-url" data-status="connector-url-status">Copy</button>
+<code class="value" id="connector-url" tabindex="0">{{CONNECTOR_URL}}</code>
+<button type="button" aria-label="Copy connector address" data-copy="connector-url" data-status="connector-url-status">Copy</button>
 </div>
 <p class="status" id="connector-url-status" role="status"></p>
 
@@ -130,8 +130,8 @@ footer code { color: var(--ink); background: var(--raised); padding: 1px 4px; bo
 <ol>
 <li>Run this in your terminal:
 <div class="copy">
-<code class="value" id="claude-code-command" tabindex="0" aria-labelledby="claude-code-heading">claude mcp add --transport http otto-flags {{CONNECTOR_URL}}</code>
-<button type="button" data-copy="claude-code-command" data-status="claude-code-command-status">Copy</button>
+<code class="value" id="claude-code-command" tabindex="0">claude mcp add --transport http otto-flags {{CONNECTOR_URL}}</code>
+<button type="button" aria-label="Copy Claude Code command" data-copy="claude-code-command" data-status="claude-code-command-status">Copy</button>
 </div>
 <p class="status" id="claude-code-command-status" role="status"></p>
 </li>
@@ -153,6 +153,7 @@ document.querySelectorAll("button[data-copy]").forEach(function (button) {
     var target = document.getElementById(button.dataset.copy);
     var status = document.getElementById(button.dataset.status);
     var text = target.textContent;
+    status.textContent = "";
     function selectIt() {
       var range = document.createRange();
       range.selectNodeContents(target);

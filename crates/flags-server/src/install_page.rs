@@ -26,7 +26,7 @@ const TEMPLATE: &str = include_str!("install_page.html");
 /// updated to the values it prints.
 pub const CSP: &str = "default-src 'none'; \
      style-src 'sha256-biNkFyEF7Iq98bZZN5Vj88IC/ok7B7JXp5K8/jV8nDk='; \
-     script-src 'sha256-6/v0lPQ+Nr4A5QSG6MbNrYfKbg/E+eV/eVa95WpMYzQ='; \
+     script-src 'sha256-X+vtavDuvM5Xh6gw3SGFEn/6P358qCI6/LPP/D2GTh8='; \
      base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /// What `/` varies on, for this page and for the JSON 404 it otherwise
@@ -121,13 +121,22 @@ fn accepts_html(range: &str) -> bool {
             continue;
         };
         if name.trim().eq_ignore_ascii_case("q") {
-            q = value.trim().parse().unwrap_or(0.0);
+            // RFC 9110 qvalues are 0 to 1; anything else (junk, `inf`,
+            // `NaN`, `5`) counts as 0.
+            q = value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|q| (0.0..=1.0).contains(q))
+                .unwrap_or(0.0);
         }
     }
     q > 0.0
 }
 
 /// `https://otto.savvagent.com/anything` → `https://otto.savvagent.com`.
+/// The fallback is for completeness only: config already refuses a
+/// `FLAGS_PLATFORM_URL` that does not parse as an http(s) URL.
 fn origin(platform_url: &str) -> String {
     match url::Url::parse(platform_url) {
         Ok(u) if u.origin().is_tuple() => u.origin().ascii_serialization(),
@@ -194,6 +203,9 @@ mod tests {
         assert!(!accept("text/html;q=0"));
         assert!(!accept("text/html;q=0.000"));
         assert!(!accept("text/html;q=junk"));
+        assert!(!accept("text/html;q=inf"));
+        assert!(!accept("text/html;q=NaN"));
+        assert!(!accept("text/html;q=5"));
         assert!(!accept("text/htmlx"));
         assert!(!accept(""));
     }
