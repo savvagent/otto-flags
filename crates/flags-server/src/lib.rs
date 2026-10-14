@@ -18,6 +18,7 @@
 
 pub mod config;
 pub mod health;
+pub mod install_page;
 
 use std::sync::Arc;
 

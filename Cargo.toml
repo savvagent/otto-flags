@@ -54,6 +54,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 futures = "0.3"
 url = "2"
 sha2 = "0.10"
+base64 = "0.22"
 hex = "0.4"
 rand = "0.8"
 # Loads .env for local runs. Never overrides a variable already set, so a
