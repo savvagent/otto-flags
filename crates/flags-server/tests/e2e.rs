@@ -1022,7 +1022,7 @@ async fn mcp_arguments_with_nul_are_not_internal_errors(pool: PgPool) {
     .await
     .unwrap_err();
     assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
-    tool(
+    let r = tool(
         &s.app,
         &t,
         "flag_health",
@@ -1030,6 +1030,8 @@ async fn mcp_arguments_with_nul_are_not_internal_errors(pool: PgPool) {
     )
     .await
     .unwrap();
+    // Named as telemetry stores it: no raw NUL in the answer.
+    assert_eq!(r["health"]["environment"], "production\u{FFFD}", "{r}");
 
     for (name, args) in [
         (

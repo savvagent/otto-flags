@@ -987,6 +987,20 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err:?}");
+    // The rollback prefix ("rollback to vN: ") keeps the NUL.
+    let err = tx
+        .rollback_flag(
+            &app,
+            "f",
+            None,
+            ChangeMeta {
+                reason: Some("r\0".into()),
+                ..meta(actor)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err:?}");
 
     let err = tx
         .set_environment(

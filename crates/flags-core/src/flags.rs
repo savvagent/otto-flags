@@ -184,6 +184,17 @@ fn validate_text(what: &str, s: Option<String>, max: usize) -> Result<Option<Str
     }
 }
 
+/// Postgres `jsonb` cannot hold NUL, so configuration carrying it is refused
+/// rather than failing the write's statement.
+fn validate_configuration(c: &Value) -> Result<()> {
+    if eval::contains_nul(c) {
+        return Err(Error::Invalid(
+            "configuration must not contain NUL (U+0000)".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn invalid(e: String) -> Error {
     Error::Invalid(e)
 }
@@ -272,10 +283,8 @@ impl FlagsExt for Tx<'_> {
         let reason = validate_text("reason", reason, MAX_REASON)?;
         let variations =
             eval::validate_variations(&new.variations.unwrap_or(Value::Null)).map_err(invalid)?;
-        if new.configuration.as_ref().is_some_and(eval::contains_nul) {
-            return Err(Error::Invalid(
-                "configuration must not contain NUL (U+0000)".into(),
-            ));
+        if let Some(c) = &new.configuration {
+            validate_configuration(c)?;
         }
         // Every environment the app knows starts present and off, so the
         // flag's state is explicit everywhere rather than "not configured".
@@ -375,11 +384,7 @@ impl FlagsExt for Tx<'_> {
             flag.variations = v;
         }
         if let Some(c) = patch.configuration {
-            if eval::contains_nul(&c) {
-                return Err(Error::Invalid(
-                    "configuration must not contain NUL (U+0000)".into(),
-                ));
-            }
+            validate_configuration(&c)?;
             flag.configuration = (!c.is_null()).then_some(c);
         }
         commit_change(self, flag, "update", &meta).await
