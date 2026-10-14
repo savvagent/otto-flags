@@ -88,8 +88,13 @@ operators still see at `info` which kind of failure happened.
   coverage) are unit-tested.
 - HTTP status codes and bodies for SDK requests, webhooks, and `/readyz` are unchanged; the
   existing e2e tests pin them.
-- `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/` and
-  `grep -rnE -A4 'tracing::(error|warn|info)!\($' crates/ | grep 'error = %'` find nothing.
+- `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/` finds nothing (the issue's
+  check), and so does this span-aware one, which also sees calls rustfmt wraps and the `reason =
+  %` / `%reason` field forms; it may print only `usage.rs`'s `reason = %r.reason` (§2):
+
+  ```sh
+  find crates -name '*.rs' -print0 | xargs -0 perl -0ne 'while (/tracing::(error|warn|info)!\((.*?)"\s*,?\s*\)/sg) { my $b=$2; $b =~ s/\s+/ /g; print "$ARGV: $b\n" if $b =~ /error = %|reason = %|%reason/ }'
+  ```
 
 ## 5. Scope
 
@@ -116,7 +121,10 @@ subscriber configuration.
   - `flags-core/src/usage.rs`: `reschedule` logs `db_failure_reason`; the shipping loop and final
     flush log `e.failure_reason()`; the quota fail-open logs `platform_failure_reason` (or
     `timed_out`) and its `status`.
-  - `flags-server/src/main.rs`: `JoinError` kind; sweeps log `e.code()` and `e.failure_reason()`;
+  - `flags-server/src/main.rs`: `JoinError` kind (`is_panic()` → `panicked`, else `cancelled`;
+    the checker's handle is aborted on timeout, so `cancelled` happens); sweeps log `e.code()` and
+    `e.failure_reason()` (for a non-database `flags_core::Error` the reason falls back to the code,
+    so the two can match; intended);
     `check_platform` logs `platform_failure_reason`.
   - `flags-server/src/health.rs`: `db_failure_reason`.
 - Public interface: `flags_core::error::db_failure_reason` and `ShipError::failure_reason` are
@@ -157,7 +165,7 @@ is no longer written there; raising a crate to `debug` brings it back for diagno
   `rejection_reason` for each `WebhookError` variant in `platform.rs`.
 - The other sites (listener, readiness, sweeps, shutdown, startup platform check) are reached only
   through a failing database or platform at runtime; their reasons come from the unit-tested
-  helpers, and the two greps in §4 guard against text fields coming back. This is a deliberate
+  helpers, and the two checks in §4 guard against text fields coming back. This is a deliberate
   gap: forcing those failures in tests costs more than it proves.
 - Gates: `cargo test --workspace` with `DATABASE_URL`, clippy, fmt, the migrations check (vacuous),
   and `podman build` (crates/ changed).
