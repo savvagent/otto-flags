@@ -52,6 +52,9 @@ struct Platform {
     reject_with: Option<String>,
     /// When set, answered verbatim to every usage batch, ahead of `reject_with`.
     receipt: Option<UsageReceipt>,
+    /// When set, each usage batch hands the test a sender and waits until the
+    /// test fires it before answering, so the test can hold shippers mid-call.
+    usage_gate: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -110,6 +113,12 @@ async fn usage_status(
 }
 
 async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageReceipt> {
+    let gate = p.lock().unwrap().usage_gate.clone();
+    if let Some(gate) = gate {
+        let (release, released) = tokio::sync::oneshot::channel();
+        gate.send(release).unwrap();
+        released.await.unwrap();
+    }
     let mut p = p.lock().unwrap();
     if let Some(r) = &p.receipt {
         return Json(r.clone());
@@ -1721,4 +1730,115 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
             .unwrap();
     assert_eq!(rows, vec![(a, "x".to_string())]);
     assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+/// A shipper whose claim lapsed while it waited on the platform cannot act on
+/// the row once another shipper has claimed it: the newer claim records it,
+/// once (#67).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lapsed_usage_claim_leaves_the_row_to_the_newer_one(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+         VALUES ($1, NULL, 'create_flag', true) RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    let (gate, mut held) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let mut p = platform.lock().unwrap();
+        p.reject_with = Some("unknown org".into());
+        p.usage_gate = Some(gate);
+    }
+    // A lease of 0: a claimed row is due again at once, as if the claim lapsed.
+    let cfg = flags_core::usage::ShipperConfig {
+        claim_lease: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let shipper = |cfg: flags_core::usage::ShipperConfig| {
+        let (db, platform) = (s.db.clone(), s.platform.clone());
+        tokio::spawn(async move { flags_core::usage::ship_once(&db, &platform, &cfg).await })
+    };
+
+    let first = shipper(cfg.clone());
+    let release_first = held.recv().await.unwrap();
+    let second = shipper(cfg.clone());
+    let release_second = held.recv().await.unwrap();
+
+    // The first shipper's claim has lapsed: its rejection is not recorded and
+    // the row it no longer holds stays for the second.
+    release_first.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), 1);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 1);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+
+    release_second.send(()).unwrap();
+    assert_eq!(second.await.unwrap().unwrap(), 1);
+    let rejected: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox_rejected")
+        .fetch_all(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(rejected, vec![event_id]);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+/// The shipper reads and writes the outbox in maintenance transactions, so it
+/// still works when its pool is subject to row-level security (#68). The test
+/// pool is a superuser, which RLS ignores, so this one runs as otto_app.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_usage_shipper_sets_the_maintenance_marker(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let as_app = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE otto_app").execute(conn).await?;
+                Ok(())
+            })
+        })
+        .connect_with((*pool.connect_options()).clone())
+        .await
+        .unwrap();
+    let insert = || {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+             VALUES ($1, NULL, 'create_flag', true) RETURNING event_id",
+        )
+        .bind(Uuid::new_v4())
+        .fetch_one(&pool)
+    };
+    let _accepted = insert().await.unwrap();
+    let refused = insert().await.unwrap();
+
+    // The role is subject to RLS: unpinned and unmarked, it sees nothing.
+    let unmarked: i64 = sqlx::query_scalar("SELECT count(*) FROM usage_outbox")
+        .fetch_one(&as_app)
+        .await
+        .unwrap();
+    assert_eq!(unmarked, 0);
+
+    platform.lock().unwrap().receipt = Some(UsageReceipt {
+        accepted: 1,
+        duplicates: 0,
+        rejected: vec![RejectedEvent {
+            event_id: refused,
+            reason: "x".into(),
+        }],
+    });
+    let db = otto_tenant::Db::from_pool(as_app);
+    let n = flags_core::usage::ship_once(&db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(row_count(&pool, "usage_outbox").await, 0);
+    let rejected: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox_rejected")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rejected, vec![refused]);
+    db.pool().close().await;
 }
