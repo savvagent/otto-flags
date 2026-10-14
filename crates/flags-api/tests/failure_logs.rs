@@ -1,15 +1,20 @@
-//! SDK request failures are logged by code and reason at error, their text
-//! only at debug (#35).
+//! SDK request and webhook failures are logged by code and reason above
+//! debug, their text only at debug (#35).
 //!
 //! Its own test binary, with one test: `tracing` caches per callsite whether
-//! any subscriber is interested, so a unit test elsewhere in the crate hitting
+//! any subscriber is interested, so another test in the same binary hitting
 //! the same callsite with no subscriber can make this one miss its debug
 //! events.
 
 use std::sync::{Arc, Mutex};
 
-use flags_api::ApiError;
+use axum::body::Body;
+use flags_api::{ApiError, AppState};
+use flags_core::notify::Listener;
+use flags_core::rollback::Hints;
 use flags_core::Error;
+use http::{Request, StatusCode};
+use tower::ServiceExt;
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -31,7 +36,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
     }
 }
 
-/// The lines `f` logged at `ERROR` and at `DEBUG`.
+/// The lines `f` logged above `DEBUG` (at `ERROR` or `WARN`) and at `DEBUG`.
 fn capture(f: impl FnOnce()) -> (Vec<String>, Vec<String>) {
     let out = Capture::default();
     let subscriber = tracing_subscriber::fmt()
@@ -47,14 +52,54 @@ fn capture(f: impl FnOnce()) -> (Vec<String>, Vec<String>) {
             .map(str::to_string)
             .collect()
     };
-    (at(" ERROR "), at(" DEBUG "))
+    let mut above = at(" ERROR ");
+    above.extend(at(" WARN "));
+    (above, at(" DEBUG "))
 }
 
-/// The text that must stay at debug, the fields expected at error, and the call.
+const SECRET: &str = "otto_whsec_test";
+
+/// Deliver `body` to the webhook route, signed with `secret`, and return the
+/// status. The pool is lazy and never touched: both cases fail before apply.
+fn deliver(secret: &str, body: Vec<u8>) -> StatusCode {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    rt.block_on(async {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused@localhost/unused")
+            .expect("lazy pool");
+        let app = flags_api::router(AppState::new(
+            otto_tenant::Db::from_pool(pool),
+            Listener::detached(),
+            Hints::detached(),
+            SECRET,
+        ));
+        let sig = otto_resource::webhook::sign(secret, chrono::Utc::now().timestamp(), &body);
+        let req = Request::post("/platform/webhooks")
+            .header(otto_resource::webhook::SIGNATURE_HEADER, sig)
+            .body(Body::from(body))
+            .expect("request");
+        app.oneshot(req).await.expect("response").status()
+    })
+}
+
+/// A signed event whose data serde rejects, quoting the value it found.
+fn unreadable_body() -> Vec<u8> {
+    otto_resource::webhook::body(
+        uuid::Uuid::nil(),
+        "org.deleted",
+        chrono::Utc::now(),
+        &serde_json::json!({ "org_id": 4242424242u64 }),
+    )
+}
+
+/// The text that must stay at debug, the fields expected above it, and the call.
 type Case = (&'static str, &'static str, Box<dyn FnOnce()>);
 
 #[test]
-fn sdk_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
+fn failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
     let cases: Vec<Case> = vec![
         (
             "MARKER_DB",
@@ -69,10 +114,30 @@ fn sdk_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             "MARKER_PLATFORM",
             r#"code="platform_unavailable" reason="http_status" status=503"#,
             Box::new(|| {
-                let _ = ApiError::from(Error::Platform(otto_resource::Error::Status {
+                let api = ApiError::from(Error::Platform(otto_resource::Error::Status {
                     status: 503,
                     body: "MARKER_PLATFORM".into(),
                 }));
+                assert_eq!(api.status, http::StatusCode::SERVICE_UNAVAILABLE);
+                assert!(!api.message.contains("MARKER"), "{}", api.message);
+            }),
+        ),
+        (
+            // serde's text quotes the value it rejected.
+            "4242424242",
+            r#"reason="bad_body""#,
+            Box::new(|| {
+                assert_eq!(deliver(SECRET, unreadable_body()), StatusCode::BAD_REQUEST);
+            }),
+        ),
+        (
+            "signature does not match",
+            r#"reason="bad_signature""#,
+            Box::new(|| {
+                assert_eq!(
+                    deliver("otto_whsec_wrong", unreadable_body()),
+                    StatusCode::UNAUTHORIZED
+                );
             }),
         ),
     ];
@@ -80,11 +145,11 @@ fn sdk_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
         let (errors, debugs) = capture(call);
         assert!(
             errors.iter().any(|l| l.contains(fields)),
-            "{fields} at ERROR: {errors:#?}"
+            "{fields} above DEBUG: {errors:#?}"
         );
         assert!(
             errors.iter().all(|l| !l.contains(marker)),
-            "{marker} must not be at ERROR: {errors:#?}"
+            "{marker} must not be above DEBUG: {errors:#?}"
         );
         assert!(
             debugs.iter().any(|l| l.contains(marker)),

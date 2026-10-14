@@ -44,17 +44,11 @@ pub async fn receive(
         .ok_or_else(rejected)?;
     let event = match webhook::verify(&state.platform_webhook_secret, signature, &body) {
         Ok(event) => event,
-        Err(WebhookError::BadBody(detail)) => {
-            // The detail is serde's and can quote the body.
-            tracing::error!(
-                reason = "bad_body",
-                "platform webhook was signed but unreadable"
-            );
-            tracing::debug!(
-                reason = "bad_body",
-                error = %detail,
-                "platform webhook was signed but unreadable"
-            );
+        Err(e @ WebhookError::BadBody(_)) => {
+            // The error text is serde's and can quote the body.
+            let reason = rejection_reason(&e);
+            tracing::error!(reason, "platform webhook was signed but unreadable");
+            tracing::debug!(reason, error = %e, "platform webhook was signed but unreadable");
             return Err(ApiError::bad_request(
                 "the webhook body is not a valid event",
             ));
