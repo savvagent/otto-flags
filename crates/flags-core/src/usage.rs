@@ -336,7 +336,7 @@ pub async fn ship_once(
         // usage_outbox_rejected for operators (#44).
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
-        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = %r.reason,
+        tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?r.reason,
             "the platform refused a usage event; moving it to usage_outbox_rejected");
         sqlx::query(
             "INSERT INTO usage_outbox_rejected \

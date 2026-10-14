@@ -42,8 +42,9 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
     }
 }
 
-/// The first call answers 502 with a body carrying `BODY_MARKER`; every later
-/// call rejects each event with a reason carrying `REASON_MARKER`.
+/// The first call answers 502 with a body carrying `BODY_MARKER`; the second
+/// answers a receipt that accounts for none of the events (a miscount); every
+/// later call rejects each event with a reason carrying `REASON_MARKER`.
 async fn ship(State(calls): State<Arc<Mutex<usize>>>, Json(batch): Json<UsageBatch>) -> Response {
     let call = {
         let mut n = calls.lock().expect("calls lock");
@@ -56,6 +57,14 @@ async fn ship(State(calls): State<Arc<Mutex<usize>>>, Json(batch): Json<UsageBat
             format!("upstream said {BODY_MARKER}"),
         )
             .into_response();
+    }
+    if call == 2 {
+        return Json(UsageReceipt {
+            accepted: 0,
+            duplicates: 0,
+            rejected: vec![],
+        })
+        .into_response();
     }
     let rejected = batch
         .events
@@ -121,10 +130,23 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
             .unwrap();
     assert_eq!(last_error.as_deref(), Some("http_status 502"));
 
-    sqlx::query("UPDATE usage_outbox SET next_attempt_at = now()")
-        .execute(&pool)
+    // A receipt that accounts for fewer events than were sent is stored by the
+    // same name the shipping loop logs for it.
+    let due = || sqlx::query("UPDATE usage_outbox SET next_attempt_at = now()").execute(&pool);
+    due().await.unwrap();
+    let err = flags_core::usage::ship_once(&db, &platform, &cfg)
         .await
-        .unwrap();
+        .unwrap_err();
+    assert_eq!(err.failure_reason(), ("decode", None));
+    let last_error: Option<String> =
+        sqlx::query_scalar("SELECT last_error FROM usage_outbox WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(last_error.as_deref(), Some("decode"));
+
+    due().await.unwrap();
     assert_eq!(
         flags_core::usage::ship_once(&db, &platform, &cfg)
             .await

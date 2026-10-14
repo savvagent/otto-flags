@@ -159,6 +159,6 @@ Usage backlog (should drain to 0 within seconds of activity):
 SELECT count(*), max(attempts), max(last_error) FROM usage_outbox;
 ```
 
-`last_error` names the last failure and its HTTP status (`http_status 502`, `transport`,
-`unauthorized`; a miscounted receipt stores `decode`, and the counts are in the `error` log);
-the failure's text is logged only at `debug`.
+`last_error` names the last failure and its HTTP status (for example `http_status 502`,
+`transport`, `unauthorized`, `not_found`; a miscounted receipt stores `decode`, and the counts
+are in the `error` log); the failure's text is logged only at `debug`.
