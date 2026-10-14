@@ -57,10 +57,12 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
   Assert: `receipt == Receipt { accepted: 3, unknown_flags: 1 }`; `recorded.flags` is `[f, g]`
   sorted as `FlagId`s sort; `SELECT count(*) FROM flag_errors` is 3; the `g` row has NULL
   `environment` and NULL `stack_trace` and `flag_enabled = false`; the long message is stored at
-  2,000 characters; the future-dated row's `occurred_at` is not in the future; every row's
+  2,000 characters; the future-dated row's `occurred_at` is between the test's `now` and a Rust `Utc::now()` taken
+  after the call (not SQL `now()`, which is fixed at the transaction's start; never exact equality,
+  Postgres keeps microseconds); every row's
   `reporter` is `server`. Find rows by content (flag and message), never by `id` order.
 - [ ] **Step 2: Run it against the current code; it should pass** (this pins today's behaviour
-  before the rewrite):
+  before the rewrite; if it fails here, the test is wrong: fix the test, not `record_errors`):
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db error_batches_land`
 - [ ] **Step 3: Rewrite `record_errors`** as the spec's §6 describes: keep the key lookup, the
   receipt counting, and the `flags` dedup/sort; build `Vec<Uuid>` (flag ids via `.as_uuid()`),
@@ -69,7 +71,8 @@ timestamps) instead of executing; one statement binds them with `org_id` and `re
   `Vec<Option<String>>` stack_trace (truncate `MAX_STACK`), `Vec<DateTime<Utc>>` (`sane(e.at,
   now)`); return early with no statement if no event was accepted; then one
   `sqlx::query(...)` with the SQL in the spec's §6, binding `org`, the seven vectors, and
-  `reporter.as_str()` in that order (`$1`..`$9`), executed on `tx.conn()`.
+  `reporter.as_str()` in that order (`$1`..`$9`), executed on `tx.conn()`. The "single statement" criterion is checked by review of
+  `record_errors`, not by a test.
 - [ ] **Step 4: Run the new test and every existing telemetry and rollback test:**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
 - [ ] **Step 5: Run every gate** (Global Constraints) and report pass counts per test binary.
