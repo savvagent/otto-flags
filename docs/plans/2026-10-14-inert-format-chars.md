@@ -173,3 +173,18 @@ Two tasks: the `inert` change (pure, unit-tested), then `health` using it for va
   `fix(core): clean the variation names flag_health shows to agents`, body saying why (variation
   names are SDK-reported, public-key text that reached the agent unfiltered) and ending
   `Fixes #47`. No attribution.
+
+---
+
+## Amendments after review
+
+The code, not the Task 1 snippet above, is the definition of `hidden`. After the final and PR
+reviews:
+
+- `hidden` covers Cc ∪ Cf ∪ Default_Ignorable_Code_Point (Unicode 16.0), which adds the Mongolian
+  variation selectors (U+180B..U+180F with the Cf U+180E), U+034F, the Hangul and Khmer fillers,
+  U+FFF0..U+FFF8, and the whole tag block U+E0000..U+E0FFF (spec §3).
+- `hidden_covers_each_range_end_and_nothing_beside_it` checks every range bound and its visible
+  neighbours; `reported_text_loses_invisible_characters` gains U+180B, U+E0080, U+3164, U+034F.
+- The `flag_health` tool description and `HEALTH_PROVENANCE` name variation names alongside error
+  text; the `MAX_VARIATION` and `Health.top_errors` docs say how display cleaning meets them.
