@@ -57,7 +57,9 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
   `org_deleted_purges_everything_and_revokes_keys`; use the existing `otto_app_db` helper)
 
 - [ ] **Step 1: Write the failing tests** in `crates/flags-core/tests/db.rs`, each with
-  `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`:
+  `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`. In both, build the superuser `Db` with
+  `db(pool.clone()).await` before `otto_app_db(&pool)` (as `due_policies_sees_every_org_as_otto_app`
+  does), and check SQLSTATEs with the file's existing `sqlstate(&err)` helper:
   - `org_deleted_purges_the_audit_trail_as_otto_app`: on the superuser `db`, create two orgs with an
     app each (`create_app` writes audit rows; follow `org_deleted_purges_everything_and_revokes_keys`
     for setup and for building the `org.deleted` event). Assert each org has > 0 `audit_events` rows.
@@ -66,15 +68,17 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
     `detail["audit_events"]` > 0; on the superuser pool, the deleted org has 0 `audit_events` rows
     and the other org's count is unchanged; a second `apply` is `Outcome::Duplicate`. Close
     `app_db.pool()` before returning.
-  - `audit_purge_only_reaches_deleted_orgs`: one live org with audit rows (as above). With
+  - `audit_purge_only_reaches_deleted_orgs`: one live org with audit rows (as above); count them on
+    the superuser pool first. With
     `app_db = otto_app_db(&pool)` and `let mut tx = app_db.begin(org).await` (pinned, as production
     calls it; one connection for the whole test body):
     1. `SELECT purge_deleted_org_audit($1)` returns 0 (`i64`).
     2. `CREATE TEMP TABLE deleted_orgs (org_id uuid)`, `INSERT` the live org into it, call the
        function again: returns 0.
-    3. `current_setting('app.audit_purge', true)` is not `'on'` (NULL or empty).
-    4. Inside a `SAVEPOINT`, `DELETE FROM audit_events WHERE org_id = $1` fails with SQLSTATE
-       `42501` (match `sqlx::Error::Database(e)` and `e.code()`); `ROLLBACK TO SAVEPOINT`.
+    3. `query_scalar::<_, Option<String>>("SELECT current_setting('app.audit_purge', true)")` is
+       not `Some("on")` (after the function's `SET` is undone it is usually `''`).
+    4. `DELETE FROM audit_events WHERE org_id = $1` fails with SQLSTATE `42501` (last statement
+       before the rollback, so no savepoint is needed).
     Roll back the transaction; on the superuser pool the org's audit row count is unchanged. Close
     `app_db.pool()` before returning.
 - [ ] **Step 2: Run them, see them fail** (the first with `permission denied` from the purge, the
