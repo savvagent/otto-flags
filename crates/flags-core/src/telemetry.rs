@@ -227,7 +227,7 @@ pub async fn record_errors(
     sqlx::query(
         "INSERT INTO flag_errors \
            (org_id, flag_id, environment, flag_enabled, error_type, error_message, stack_trace, occurred_at, reporter) \
-         SELECT $1, f, env, en, et, em, st, at, $9 \
+         SELECT $1::uuid, f, env, en, et, em, st, at, $9::text \
            FROM UNNEST($2::uuid[], $3::text[], $4::bool[], $5::text[], $6::text[], $7::text[], $8::timestamptz[]) \
              AS t(f, env, en, et, em, st, at)",
     )

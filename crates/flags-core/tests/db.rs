@@ -944,6 +944,129 @@ async fn error_batches_land_one_row_per_known_event(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+/// Each column of a batched error insert keeps its own event's value: a
+/// distinct value per field, so arrays bound in the wrong order would show.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn error_batch_columns_keep_their_own_values(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let mut ids = vec![];
+    for key in ["f", "g"] {
+        let flag = tx
+            .create_flag(
+                &app,
+                NewFlag {
+                    key: key.into(),
+                    ..Default::default()
+                },
+                actor,
+                None,
+            )
+            .await
+            .unwrap();
+        ids.push(flag.id);
+    }
+    let (f, g) = (ids[0], ids[1]);
+
+    // Nothing known: no rows, an honest receipt, and no error.
+    for batch in [vec![], vec!["missing"]] {
+        let events = batch
+            .into_iter()
+            .map(|key: &str| ErrorEvent {
+                flag_key: key.into(),
+                flag_enabled: true,
+                environment: None,
+                error_type: "E".into(),
+                error_message: "m".into(),
+                stack_trace: None,
+                at: Utc::now(),
+            })
+            .collect::<Vec<_>>();
+        let unknown = events.len();
+        let recorded = telemetry::record_errors(&mut tx, app.id, KeyKind::Server, events)
+            .await
+            .unwrap();
+        assert_eq!(
+            recorded.receipt,
+            telemetry::Receipt {
+                accepted: 0,
+                unknown_flags: unknown
+            }
+        );
+        assert!(recorded.flags.is_empty());
+    }
+
+    let now = Utc::now();
+    let earlier = now - chrono::Duration::minutes(5);
+    let batch = vec![
+        ErrorEvent {
+            flag_key: "f".into(),
+            flag_enabled: true,
+            environment: Some("e".repeat(100)),
+            error_type: "T".repeat(300),
+            error_message: "one".into(),
+            stack_trace: Some("s".repeat(9_000)),
+            at: now - chrono::Duration::days(2),
+        },
+        ErrorEvent {
+            flag_key: "g".into(),
+            flag_enabled: false,
+            environment: Some("staging".into()),
+            error_type: "TypeTwo".into(),
+            error_message: "two".into(),
+            stack_trace: Some("stack two".into()),
+            at: earlier,
+        },
+    ];
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Client, batch)
+        .await
+        .unwrap();
+    let after = Utc::now();
+
+    type Row = (
+        uuid::Uuid,
+        uuid::Uuid,
+        Option<String>,
+        bool,
+        String,
+        Option<String>,
+        chrono::DateTime<Utc>,
+        Option<String>,
+    );
+    let row = |message: &'static str| {
+        sqlx::query_as::<_, Row>(
+            "SELECT org_id, flag_id, environment, flag_enabled, error_type, stack_trace, \
+                    occurred_at, reporter \
+             FROM flag_errors WHERE error_message = $1",
+        )
+        .bind(message)
+    };
+    let one = row("one").fetch_one(tx.conn()).await.unwrap();
+    let two = row("two").fetch_one(tx.conn()).await.unwrap();
+
+    // Over-long fields are cut to their caps; a two-day-old timestamp is
+    // stored as now.
+    assert_eq!((one.0, one.1, one.3), (org.as_uuid(), f.as_uuid(), true));
+    assert_eq!(one.2.as_deref().map(str::len), Some(64));
+    assert_eq!(one.4.len(), 200);
+    assert_eq!(one.5.as_deref().map(str::len), Some(8_000));
+    let slack = chrono::Duration::microseconds(1);
+    assert!(one.6 >= now - slack && one.6 <= after, "{}", one.6);
+    assert_eq!(one.7.as_deref(), Some("client"));
+
+    // A recent timestamp is kept as reported (to Postgres' microsecond).
+    assert_eq!((two.0, two.1, two.3), (org.as_uuid(), g.as_uuid(), false));
+    assert_eq!(two.2.as_deref(), Some("staging"));
+    assert_eq!(two.4, "TypeTwo");
+    assert_eq!(two.5.as_deref(), Some("stack two"));
+    assert!((two.6 - earlier).abs() <= slack, "{} vs {earlier}", two.6);
+    assert_eq!(two.7.as_deref(), Some("client"));
+    tx.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     let db = db(pool).await;
