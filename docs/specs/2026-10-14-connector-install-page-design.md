@@ -33,9 +33,10 @@ The headers, content, and look are fixed by the brief (quoted in §6).
 ## 2. Premise corrections
 
 - **Adding a `GET /` route would change `POST /` from 404 to 405.** axum answers a method that a
-  route does not handle with 405 Method Not Allowed. To keep "every other request to `/` gets the
-  JSON 404", the `/` method router takes `not_found` as its own fallback, so every other method
-  still gets the same 404.
+  route does not handle with 405 Method Not Allowed, and a `get(..).fallback(..)` method router
+  adds an `Allow: GET,HEAD` header even to its fallback's responses. To keep "every other request
+  to `/` gets the JSON 404", `/` is routed with `any(root)`, and `root` checks for `GET`/`HEAD`
+  itself. axum still strips the body for `HEAD` at the top level.
 - **"Unchanged JSON 404" needs one header on `/`.** The HTML is `Cache-Control: public` and
   depends on `Accept` and `Authorization`. A cache that stored the 404 for `/` without `Vary`
   could serve it to a browser, or store the page and serve it to a JSON client. So the 404 that
@@ -59,7 +60,8 @@ The headers, content, and look are fixed by the brief (quoted in §6).
   recomputes them from the embedded HTML, and computing them at runtime would make that test a
   tautology. Changing the inline style or script fails the test until the constant is updated.
 - **Hashing needs test-only dependencies.** `sha2` is already a workspace dependency, and `base64`
-  0.22.1 is already in `Cargo.lock` through other crates. Both are added as `flags-server`
+  0.22.1 is already in `Cargo.lock` through other crates. It is declared as `base64 = "0.22"`, so
+  it reuses the locked 0.22.1. Both are added as `flags-server`
   dev-dependencies (base64 through `[workspace.dependencies]`), so the server binary gains no
   dependency.
 - **Two copy buttons, one script:** one copies the connector address and one copies the Claude
@@ -102,13 +104,14 @@ JavaScript beyond the copy buttons. i18n. Light theme. New config keys.
 
 ```rust
 let page = Arc::new(InstallPage::new(&config.resource_uri, &config.platform_url));
-.route("/", get(move |headers: HeaderMap, uri: Uri| root(page.clone(), headers, uri))
-              .fallback(not_found))
+.route("/", any(move |method: Method, headers: HeaderMap, uri: Uri| root(page.clone(), method, headers, uri)))
 ```
 
-`root` returns `page.response()` when `install_page::wants_html(&headers)` holds and `headers`
-has no `authorization`. Otherwise it returns `not_found(uri)` with
-`Vary: Accept, Authorization` added. axum's `get` also serves `HEAD` and strips the body. `/` is
+`root` returns `page.response()` when the method is `GET` or `HEAD` and
+`install_page::wants_html(&headers)` holds (which includes there being no `authorization`).
+Otherwise it returns `not_found(uri)` with `Vary: Accept, Authorization` added for `GET`/`HEAD`.
+For other methods it returns `not_found(uri)` unchanged. axum strips the body of every top-level
+`HEAD` response. `/` is
 not under `/mcp` or `/api`, so the Host and Origin checks on `/mcp` and the API routers are
 unaffected. axum panics at build time on a route registered twice, and the existing
 `the_whole_router_assembles…` test would catch a clash.
@@ -140,7 +143,8 @@ The content is the brief's, verbatim:
 
 - `<html lang="en">`, `<title>Otto Flags connector</title>`, `<meta name="viewport">`,
   `<meta name="color-scheme" content="dark">`, and exactly one `<style>`, one `<script>`, and one
-  `<h1>`.
+  `<h1>`. There are no `style=` attributes and no inline `on…=` handlers: the CSP hashes do not
+  cover them, and the hash test asserts that there are none.
 - Eyebrow: "Otto Flags · connector". h1: "Use Otto Flags from your AI assistant".
 - Lead: "Otto Flags doesn't have a web page here. Add it to your AI assistant as a connector, then
   ask which flags are on, roll one out, or roll one back in plain language. The first time, you
@@ -174,6 +178,8 @@ The content is the brief's, verbatim:
 
 - **MCP auth:** `/mcp` is untouched, and its unauthenticated 401 and `WWW-Authenticate` are
   re-asserted by a test. The page carries no token and makes no platform call.
+- **Public interface (additive):** `GET`/`HEAD /` gain an HTML representation for browsers only,
+  and the JSON for every existing client is unchanged.
 - **The SDK path never calls the platform, and the SDK REST contract is stable:** no `/api` route
   changes.
 - **The database is small and shared:** the page is static, built once, and needs no database or
@@ -222,7 +228,8 @@ Gates are as the section lists them, with `DATABASE_URL` set to the local Postgr
   - `application/json` gives the JSON 404.
   - HTML Accept with `Authorization` gives the JSON 404.
   - `HEAD` with HTML Accept gives 200 and an empty body.
-  - `POST /` gives the JSON 404, not 405.
+  - `POST /` gives the JSON 404, not 405, and carries no `Allow` header.
+  - The 404 for `/` carries `Vary`, and the 404 for `/nope` does not.
   - `/nope` with HTML Accept gives the JSON 404.
   - The existing unauthenticated `/mcp` test is kept. It is extended to send a browser Accept as
     well, and still expects 401 with `WWW-Authenticate`.
