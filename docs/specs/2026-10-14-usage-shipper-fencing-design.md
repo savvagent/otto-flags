@@ -160,12 +160,17 @@ enforced in production too (a change to every sweep; separate decision); the cla
    `$3`/`$4` are the receipt's rejected ids and their stored reasons
    (`telemetry::stored(reason, MAX_REJECTED_REASON)`). The per-event `error!`/`debug!` logs for
    rejected events stay as they are (fixed reason above `debug`, #44). Then:
-   - `deleted < ids.len()`: `warn!` with counts only ("N of M claimed usage rows were claimed again
-     by another shipper after this claim lapsed; left to it").
+   - `deleted < ids.len()`: `warn!` with counts only ("N of M claimed usage rows are no longer
+     held by this claim; left as they are"). Usually another shipper reclaimed them after this
+     claim lapsed; the org.deleted purge removing an org's rows is the other way.
    - `moved < rejected.len()`: the existing `warn!` (counts, no platform text) that rejected
      events were not recorded by this shipper, now worded as left to the newer claim.
-   The previous per-event `INSERT` loop and the separate `DELETE` are replaced by this statement:
-   fewer round trips per batch, never more.
+   The previous per-event `INSERT` loop and the separate `DELETE` are replaced by this statement.
+   `maintenance::begin` adds one `SET LOCAL` round trip to each transaction (the claim goes from
+   one autocommit statement to BEGIN, SET, UPDATE, COMMIT, including the empty poll every 5 s);
+   the statement count per batch no longer grows with the number of rejections. Accepted: the
+   helper is the single place the marker is set, and the extra round trips are cheap next to a
+   5 s poll.
 
 `reschedule(db, ids, attempts, reason, cfg)`: same backoff SQL, fenced with
 `FROM unnest($1::int8[], $5::int4[]) AS c(id, attempts) WHERE o.id = c.id AND o.attempts =
@@ -191,8 +196,8 @@ config change.
   Assumptions (none under production's exempt pool role).
 - **Metering:** a usage event is recorded as rejected at most once and never deleted by a shipper
   that no longer holds it.
-- **The database is small and shared:** the finish step drops from 1 + rejected-count statements
-  to one; no connection held across the platform call; the fence arrays are bounded by
+- **The database is small and shared:** the finish step is one data statement whatever the
+  rejected count (plus the marker's `SET LOCAL`); no connection held across the platform call; the fence arrays are bounded by
   `ShipperConfig::batch`.
 - **No SQL outside flags-core; runtime `sqlx::query` only:** holds (new SQL is in `usage.rs`).
 - **Platform text stays out of logs above `debug` (#44)** and **database error text never reaches
@@ -232,8 +237,8 @@ against `0005` (`MIGRATOR` ignores unknown versions).
 
 ## 10. Error handling and edge cases
 
-- **All of a batch lost to a newer claim:** the finish statement deletes and moves nothing; `warn`
-  with counts; `ship_once` returns `Ok(claimed)`. The newer holder ships and records them.
+- **All of a batch lost to a newer claim (or purged by org.deleted):** the finish statement deletes
+  and moves nothing; `warn` with counts; `ship_once` returns `Ok(claimed)`. The newer holder ships and records them.
 - **Partly lost:** rows still held are deleted (and recorded if rejected); the rest are left.
 - **A row deleted by the newer holder before the lapsed shipper finishes:** the fence matches
   nothing; same as above.
