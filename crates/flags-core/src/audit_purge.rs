@@ -27,7 +27,8 @@ use sqlx::PgConnection;
 use crate::error::Result;
 
 /// The function `org.deleted` purges a deleted org's audit trail through
-/// (migration 0004, #21).
+/// (migration 0004, #21). Schema-qualified because 0004 creates it in
+/// `public`, where everything this database owns lives.
 pub const FUNCTION: &str = "public.purge_deleted_org_audit(uuid)";
 
 /// What the catalog says about [`FUNCTION`] and the role that will call it.
@@ -35,7 +36,10 @@ pub const FUNCTION: &str = "public.purge_deleted_org_audit(uuid)";
 pub struct PurgeReport {
     /// The function's owner; `None` when the function does not exist.
     pub owner: Option<String>,
+    /// The owner is a superuser (`rolsuper`), so RLS does not apply to it.
     pub owner_is_superuser: bool,
+    /// The owner holds `BYPASSRLS` itself; like the function's own guard,
+    /// membership in a role that holds it does not count.
     pub owner_bypasses_rls: bool,
     /// `current_user` in a transaction shaped like the purge's own.
     pub tenant_role: String,
@@ -68,6 +72,7 @@ impl PurgeReport {
             )];
         };
         let mut problems = Vec::new();
+        // The same test the function body applies to its owner in 0004.
         if !self.owner_is_superuser && !self.owner_bypasses_rls {
             let mut message = format!(
                 "purge_deleted_org_audit(uuid) is owned by {owner:?}, which is neither a \
@@ -80,7 +85,8 @@ impl PurgeReport {
             // isolation proof, so that remedy is only offered for another role.
             if *owner != self.tenant_role {
                 message.push_str(&format!(
-                    ", or give {owner:?} BYPASSRLS (ALTER ROLE {owner} BYPASSRLS)"
+                    ", or give {owner:?} BYPASSRLS (ALTER ROLE {} BYPASSRLS)",
+                    quote_ident(owner)
                 ));
             }
             message.push_str("; see docs/deploy/fly.md");
@@ -91,31 +97,50 @@ impl PurgeReport {
             problems.push(format!(
                 "{role:?}, the role tenant transactions run as, may not execute \
                  purge_deleted_org_audit(uuid), so every org.deleted would fail: GRANT EXECUTE \
-                 ON FUNCTION purge_deleted_org_audit(uuid) TO {role}"
+                 ON FUNCTION purge_deleted_org_audit(uuid) TO {}",
+                quote_ident(role)
             ));
         }
         problems
     }
 
-    /// One line for the boot log when [`problems`](Self::problems) is empty.
+    /// One line for the boot log. Only meaningful once
+    /// [`problems`](Self::problems) is empty; otherwise it still describes
+    /// the facts truthfully but says "not ready".
     pub fn summary(&self) -> String {
-        let (owner, exemption) = match &self.owner {
-            None => ("missing".to_string(), "missing"),
-            Some(owner) => (
-                format!("{owner:?}"),
-                if self.owner_is_superuser {
-                    "superuser"
-                } else {
-                    "BYPASSRLS"
-                },
-            ),
+        let owner = match &self.owner {
+            None => "nobody (missing)".to_string(),
+            Some(owner) => format!("{owner:?}"),
+        };
+        let exemption = if self.owner_is_superuser {
+            "superuser"
+        } else if self.owner_bypasses_rls {
+            "BYPASSRLS"
+        } else {
+            "not exempt"
+        };
+        let state = if self.problems().is_empty() {
+            "ready"
+        } else {
+            "not ready"
+        };
+        let executable = if self.executable {
+            "executable"
+        } else {
+            "not executable"
         };
         format!(
-            "audit purge ready: purge_deleted_org_audit(uuid) is owned by {owner} ({exemption}) \
-             and executable by {:?}",
+            "audit purge {state}: purge_deleted_org_audit(uuid) is owned by {owner} \
+             ({exemption}) and {executable} by {:?}",
             self.tenant_role
         )
     }
+}
+
+/// `name` as a SQL identifier, so a suggested statement names exactly this
+/// role when pasted, whatever its case or characters.
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// Reads the catalog on `conn`, which should be in a transaction shaped like
@@ -199,7 +224,12 @@ mod tests {
     fn a_non_exempt_owner_gets_both_remedies() {
         let problems = non_exempt("migrator").problems();
         assert_eq!(problems.len(), 1, "{problems:?}");
-        for needle in ["\"migrator\"", "55000", "OWNER TO", "ALTER ROLE"] {
+        for needle in [
+            "\"migrator\"",
+            "55000",
+            "OWNER TO",
+            "ALTER ROLE \"migrator\" BYPASSRLS",
+        ] {
             assert!(problems[0].contains(needle), "{needle}: {problems:?}");
         }
     }
@@ -255,9 +285,47 @@ mod tests {
     }
 
     #[test]
+    fn suggested_statements_quote_role_names() {
+        let report = PurgeReport {
+            executable: false,
+            tenant_role: "App\"Role".into(),
+            ..non_exempt("Migrator")
+        };
+        let problems = report.problems();
+        assert!(
+            problems[0].contains("ALTER ROLE \"Migrator\" BYPASSRLS"),
+            "{problems:?}"
+        );
+        assert!(problems[1].contains("TO \"App\"\"Role\""), "{problems:?}");
+    }
+
+    #[test]
+    fn the_summary_tells_the_truth_about_a_report_with_problems() {
+        let report = PurgeReport {
+            executable: false,
+            ..non_exempt("migrator")
+        };
+        let summary = report.summary();
+        for needle in ["not ready", "not exempt", "not executable"] {
+            assert!(summary.contains(needle), "{needle}: {summary}");
+        }
+        let bypass = PurgeReport {
+            owner_is_superuser: false,
+            owner_bypasses_rls: true,
+            ..ready()
+        };
+        assert!(
+            bypass.summary().contains("(BYPASSRLS)"),
+            "{}",
+            bypass.summary()
+        );
+    }
+
+    #[test]
     fn the_summary_names_owner_exemption_and_role() {
         let summary = ready().summary();
-        for needle in ["\"postgres\"", "superuser", "\"otto_app\""] {
+        assert!(summary.starts_with("audit purge ready: "), "{summary}");
+        for needle in ["\"postgres\"", "(superuser)", "executable by \"otto_app\""] {
             assert!(summary.contains(needle), "{needle}: {summary}");
         }
     }

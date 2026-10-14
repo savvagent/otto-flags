@@ -4045,7 +4045,9 @@ async fn audit_purge_check_passes_on_a_migrated_database(pool: PgPool) {
 
 /// Runs `inspect` as `otto_app` after making a throwaway role the function's
 /// owner. Everything is transactional and rolled back, so a failed run leaves
-/// no cluster-wide role behind.
+/// no cluster-wide role behind. Needs the superuser `DATABASE_URL` the suite
+/// already assumes: on Postgres 15+ only a superuser may hand a function in
+/// `public` to a role without CREATE there.
 async fn inspect_with_owner(pool: &PgPool, attributes: &str) -> (String, audit_purge::PurgeReport) {
     let role = format!("purge_owner_{}", uuid::Uuid::new_v4().simple());
     let mut tx = pool.begin().await.unwrap();
@@ -4100,10 +4102,12 @@ async fn audit_purge_check_reports_a_tenant_role_without_execute(pool: PgPool) {
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn audit_purge_check_reports_a_missing_function(pool: PgPool) {
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("DROP FUNCTION purge_deleted_org_audit(uuid)")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    for statement in [
+        "DROP FUNCTION purge_deleted_org_audit(uuid)",
+        "SET LOCAL ROLE otto_app",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
     let report = audit_purge::inspect(&mut tx).await.unwrap();
     tx.rollback().await.unwrap();
     assert_eq!(report.owner, None);

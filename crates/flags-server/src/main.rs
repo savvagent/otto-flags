@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     if !problems.is_empty() {
         anyhow::bail!(
             "refusing to serve: an org.deleted could not purge the org's audit trail: {}",
-            problems.join("; ")
+            problems.join(" | ")
         );
     }
     tracing::info!("{}", purge.summary());

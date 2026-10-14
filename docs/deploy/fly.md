@@ -46,8 +46,12 @@ database alone, so a platform outage does not affect flag evaluation.
   cannot be assumed, the migrating role is also the tenant role and the isolation proof refuses
   it), or reassign the function to a role that has it (`ALTER FUNCTION
   purge_deleted_org_audit(uuid) OWNER TO …`, human-only), or run migrations separately as such
-  a role (`FLAGS_RUN_MIGRATIONS=false`). A non-exempt owner is not supported; see
-  `docs/specs/2026-10-14-purge-owner-startup-check-design.md`.
+  a role (`FLAGS_RUN_MIGRATIONS=false`; the serving role then needs table privileges, which
+  migrations grant only to `otto_app`, so in practice it must be a member of the migrating
+  role). A non-exempt owner is not supported; see
+  `docs/specs/2026-10-14-purge-owner-startup-check-design.md`. This rules out a managed
+  Postgres that offers no superuser or `BYPASSRLS` role at all: there, nothing can own the
+  function and the server will not start.
 
 ## Secrets
 
