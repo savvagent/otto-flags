@@ -563,22 +563,20 @@ async fn lock(
     key: &str,
     expected_version: Option<i32>,
 ) -> Result<FeatureFlag> {
-    if unstorable(key) {
-        return Err(Error::FlagNotFound {
-            app: app.name.clone(),
-            key: key.trim().to_string(),
-        });
-    }
     let org = tx.org();
-    let flag: Option<FeatureFlag> = sqlx::query_as(&format!(
-        "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
-         FOR NO KEY UPDATE"
-    ))
-    .bind(org)
-    .bind(app.id)
-    .bind(key.trim())
-    .fetch_optional(tx.conn())
-    .await?;
+    let flag: Option<FeatureFlag> = if unstorable(key) {
+        None
+    } else {
+        sqlx::query_as(&format!(
+            "SELECT {COLS} FROM feature_flags WHERE org_id = $1 AND app_id = $2 AND key = $3 \
+             FOR NO KEY UPDATE"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(key.trim())
+        .fetch_optional(tx.conn())
+        .await?
+    };
     let flag = flag.ok_or_else(|| Error::FlagNotFound {
         app: app.name.clone(),
         key: key.trim().to_string(),

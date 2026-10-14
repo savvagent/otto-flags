@@ -78,7 +78,7 @@ issued for it.
 
 **Out:** NUL in other MCP tool arguments (app names, environments, reasons) that reach a query.
 Those come from authenticated agents, not public keys; a malformed argument failing as an internal
-error is a usability issue, not exposure. Not filed: no AC asks for it.
+error is a usability issue, not exposure. Filed as #61.
 
 ## 6. Architecture
 

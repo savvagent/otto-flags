@@ -885,6 +885,7 @@ async fn a_key_with_nul_finds_no_flag(pool: PgPool) {
     .unwrap();
 
     assert!(tx.find_flag(app.id, "f\0").await.unwrap().is_none());
+    assert!(tx.find_flag(app.id, " \0").await.unwrap().is_none());
     let err = tx
         .update_flag(
             &app,
@@ -898,6 +899,8 @@ async fn a_key_with_nul_finds_no_flag(pool: PgPool) {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::FlagNotFound { .. }), "{err:?}");
+    // The transaction is still usable: no statement failed in it.
+    assert!(tx.find_flag(app.id, "f").await.unwrap().is_some());
     tx.commit().await.unwrap();
 }
 
