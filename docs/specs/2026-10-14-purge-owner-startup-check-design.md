@@ -1,6 +1,6 @@
 # Refuse to serve when the audit purge cannot run
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#52)
 **Issue:** #40
 
 ## 1. Brief
@@ -71,7 +71,9 @@ and is also the role tenant transactions run as. After this change that shape do
 the function belongs to a *separate* exempt role: either reassign it
 (`ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO <exempt role>`), or run migrations as an
 exempt role and serve with `FLAGS_RUN_MIGRATIONS=false`. Giving the connecting role `BYPASSRLS`
-is not a fix there: the isolation proof would then refuse it. Before #39 that shape served but
+is not a fix there: the isolation proof would then refuse it. On a managed Postgres that offers no superuser or `BYPASSRLS` role at all (and where a
+non-superuser can only hand a function to a role it belongs to), that shape is unsupported
+outright. Before #39 that shape served but
 kept every deleted org's audit trail; since #39 it serves but fails every `org.deleted`. Refusing
 to start is the honest version of both.
 
@@ -173,11 +175,11 @@ printed with `{:?}`; they come from our own catalog, not a caller.
 
 ```rust
 let purge = flags_core::audit_purge::check(&db).await
-    .context("could not read the audit purge function from the catalog")?;
+    .context("refusing to serve: could not read the audit purge function from the catalog")?;
 let problems = purge.problems();
 if !problems.is_empty() {
     anyhow::bail!("refusing to serve: an org.deleted could not purge the org's audit trail: {}",
-                  problems.join("; "));
+                  problems.join(" | "));
 }
 tracing::info!("{}", purge.summary());
 ```

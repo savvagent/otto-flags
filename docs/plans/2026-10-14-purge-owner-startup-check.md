@@ -144,7 +144,7 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
 `summary()`: `audit purge ready: purge_deleted_org_audit(uuid) is owned by {owner:?}
 ({superuser|BYPASSRLS}) and executable by {tenant_role:?}` (for a missing owner, say `missing`).
 
-- [ ] **Step 1: Write the failing unit tests** in `audit_purge.rs` `#[cfg(test)] mod tests` with
+- [x] **Step 1: Write the failing unit tests** in `audit_purge.rs` `#[cfg(test)] mod tests` with
   a `ready()` fixture (owner `"postgres"`, superuser, tenant role `"otto_app"`, executable):
   - `ready` has no problems; a BYPASSRLS-only owner has no problems
   - a non-exempt owner (`"migrator"`, tenant role `"otto_app"`) gives exactly one problem containing `"migrator"`, `55000`, `OWNER TO`, and `ALTER ROLE`
@@ -153,7 +153,7 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
   - `executable = false` gives exactly one problem containing `"otto_app"` and `GRANT EXECUTE`
   - non-exempt owner and not executable gives two problems, owner first
   - `summary()` of `ready` contains `"postgres"`, `superuser`, and `"otto_app"`
-- [ ] **Step 2: Write the failing DB tests** appended to `crates/flags-core/tests/db.rs`
+- [x] **Step 2: Write the failing DB tests** appended to `crates/flags-core/tests/db.rs`
   (`#[sqlx::test(migrator = "flags_core::MIGRATOR")]`, using `flags_core::audit_purge`):
   - `audit_purge_check_passes_on_a_migrated_database`: `check(&Db::from_pool(pool))` has no
     problems, `tenant_role == "otto_app"`, owner is `Some`, `owner_is_superuser`, `executable`.
@@ -169,11 +169,11 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
     `SET LOCAL ROLE otto_app`, `inspect`; `executable == false`, one problem containing `GRANT EXECUTE`.
   - `audit_purge_check_reports_a_missing_function`: in a transaction, `DROP FUNCTION
     purge_deleted_org_audit(uuid)`, `inspect`; `owner == None`, one problem containing `does not exist`.
-- [ ] **Step 3: Run to see them fail** (compile errors count):
+- [x] **Step 3: Run to see them fail** (compile errors count):
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core audit_purge`
-- [ ] **Step 4: Implement** the module per above; register it in `lib.rs`.
-- [ ] **Step 5: Run to see them pass:** the same command, then `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all -- --check`.
-- [ ] **Step 6: Commit:** `feat(core): read whether the audit purge can run from the catalog`, body
+- [x] **Step 4: Implement** the module per above; register it in `lib.rs`.
+- [x] **Step 5: Run to see them pass:** the same command, then `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all -- --check`.
+- [x] **Step 6: Commit:** `feat(core): read whether the audit purge can run from the catalog`, body
   explaining why (a purge that cannot run is otherwise found on the first org.deleted), ending `Refs #40`.
 
 ### Task 2: refuse to serve, and document it
@@ -191,7 +191,7 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
 (After the PR opens, the orchestrator adds the final record-as-shipped commit: the spec's
 `**Status:**` becomes `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked.)
 
-- [ ] **Step 1: Wire it** in `main.rs`:
+- [x] **Step 1: Wire it** in `main.rs`:
 
 ```rust
     // The org.deleted purge removes a deleted org's audit trail through a
@@ -199,23 +199,23 @@ SELECT r.rolname::text, r.rolsuper, r.rolbypassrls, current_user::text,
     // Like isolation, only the running database can say whether it is.
     let purge = flags_core::audit_purge::check(&db)
         .await
-        .context("could not read the audit purge function from the catalog")?;
+        .context("refusing to serve: could not read the audit purge function from the catalog")?;
     let problems = purge.problems();
     if !problems.is_empty() {
         anyhow::bail!(
             "refusing to serve: an org.deleted could not purge the org's audit trail: {}",
-            problems.join("; ")
+            problems.join(" | ")
         );
     }
     tracing::info!("{}", purge.summary());
 ```
 
-- [ ] **Step 2: Docs.** In `docs/deploy/fly.md`, the "migrating role must stay exempt" bullet: add
+- [x] **Step 2: Docs.** In `docs/deploy/fly.md`, the "migrating role must stay exempt" bullet: add
   that `flags-server` checks this at boot and refuses to serve otherwise (`refusing to serve: an
   org.deleted could not purge …`), that a healthy boot logs `audit purge ready: …`, and that where
   `otto_app` cannot be assumed and the connecting role owns the function, `BYPASSRLS` on that role
   is not a fix (the isolation proof refuses it): reassign the function or migrate separately.
   Quote the summary line exactly as the code logs it. Do not edit `CLAUDE.md`.
-- [ ] **Step 3: Gates:** full test, lint, format, extra, and `podman build -t otto-flags:check .`.
-- [ ] **Step 4: Commit:** `fix(server): refuse to serve when the audit purge cannot run`, body
+- [x] **Step 3: Gates:** full test, lint, format, extra, and `podman build -t otto-flags:check .`.
+- [x] **Step 4: Commit:** `fix(server): refuse to serve when the audit purge cannot run`, body
   explaining why, ending `Fixes #40`.
