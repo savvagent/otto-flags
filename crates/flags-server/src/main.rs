@@ -55,6 +55,21 @@ async fn main() -> Result<()> {
         .context("refusing to serve: tenant isolation is not enforced by this database")?;
     tracing::info!("{}", isolation.summary());
 
+    // The org.deleted purge removes a deleted org's audit trail through a
+    // function whose owner must be exempt from row-level security (#40).
+    // Like isolation, only the running database can say whether it is.
+    let purge = flags_core::audit_purge::check(&db)
+        .await
+        .context("could not read the audit purge function from the catalog")?;
+    let problems = purge.problems();
+    if !problems.is_empty() {
+        anyhow::bail!(
+            "refusing to serve: an org.deleted could not purge the org's audit trail: {}",
+            problems.join("; ")
+        );
+    }
+    tracing::info!("{}", purge.summary());
+
     let platform = platform_client(&config)?;
     check_platform(&platform, &config).await;
 
