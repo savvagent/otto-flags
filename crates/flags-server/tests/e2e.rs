@@ -602,6 +602,10 @@ async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
     .unwrap();
     assert_eq!(health["health"]["evaluations"]["enabled"], 100);
     assert_eq!(health["health"]["errors"]["enabled"], 30);
+    // No variations were reported: an empty map and nothing summed, under the
+    // wire names agents read.
+    assert_eq!(health["health"]["variations"], json!({}));
+    assert_eq!(health["health"]["otherVariations"], 0);
     assert!(
         health["health"]["assessment"]
             .as_str()

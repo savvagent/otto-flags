@@ -46,7 +46,7 @@ use sha2::{Digest, Sha256};
 const BUCKETS: u64 = 10_000;
 const MAX_RULES: usize = 50;
 const MAX_RULE_VALUES: usize = 500;
-const MAX_VARIATIONS: usize = 20;
+pub(crate) const MAX_VARIATIONS: usize = 20;
 
 /// One environment's state for a flag.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
