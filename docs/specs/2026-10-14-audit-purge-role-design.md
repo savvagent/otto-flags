@@ -38,6 +38,10 @@ From #21 (found while folding #12 into #11):
   runs the delete on `db.pool()`, outside the purge transaction, so under an `otto_app` pool the
   `org.deleted` delivery fails with `permission denied` after the tombstone is written (keys and
   tokens are already refused; the data stays until a retry, which fails the same way).
+- Production's tenant transactions already run as `otto_app` (boot log: `tenant isolation
+  enforced as role "otto_app"`), and the purge transaction is one of them. Moving the audit delete
+  into it means production will call the function as `otto_app`, so the `EXECUTE` grant is
+  load-bearing in production, not only in the test's `otto_app` pool.
 - Two further facts the fix relies on:
   - `audit_events` is `FORCE ROW LEVEL SECURITY`, so even its owner is subject to its policies
     unless the owner is a superuser or has `BYPASSRLS`. A `SECURITY DEFINER` function alone is
@@ -54,17 +58,30 @@ From #21 (found while folding #12 into #11):
   never by holding DELETE on the trail.
 - **Migration `0004_audit_purge.sql`** (new, append-only), in one transaction:
   - `CREATE FUNCTION purge_deleted_org_audit(target uuid) RETURNS bigint LANGUAGE sql
-    SECURITY DEFINER SET search_path = pg_catalog, public` whose body deletes
-    `audit_events WHERE org_id = target AND EXISTS (SELECT 1 FROM deleted_orgs WHERE org_id =
-    target)` and returns the row count. The guard means the function can only ever remove the
-    trail of an org the platform has already deleted (tombstoned), whoever calls it.
+    SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp SET app.audit_purge = 'on'`
+    whose body deletes `public.audit_events WHERE org_id = target AND EXISTS (SELECT 1 FROM
+    public.deleted_orgs WHERE org_id = target)` and returns the row count. The guard means the
+    function can only ever remove the trail of an org the platform has already deleted
+    (tombstoned), whoever calls it. `pg_temp` is listed last and the tables are
+    schema-qualified: without that, Postgres searches `pg_temp` first, and a caller (`otto_app`
+    has `TEMP` on the database) could create a temporary `deleted_orgs` naming a live org and
+    purge its trail as the owner.
   - `REVOKE EXECUTE ON FUNCTION … FROM PUBLIC`; `GRANT EXECUTE … TO otto_app` inside the same
     `IF EXISTS (… otto_app)` guard the baseline uses for its grants.
   - Two permissive policies scoped `TO CURRENT_USER` (the migrating role) on `audit_events`:
     `audit_events_purge_read FOR SELECT` and `audit_events_purge_delete FOR DELETE`, both
-    `USING (org_id IN (SELECT org_id FROM deleted_orgs))`. They are no-ops for a superuser or
-    `BYPASSRLS` owner (production's attach role) and are what make the function work for an
-    ordinary owner. They grant nothing to `otto_app`, and only ever reach rows of tombstoned orgs.
+    `USING (current_setting('app.audit_purge', true) = 'on' AND org_id IN (SELECT org_id FROM
+    public.deleted_orgs))`. They are no-ops for a superuser or `BYPASSRLS` owner (production's
+    attach role) and are what make the function work for an ordinary owner (both are needed: the
+    `WHERE` and `RETURNING` read rows). The `app.audit_purge` marker, set only by the function's
+    own `SET` clause, matters in the deployment shape otto-tenant also accepts where `otto_app`
+    cannot be created and tenant transactions run as the connecting (migrating) role: without it,
+    every request transaction would match these policies and any org could read or delete
+    tombstoned orgs' audit rows until the purge commits. With it, only code inside the function
+    (or code that deliberately sets the marker, as with `app.maintenance`) matches. They grant
+    nothing to `otto_app`.
+  - `SET LOCAL lock_timeout = '3s'` first, as 0002 and 0003 do: `CREATE POLICY` takes an
+    `ACCESS EXCLUSIVE` lock on `audit_events`, which every audited MCP write inserts into.
 - **Calling it:** `org_deleted` replaces the unpinned `DELETE` with
   `SELECT purge_deleted_org_audit($1)` on `tx.conn()`, inside the pinned purge transaction and
   after `exclude_requests`, so the audit trail goes in the same transaction as everything else.
@@ -137,12 +154,19 @@ this only removes the dependency).
 -- otto_app (which has no DELETE on audit_events) and when the migrating role
 -- is not exempt from RLS.
 
+SET LOCAL lock_timeout = '3s';
+
 CREATE FUNCTION purge_deleted_org_audit(target uuid) RETURNS bigint
-LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE sql SECURITY DEFINER
+-- pg_temp last: otherwise it is searched first, and a caller's temporary
+-- deleted_orgs could stand in for the real one.
+SET search_path = pg_catalog, public, pg_temp
+SET app.audit_purge = 'on'
+AS $$
   WITH gone AS (
-    DELETE FROM audit_events
+    DELETE FROM public.audit_events
      WHERE org_id = target
-       AND EXISTS (SELECT 1 FROM deleted_orgs WHERE org_id = target)
+       AND EXISTS (SELECT 1 FROM public.deleted_orgs d WHERE d.org_id = target)
     RETURNING 1
   )
   SELECT count(*) FROM gone
@@ -151,14 +175,18 @@ $$;
 REVOKE EXECUTE ON FUNCTION purge_deleted_org_audit(uuid) FROM PUBLIC;
 
 -- audit_events is FORCE ROW LEVEL SECURITY, so an owner that is not a
--- superuser or BYPASSRLS needs these to see and delete what it may purge.
--- No-ops for an exempt owner; nothing here reaches otto_app.
+-- superuser or BYPASSRLS needs these to read (WHERE, RETURNING) and delete
+-- what it may purge. No-ops for an exempt owner; nothing here reaches
+-- otto_app. The marker, set only by the function above, keeps them from
+-- matching ordinary transactions when tenant transactions run as this role.
 CREATE POLICY audit_events_purge_read ON audit_events
   FOR SELECT TO CURRENT_USER
-  USING (org_id IN (SELECT org_id FROM deleted_orgs));
+  USING (current_setting('app.audit_purge', true) = 'on'
+         AND org_id IN (SELECT org_id FROM public.deleted_orgs));
 CREATE POLICY audit_events_purge_delete ON audit_events
   FOR DELETE TO CURRENT_USER
-  USING (org_id IN (SELECT org_id FROM deleted_orgs));
+  USING (current_setting('app.audit_purge', true) = 'on'
+         AND org_id IN (SELECT org_id FROM public.deleted_orgs));
 
 DO $$
 BEGIN
@@ -185,8 +213,9 @@ recurring cost.
 - An `org.deleted` for an org with no audit rows: returns 0.
 - A failure inside the purge transaction now also rolls back the audit delete (before, the audit
   rows could be gone while the rest of the purge rolled back); a retry redoes all of it.
-- Calling the function for a live org (a bug, or a crafted call): the `deleted_orgs` guard makes it
-  a no-op.
+- Calling the function for a live org (a bug, or a crafted call, including one with a temporary
+  `deleted_orgs` in the caller's session): the guard reads `public.deleted_orgs` and makes it a
+  no-op.
 
 ## 11. Testing approach
 
@@ -197,8 +226,10 @@ In `crates/flags-core/tests/db.rs` with `#[sqlx::test(migrator = "flags_core::MI
   `detail["audit_events"] > 0`, zero rows left for that org, the other org's rows intact (counted
   on the superuser pool). Close the `otto_app` pool before returning, as `otto_app_db`'s doc says.
 - `audit_purge_only_reaches_deleted_orgs`: as `otto_app` on a live org, `SELECT
-  purge_deleted_org_audit($1)` returns 0 and deletes nothing; `DELETE FROM audit_events WHERE
-  org_id = $1` fails with SQLSTATE `42501`.
+  purge_deleted_org_audit($1)` returns 0 and deletes nothing; after `CREATE TEMP TABLE
+  deleted_orgs (org_id uuid)` holding that live org, the call still returns 0 and the rows remain;
+  `DELETE FROM audit_events WHERE org_id = $1` fails with SQLSTATE `42501`. (One connection: the
+  temp table is per session.)
 - Existing `org_deleted_purges_everything_and_revokes_keys` and the isolation proof run unchanged.
 - Gates: test (with `DATABASE_URL`), clippy, fmt, the migrations guard (must print nothing: `0004`
   is an addition), and `podman build`.
@@ -208,5 +239,7 @@ In `crates/flags-core/tests/db.rs` with `#[sqlx::test(migrator = "flags_core::MI
 - The `TO CURRENT_USER` policies are not exercised by a test (the test cluster's migrating role is
   a superuser). If production's migrating role ever stopped being exempt, the purge depends on
   them; their logic is two lines and reviewed.
+- In the no-`otto_app` deployment shape, code that sets `app.audit_purge` itself could read
+  tombstoned orgs' audit rows; nothing does, and the same is true of `app.maintenance` today.
 - `CURRENT_USER` is resolved when the migration runs; if migrations later run as a different role,
   that role would need the same policies (a new migration).
