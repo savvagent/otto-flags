@@ -26,7 +26,7 @@ From #29 (found reviewing #24; predates it):
 - It also exists outside `flags-mcp`, at `warn`/`error`: `flags-api/src/error.rs:52`,
   `flags-api/src/platform.rs:44,51`, `flags-core/src/notify.rs` (4), `flags-core/src/usage.rs`
   (3), `flags-server/src/main.rs` (4), `flags-server/src/health.rs:65`. Those are out of scope
-  here and go to a follow-up issue (filed by this run), so this PR stays the size #29 describes.
+  here and go to #35 (filed by this run), so this PR stays the size #29 describes.
 - `Error::code()` maps every platform failure to `platform_unavailable`, the wire code an agent
   branches on. That is right for the wire but useless to an operator: it cannot tell "the platform
   rejected our credential" (a deployment fault that needs a person now) from a transient 503. The
@@ -67,14 +67,15 @@ No database or platform error text is logged above `debug` by `flags-mcp`; opera
   the marker; the `DEBUG` lines contain the marker.
 - The existing `error.rs` tests (wire codes, retriable flags, no database text in messages) pass
   unchanged.
-- `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/flags-mcp/src` finds nothing.
+- `grep -rnE 'tracing::(error|warn|info)!\([^)]*error = %' crates/flags-mcp/src` finds nothing
+  (a supplement to the test: it misses calls rustfmt wraps across lines).
 
 ## 5. Scope
 
 **In:** `crates/flags-mcp/src/error.rs`, `crates/flags-mcp/src/auth.rs`,
 `crates/flags-mcp/Cargo.toml` (dev-dependency), `Cargo.lock` if cargo rewrites it.
 
-**Out:** logging in `flags-api`, `flags-core`, `flags-server` (follow-up issue); any change to the
+**Out:** logging in `flags-api`, `flags-core`, `flags-server` (#35); any change to the
 wire shape of errors; log format or subscriber configuration in `flags-server`.
 
 ## 6. Architecture
