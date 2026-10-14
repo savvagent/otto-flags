@@ -49,6 +49,8 @@ const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
 const FETCHED_GROUPS: i64 = 100;
 /// How many error groups `flag_health` shows.
 const SHOWN_ERRORS: usize = 10;
+/// Stored environments are capped at this many characters.
+const MAX_ENVIRONMENT: usize = 64;
 
 /// One evaluation an SDK reports.
 #[derive(Debug, Clone)]
@@ -160,7 +162,7 @@ pub async fn record_evaluations(
             .unwrap_or(now);
         let key = (
             *id,
-            stored(&e.environment, 64),
+            stored(&e.environment, MAX_ENVIRONMENT),
             hour,
             e.enabled,
             stored(e.variation.as_deref().unwrap_or(""), MAX_VARIATION),
@@ -235,7 +237,7 @@ pub async fn record_errors(
         };
         flags.push(*id);
         f.push(id.as_uuid());
-        env.push(e.environment.as_deref().map(|s| stored(s, 64)));
+        env.push(e.environment.as_deref().map(|s| stored(s, MAX_ENVIRONMENT)));
         en.push(e.flag_enabled);
         et.push(stored(&e.error_type, MAX_ERROR_TYPE));
         em.push(stored(&e.error_message, MAX_ERROR_MESSAGE));
@@ -335,6 +337,9 @@ pub async fn health(
     environment: Option<&str>,
     window_hours: i64,
 ) -> Result<Health> {
+    // The environment as telemetry stores it, so it finds what an SDK reported
+    // under that name and never binds NUL.
+    let environment = environment.map(|e| stored(e, MAX_ENVIRONMENT));
     let window_hours = window_hours.clamp(1, 24 * EVAL_RETENTION_DAYS as i64);
     let since = Utc::now() - TimeDelta::hours(window_hours);
     let org = tx.org();
@@ -349,7 +354,7 @@ pub async fn health(
     .bind(org)
     .bind(flag)
     .bind(since)
-    .bind(environment)
+    .bind(environment.as_deref())
     .fetch_one(tx.conn())
     .await?;
     let evaluations = Counts { enabled, disabled };
@@ -368,7 +373,7 @@ pub async fn health(
     .bind(org)
     .bind(flag)
     .bind(since)
-    .bind(environment)
+    .bind(environment.as_deref())
     .bind(FETCHED_GROUPS)
     .fetch_all(tx.conn())
     .await?;
@@ -389,7 +394,7 @@ pub async fn health(
     .bind(org)
     .bind(flag)
     .bind(since)
-    .bind(environment)
+    .bind(environment.as_deref())
     .bind(FETCHED_GROUPS)
     .fetch_all(tx.conn())
     .await?;
@@ -402,7 +407,7 @@ pub async fn health(
     .bind(org)
     .bind(flag)
     .bind(since)
-    .bind(environment)
+    .bind(environment.as_deref())
     .fetch_one(tx.conn())
     .await
     .map(|(enabled, disabled)| Counts { enabled, disabled })?;
@@ -421,7 +426,7 @@ pub async fn health(
 
     Ok(Health {
         window_hours,
-        environment: environment.map(str::to_string),
+        environment,
         evaluations,
         errors,
         error_rate_enabled,

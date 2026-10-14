@@ -436,9 +436,23 @@ fn parse_variations(v: &Value) -> Option<BTreeMap<String, Variation>> {
 // ------------------------------------------------------------------ validation
 
 /// Validate a flag's variations, returning the canonical JSON to store.
+/// True when `v` holds NUL anywhere, in a string or an object key. Postgres
+/// `jsonb` refuses `\u0000`, so a write carrying it would fail its statement.
+pub(crate) fn contains_nul(v: &Value) -> bool {
+    match v {
+        Value::String(s) => s.contains('\0'),
+        Value::Array(a) => a.iter().any(contains_nul),
+        Value::Object(o) => o.iter().any(|(k, v)| k.contains('\0') || contains_nul(v)),
+        _ => false,
+    }
+}
+
 pub fn validate_variations(v: &Value) -> Result<Value, String> {
     if v.is_null() {
         return Ok(Value::Object(Map::new()));
+    }
+    if contains_nul(v) {
+        return Err("variations must not contain NUL (U+0000)".into());
     }
     let parsed: BTreeMap<String, Variation> = serde_json::from_value(v.clone()).map_err(|e| {
         format!(
@@ -490,6 +504,15 @@ pub fn validate_env(cfg: &EnvConfig, variations: &Value) -> Result<EnvConfig, St
         return Err(format!("an environment may have at most {MAX_RULES} rules"));
     }
     for (i, rule) in cfg.rules.iter().enumerate() {
+        if rule.attribute.contains('\0')
+            || rule
+                .description
+                .as_deref()
+                .is_some_and(|d| d.contains('\0'))
+            || rule.values.iter().any(contains_nul)
+        {
+            return Err(format!("rule {i}: must not contain NUL (U+0000)"));
+        }
         let attr = rule.attribute.trim();
         if attr.is_empty() || attr.len() > 128 {
             return Err(format!("rule {i}: attribute must be 1-128 characters"));
@@ -740,6 +763,51 @@ mod tests {
             })
             .count();
         assert!((5_600..6_400).contains(&b), "75% weight got {b} of 8000");
+    }
+
+    #[test]
+    fn contains_nul_finds_nul_anywhere() {
+        assert!(contains_nul(&json!("a\u{0}")));
+        assert!(contains_nul(&json!({"k\u{0}": 1})));
+        assert!(contains_nul(&json!({"a": [1, {"b": "\u{0}"}]})));
+        assert!(!contains_nul(&json!({"a": ["b", 1, null, true]})));
+    }
+
+    #[test]
+    fn validation_refuses_nul() {
+        let e = validate_variations(&json!({"on": {"configuration": {"x": "\u{0}"}}})).unwrap_err();
+        assert!(e.contains("NUL"), "{e}");
+
+        let vars = json!({"control": {}});
+        let rule =
+            |attribute: &str, operator, values: Vec<Value>, description: Option<&str>| EnvConfig {
+                enabled: true,
+                rollout_percentage: None,
+                rules: vec![Rule {
+                    attribute: attribute.into(),
+                    operator,
+                    values,
+                    enabled: None,
+                    variation: None,
+                    description: description.map(str::to_string),
+                }],
+                default_variation: None,
+            };
+        let e = validate_env(
+            &rule("plan", Operator::Equals, vec![json!("a\u{0}")], None),
+            &vars,
+        )
+        .unwrap_err();
+        assert!(e.contains("rule 0") && e.contains("NUL"), "{e}");
+        let e =
+            validate_env(&rule("pl\u{0}an", Operator::Exists, vec![], None), &vars).unwrap_err();
+        assert!(e.contains("rule 0") && e.contains("NUL"), "{e}");
+        let e = validate_env(
+            &rule("plan", Operator::Exists, vec![], Some("d\u{0}")),
+            &vars,
+        )
+        .unwrap_err();
+        assert!(e.contains("rule 0") && e.contains("NUL"), "{e}");
     }
 
     #[test]

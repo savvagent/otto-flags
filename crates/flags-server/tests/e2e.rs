@@ -989,6 +989,69 @@ async fn evaluating_a_key_with_nul_is_not_found(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn mcp_arguments_with_nul_are_not_internal_errors(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let (t, _, _, _) = org_with_flag(&s, &platform, Uuid::new_v4(), "checkout").await;
+
+    let err = tool(
+        &s.app,
+        &t,
+        "get_flag",
+        json!({"app": "web\u{0}", "key": "checkout"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["data"]["code"], "app_not_found", "{err}");
+
+    let r = tool(
+        &s.app,
+        &t,
+        "remove_rollback_policy",
+        json!({"app": "web", "key": "checkout", "environment": "production\u{0}"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["removed"], false, "{r}");
+    let err = tool(
+        &s.app,
+        &t,
+        "propose_rollback",
+        json!({"app": "web", "key": "checkout", "environment": "production\u{0}"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
+    tool(
+        &s.app,
+        &t,
+        "flag_health",
+        json!({"app": "web", "key": "checkout", "environment": "production\u{0}"}),
+    )
+    .await
+    .unwrap();
+
+    for (name, args) in [
+        (
+            "create_flag",
+            json!({"app": "web", "key": "other", "reason": "r\u{0}"}),
+        ),
+        (
+            "update_flag",
+            json!({"app": "web", "key": "checkout", "configuration": {"k": "\u{0}"}}),
+        ),
+        (
+            "set_flag_environment",
+            json!({"app": "web", "key": "checkout", "environment": "production",
+                   "rules": [{"attribute": "plan", "operator": "equals", "values": ["a\u{0}"]}]}),
+        ),
+    ] {
+        let err = tool(&s.app, &t, name, args).await.unwrap_err();
+        assert_eq!(err["data"]["code"], "invalid_argument", "{name}: {err}");
+    }
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn auto_rollback_needs_a_plan_that_includes_it(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool, &url).await;

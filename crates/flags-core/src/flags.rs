@@ -148,11 +148,11 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
-/// True for a key no stored flag can have: Postgres `text` cannot hold NUL,
-/// so such a key names no flag, and binding it would fail the statement (and
-/// with it the caller's transaction) instead of finding nothing.
-pub(crate) fn unstorable(key: &str) -> bool {
-    key.contains('\0')
+/// True for text no stored value can equal: Postgres `text` cannot hold NUL,
+/// so such text names nothing stored, and binding it would fail the statement
+/// (and with it the caller's transaction) instead of finding nothing.
+pub(crate) fn unstorable(s: &str) -> bool {
+    s.contains('\0')
 }
 
 fn validate_key(key: &str) -> Result<String> {
@@ -173,6 +173,9 @@ fn validate_key(key: &str) -> Result<String> {
 
 fn validate_text(what: &str, s: Option<String>, max: usize) -> Result<Option<String>> {
     match s.map(|s| s.trim().to_string()) {
+        Some(s) if s.contains('\0') => Err(Error::Invalid(format!(
+            "{what} must not contain NUL (U+0000)"
+        ))),
         Some(s) if s.chars().count() > max => Err(Error::Invalid(format!(
             "{what} must be {max} characters or fewer"
         ))),
@@ -269,6 +272,11 @@ impl FlagsExt for Tx<'_> {
         let reason = validate_text("reason", reason, MAX_REASON)?;
         let variations =
             eval::validate_variations(&new.variations.unwrap_or(Value::Null)).map_err(invalid)?;
+        if new.configuration.as_ref().is_some_and(eval::contains_nul) {
+            return Err(Error::Invalid(
+                "configuration must not contain NUL (U+0000)".into(),
+            ));
+        }
         // Every environment the app knows starts present and off, so the
         // flag's state is explicit everywhere rather than "not configured".
         let environments: Map<String, Value> = app
@@ -367,6 +375,11 @@ impl FlagsExt for Tx<'_> {
             flag.variations = v;
         }
         if let Some(c) = patch.configuration {
+            if eval::contains_nul(&c) {
+                return Err(Error::Invalid(
+                    "configuration must not contain NUL (U+0000)".into(),
+                ));
+            }
             flag.configuration = (!c.is_null()).then_some(c);
         }
         commit_change(self, flag, "update", &meta).await
