@@ -115,3 +115,22 @@ to the migrating role, EXECUTE grant to `otto_app`); `org_deleted` calls the fun
 
 The spec's `**Status:**` line and this plan's boxes are updated in the PR's final commit by the
 orchestrator.
+
+### Task 2: Review round (PR #39)
+
+**Model:** opus (done by the orchestrator, with the findings in hand)
+
+PR review found that a non-superuser cannot create a function with a `SET` clause on the custom
+`app.audit_purge` parameter, so the marker-gated `TO CURRENT_USER` policies broke the very
+configuration they were for, and no test could reach them. They were removed. In their place:
+
+- `0004` is now PL/pgSQL. It refuses an owner that is not exempt from RLS and refuses any org but
+  the pinned one (`42501`). It no longer needs `lock_timeout`, and its header supersedes 0001's
+  note.
+- The tests assert exact purge counts, the cross-org refusal, the refusal for an owner subject to
+  RLS (a new test), and the audit trail in the superuser-pool purge test.
+
+- [x] Rework `0004` and the spec to the design in spec §3 and §8.
+- [x] Tests as in spec §11; run the `db` binary, then every gate.
+- [x] Commit with a why-body ending `Refs #21`; no trailers.
+

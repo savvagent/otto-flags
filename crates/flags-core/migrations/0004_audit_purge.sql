@@ -1,48 +1,47 @@
 -- #21: the org.deleted purge removes a deleted org's audit trail through a
--- function owned by the migrating role, so it works when the pool runs as
--- otto_app (which has no DELETE on audit_events) and when the migrating role
--- is not exempt from RLS.
+-- function owned by the migrating role, so it works when the purge runs as
+-- otto_app, which has no DELETE on audit_events. This supersedes 0001's note
+-- that the trail is deleted only unpinned; audit_events_retention stays for
+-- the previous release, which still deletes that way.
+--
+-- The owner must be exempt from row-level security (production's attach role
+-- is a superuser): audit_events is FORCE ROW LEVEL SECURITY, so any other owner
+-- would see no rows and purge nothing. The function refuses to run then, so
+-- the delivery fails and is retried visibly instead.
 --
 -- The guard is the tombstone in deleted_orgs, which otto_app can write (the
--- purge writes it before calling this). So SQL running as otto_app could
--- tombstone a live org and then erase its trail. That needs arbitrary SQL, which
--- inside a tenant transaction can already RESET ROLE to the pool's own role;
--- the guard stops bugs, not injection, and a forged tombstone also locks the
--- org out for good, which is not silent.
+-- purge writes it first), and the pinned org. So SQL running as otto_app could
+-- tombstone its own pinned org and erase that trail. That needs arbitrary SQL,
+-- which inside a tenant transaction can already RESET ROLE to the pool's own
+-- role; the guard stops bugs, not injection, and a forged tombstone also locks
+-- the org out for good, which is not silent.
 
-SET LOCAL lock_timeout = '3s';
-
-CREATE FUNCTION purge_deleted_org_audit(target uuid) RETURNS bigint
-LANGUAGE sql SECURITY DEFINER
+CREATE FUNCTION purge_deleted_org_audit(purge_org uuid) RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER
 -- pg_temp last: otherwise it is searched first, and a caller's temporary
--- deleted_orgs could stand in for the real one.
+-- tables could stand in for these. The body also names them by schema.
 SET search_path = pg_catalog, public, pg_temp
-SET app.audit_purge = 'on'
 AS $$
-  WITH gone AS (
-    DELETE FROM public.audit_events
-     WHERE org_id = target
-       AND EXISTS (SELECT 1 FROM public.deleted_orgs d WHERE d.org_id = target)
-    RETURNING 1
-  )
-  SELECT count(*) FROM gone
+DECLARE
+  purged bigint;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles
+                  WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'purge_deleted_org_audit needs an owner exempt from row-level security';
+  END IF;
+  IF purge_org IS DISTINCT FROM public.current_org() THEN
+    RAISE EXCEPTION 'purge_deleted_org_audit only purges the org the transaction is pinned to'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  DELETE FROM public.audit_events
+   WHERE org_id = purge_org
+     AND EXISTS (SELECT 1 FROM public.deleted_orgs d WHERE d.org_id = purge_org);
+  GET DIAGNOSTICS purged = ROW_COUNT;
+  RETURN purged;
+END
 $$;
 
 REVOKE EXECUTE ON FUNCTION purge_deleted_org_audit(uuid) FROM PUBLIC;
-
--- audit_events is FORCE ROW LEVEL SECURITY, so an owner that is not a
--- superuser or BYPASSRLS needs these to read (WHERE, RETURNING) and delete
--- what it may purge. No-ops for an exempt owner; nothing here reaches
--- otto_app. The marker, set only by the function above, keeps them from
--- matching ordinary transactions when tenant transactions run as this role.
-CREATE POLICY audit_events_purge_read ON audit_events
-  FOR SELECT TO CURRENT_USER
-  USING (current_setting('app.audit_purge', true) = 'on'
-         AND org_id IN (SELECT org_id FROM public.deleted_orgs));
-CREATE POLICY audit_events_purge_delete ON audit_events
-  FOR DELETE TO CURRENT_USER
-  USING (current_setting('app.audit_purge', true) = 'on'
-         AND org_id IN (SELECT org_id FROM public.deleted_orgs));
 
 DO $$
 BEGIN
