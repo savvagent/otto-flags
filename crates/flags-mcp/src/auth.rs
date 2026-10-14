@@ -241,7 +241,11 @@ pub async fn require_bearer(
                     )
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "could not check the revocation tombstones");
+                    crate::error::log_server_failure(
+                        "could not check the revocation tombstones",
+                        e.code(),
+                        &e,
+                    );
                     return unavailable();
                 }
             }
@@ -267,7 +271,11 @@ pub async fn require_bearer(
         // that rejected *our* credential (a deployment fault, and not something
         // the caller can fix by re-authenticating), and a body we cannot read.
         Err(e) => {
-            tracing::error!(error = %e, "token introspection failed");
+            crate::error::log_server_failure(
+                "token introspection failed",
+                crate::error::platform_code(&e),
+                &e,
+            );
             unavailable()
         }
     }
