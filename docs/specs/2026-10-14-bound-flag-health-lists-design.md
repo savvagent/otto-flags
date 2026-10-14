@@ -1,6 +1,6 @@
 # Bound and merge the lists flag_health shows
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#65)
 **Issue:** #59
 
 ## 1. Brief

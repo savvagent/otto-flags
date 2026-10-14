@@ -63,7 +63,7 @@ public shape.
 **Files:** `crates/flags-core/src/telemetry.rs`, `crates/flags-core/src/eval.rs`,
 `crates/flags-core/tests/db.rs`, `crates/flags-mcp/src/tools/insight.rs`
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `telemetry.rs` `#[cfg(test)] mod tests` (create one at the end of the file if absent; reuse it
     if present): unit tests for `top_variations(rows: Vec<(String, i64)>, named_total: i64) ->
     (BTreeMap<String, i64>, i64)`:
@@ -86,9 +86,9 @@ public shape.
     `v10`..`v29` with counts 11..=30, and `h.other_variations == 55` (sum 1..=10).
   - In `health_shows_variation_names_cleaned`, add `assert_eq!(h.other_variations, 1);` (the
     `"\u{200B}"` name) and extend its comment.
-- [ ] **Step 2: Run, see them fail** (compile errors count as failing):
+- [x] **Step 2: Run, see them fail** (compile errors count as failing):
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core health_`
-- [ ] **Step 3: Implement** in `telemetry.rs` per spec §6:
+- [x] **Step 3: Implement** in `telemetry.rs` per spec §6:
   - `eval.rs`: `const MAX_VARIATIONS` → `pub(crate) const MAX_VARIATIONS`.
   - Constants with doc comments: `SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS` (as many
     as a flag can declare); `FETCHED_GROUPS: i64 = 100` (raw groups read per list before cleaning
@@ -107,11 +107,11 @@ public shape.
     the 20 most evaluated names (as many as a flag may declare).
   - `insight.rs` `flag_health` description: after "the error rate on versus off," say "the most
     evaluated variations (the rest summed),".
-- [ ] **Step 4: Run, see them pass:** the Step 2 command, then
+- [x] **Step 4: Run, see them pass:** the Step 2 command, then
   `cargo test -p flags-core --lib telemetry`, then all gates (Global Constraints), recording pass
   counts per test binary. `telemetry_rolls_up_and_feeds_health` and the e2e `flag_health` call must
   still pass.
-- [ ] **Step 5: Commit:** `fix(core): show at most twenty variations in flag_health`, body: a
+- [x] **Step 5: Commit:** `fix(core): show at most twenty variations in flag_health`, body: a
   public client key could size the answer and the query with distinct names; the remainder is a
   separate field because any key in the map is also a reportable name; ends `Fixes #59`. No
   attribution.
@@ -124,7 +124,7 @@ public shape.
 
 **Files:** `crates/flags-core/src/telemetry.rs`, `crates/flags-core/tests/db.rs`
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - Unit tests in `telemetry.rs` `mod tests` for `merge_error_groups(groups: Vec<ErrorGroup>) ->
     Vec<ErrorGroup>`:
     - Spellings that clean identically (`"TypeError"`, `"TypeError\u{200B}"` (hidden char →
@@ -147,9 +147,9 @@ public shape.
     reach the ten). Assert `h.top_errors.len() == 10`, `h.top_errors[0].error_type == "TypeError"`
     with `count == 6`, exactly one `top_errors` entry reads `"TypeError"`, and the other 9 entries
     are distinct `E..` types with `count == 3`. `h.errors.enabled == 39`.
-- [ ] **Step 2: Run, see them fail** (compile errors count as failing):
+- [x] **Step 2: Run, see them fail** (compile errors count as failing):
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core health_merges`
-- [ ] **Step 3: Implement:**
+- [x] **Step 3: Implement:**
   - `SHOWN_ERRORS: usize = 10` constant.
   - Errors query: `ORDER BY count DESC, error_type, flag_enabled LIMIT $5` binding
     `FETCHED_GROUPS`.
@@ -161,9 +161,9 @@ public shape.
     groups can read alike." with: grouped by how they read after cleaning (merged from the
     `FETCHED_GROUPS` most frequent raw groups, so a count can undercount a type reported under
     more spellings than that; `errors` is exact).
-- [ ] **Step 4: Run, see them pass:** the Step 2 command, `cargo test -p flags-core --lib
+- [x] **Step 4: Run, see them pass:** the Step 2 command, `cargo test -p flags-core --lib
   telemetry`, then all gates, with pass counts per test binary.
-- [ ] **Step 5: Commit:** `fix(core): merge flag_health error groups that read alike`, body: raw
+- [x] **Step 5: Commit:** `fix(core): merge flag_health error groups that read alike`, body: raw
   grouping let one error spread over hidden-character spellings fill the ten slots; merging after
   cleaning keeps one definition of cleaning (no SQL copy) and leaves stored errors raw; ends
   `Fixes #59`. No attribution.
@@ -174,5 +174,5 @@ public shape.
 
 **Model:** haiku
 
-- [ ] Spec `**Status:**` → `IMPLEMENTED (#<PR>)`; tick this plan's boxes. Commit
+- [x] Spec `**Status:**` → `IMPLEMENTED (#<PR>)`; tick this plan's boxes. Commit
   `docs: record bound flag_health lists as shipped`, body ending `Fixes #59`.
