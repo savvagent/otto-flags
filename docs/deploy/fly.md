@@ -182,7 +182,9 @@ gh run list -R savvagent/otto-flags --workflow CI --branch main --event push --l
 gh run rerun <databaseId> -R savvagent/otto-flags --failed
 ```
 
-**The SQL fails on production data** (a constraint the rows violate, a duplicate): two ways out.
+**The SQL fails on production data** (a constraint the rows violate, a duplicate; messages such as
+`violates check constraint`, `violates not-null constraint`, `could not create unique index`):
+two ways out.
 
 1. *Preferred: fix the data so `<N>` applies as written.* The fix PR's author writes the
    statement and the SELECT that shows the offending rows; Rob runs them in a transaction

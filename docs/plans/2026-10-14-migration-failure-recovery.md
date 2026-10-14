@@ -304,6 +304,10 @@ runbook never proposes editing a migration.
 - [ ] **Step 4: Gates.** Run every gate in Global Constraints (all four plus `podman build`);
   the docs must not break `cargo doc`-free gates, and the test gate re-proves Task 1.
 
+- [ ] **Step 4b: Causes by message, not SQLSTATE.** (Plan critique.) The runbook tells causes
+  apart by the database message in the log (`canceling statement due to lock timeout`,
+  `violates check constraint`, `could not create unique index`); the log carries no SQLSTATE.
+
 - [ ] **Step 5: Commit.**
 
 ```bash
@@ -312,3 +316,15 @@ git commit -m "docs(deploy): document recovery from a failed production migratio
   -m "A migration that fails at boot leaves no row, so the previous release keeps serving while every new deploy crash-loops on it, and the append-only rule rules out the obvious fix of editing the file. The runbook gives the boot-log signature, read-only diagnostics, and each recovery path with the exact human-only statement for Rob." \
   -m "Fixes #34"
 ```
+
+### Task 3: Record as shipped
+
+**Files:** Modify `docs/specs/2026-10-14-migration-failure-recovery-design.md` (Status line),
+`docs/plans/2026-10-14-migration-failure-recovery.md` (task boxes).
+
+**Model:** haiku — mechanical.
+
+- [ ] **Step 1:** After the PR is open and reviews are addressed, set the spec's `**Status:**` to
+  `IMPLEMENTED (#<PR>)` and tick every box in this plan (`CLAUDE.md` Design docs > shipped).
+- [ ] **Step 2: Commit** `docs: record the migration runbook as shipped` with a why-body ending
+  `Fixes #34`, push, and re-run the merge gate on the new head.

@@ -105,7 +105,7 @@ No code path changes. The runbook section covers, in order:
    fails, and `CLAUDE.md` Ship > verify says it rolls back, but `fly status` is the check for any
    machine left on the failed release. The previous release keeps serving: no row was written. Later pushes to `main` fail the same way until
    recovery; they are merged, not live.
-2. **Diagnose (read-only).** `fly logs -a otto-flags --no-tail` (version and SQLSTATE),
+2. **Diagnose (read-only).** `fly logs -a otto-flags --no-tail` (the version and the database's message; causes are told apart by message text, never SQLSTATE, which the log does not carry),
    `fly releases -a otto-flags`, `fly status -a otto-flags`; then Rob, in `fly postgres connect`:
    ```sql
    SELECT version, description, success, encode(checksum, 'hex') AS checksum, installed_on
@@ -114,10 +114,10 @@ No code path changes. The runbook section covers, in order:
    and, for a lock wait, a `pg_stat_activity` SELECT for long transactions, filtered to
    `datname = 'otto_flags'` (the instance also hosts `otto_platform` and `otto_factory`).
 3. **Recover by cause.**
-   - *Transient* (`55P03` lock timeout: migrations set `SET LOCAL lock_timeout`, as `0002` and
+   - *Transient* (`canceling statement due to lock timeout`: migrations set `SET LOCAL lock_timeout`, as `0002` and
      `0003` do; a dropped connection; a stopped machine): nothing to clear. Re-run the CI deploy.
      Ending a blocking session (`pg_terminate_backend`) is human-only.
-   - *The SQL fails on production data* (a constraint, a duplicate): preferred, Rob fixes the data
+   - *The SQL fails on production data* (`violates check constraint`, `could not create unique index`, …): preferred, Rob fixes the data
      so `N` applies as written (the statement is the fix PR author's, with the SELECT that shows
      the offending rows; run in a transaction), then re-run the newest deploy. When `N` must never run as
      written: merge `N+1`, written to converge both states (databases where `N` ran, such as CI and
