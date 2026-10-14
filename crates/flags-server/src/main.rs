@@ -136,13 +136,6 @@ fn join_failure_reason(e: &tokio::task::JoinError) -> &'static str {
     }
 }
 
-/// A sweep failure's code and reason at warn, its database text only at debug.
-fn log_sweep_failure(e: &flags_core::Error, what: &'static str) {
-    let (reason, status) = e.failure_reason();
-    tracing::warn!(code = e.code(), reason, status, "{what}");
-    tracing::debug!(code = e.code(), reason, error = %e, "{what}");
-}
-
 /// Hourly retention: platform-event markers, removed-member tombstones, error
 /// reports, and old evaluation buckets.
 async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
@@ -150,12 +143,25 @@ async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         match flags_core::platform_events::sweep(&db, PLATFORM_EVENT_RETENTION_DAYS).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept old platform-event records"),
-            Err(e) => log_sweep_failure(&e, "platform-event sweep failed"),
+            Err(e) => {
+                let (reason, status) = e.failure_reason();
+                tracing::warn!(
+                    code = e.code(),
+                    reason,
+                    status,
+                    "platform-event sweep failed"
+                );
+                tracing::debug!(code = e.code(), reason, status, error = %e, "platform-event sweep failed");
+            }
         }
         match flags_core::telemetry::sweep(&db).await {
             Ok(0) => {}
             Ok(n) => tracing::info!(rows = n, "swept expired telemetry"),
-            Err(e) => log_sweep_failure(&e, "telemetry sweep failed"),
+            Err(e) => {
+                let (reason, status) = e.failure_reason();
+                tracing::warn!(code = e.code(), reason, status, "telemetry sweep failed");
+                tracing::debug!(code = e.code(), reason, status, error = %e, "telemetry sweep failed");
+            }
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
@@ -189,6 +195,7 @@ async fn check_platform(platform: &otto_resource::PlatformClient, config: &Confi
             tracing::debug!(
                 platform = %config.platform_url,
                 reason,
+                status,
                 error = %e,
                 "could not reach the otto platform at startup; continuing"
             );

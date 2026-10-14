@@ -51,7 +51,7 @@ impl From<flags_core::Error> for ApiError {
             e if e.is_internal() => {
                 let (reason, status) = e.failure_reason();
                 tracing::error!(code = e.code(), reason, status, "SDK request failed");
-                tracing::debug!(code = e.code(), reason, error = %e, "SDK request failed");
+                tracing::debug!(code = e.code(), reason, status, error = %e, "SDK request failed");
                 Self::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "temporarily_unavailable",

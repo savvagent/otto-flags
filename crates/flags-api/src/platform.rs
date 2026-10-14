@@ -80,6 +80,7 @@ pub async fn receive(
             tracing::debug!(
                 code = e.code(),
                 reason,
+                status,
                 event_id = %event.id,
                 error = %e,
                 "could not apply a platform event"
