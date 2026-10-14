@@ -64,6 +64,17 @@ The startup check refuses to serve. Reasons:
   to serve instead") and the tenant-isolation proof next to it: a deployment that cannot honour
   `org.deleted` should not take customer data.
 
+**What this narrows.** `otto_tenant`'s isolation proof accepts a second shape: `otto_app` cannot
+be assumed and the connecting role is neither a superuser nor `BYPASSRLS` (its docs call it the
+managed-Postgres case). There, migrations run as the connecting role, which then owns the function
+and is also the role tenant transactions run as. After this change that shape does not boot unless
+the function belongs to a *separate* exempt role: either reassign it
+(`ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO <exempt role>`), or run migrations as an
+exempt role and serve with `FLAGS_RUN_MIGRATIONS=false`. Giving the connecting role `BYPASSRLS`
+is not a fix there: the isolation proof would then refuse it. Before #39 that shape served but
+kept every deleted org's audit trail; since #39 it serves but fails every `org.deleted`. Refusing
+to start is the honest version of both.
+
 If a real deployment ever needs a non-exempt owner, #40's marker design is the route; that would
 be a new issue.
 
@@ -81,7 +92,8 @@ be a new issue.
   random id and nothing is written.
 - **The owner's exemption is read from the owner role's own attributes** (`rolsuper`,
   `rolbypassrls`), the same test the function body applies. `BYPASSRLS` is not inherited through
-  membership, so this is exact.
+  membership, so this is exact. It is deliberately not the isolation proof's membership-aware
+  ownership test: what matters is what the function body will see as `current_user`.
 - **The judgement is a pure `problems()` method** on a facts struct, like
   `otto_tenant::IsolationReport`, so each failing state is unit-testable without a database, and
   `main.rs` turns problems into the refusal.
@@ -132,25 +144,28 @@ impl PurgeReport {
 }
 /// Reads the facts as the connection's current role. Public so a test can
 /// put the catalog into a failing state inside a transaction it rolls back.
+/// Owner columns decode as `Option<_>`: they are NULL when the function is missing.
 pub async fn inspect(conn: &mut PgConnection) -> Result<PurgeReport>;
 /// `db.begin(OrgId::new())`, `inspect`, rollback.
 pub async fn check(db: &Db) -> Result<PurgeReport>;
 ```
 
-One query:
+One query, the function's signature bound as `$1` from `FUNCTION` so the two cannot drift:
 
 ```sql
 SELECT r.rolname, r.rolsuper, r.rolbypassrls, current_user::text,
        COALESCE(has_function_privilege(p.oid, 'EXECUTE'), false)
-  FROM (SELECT to_regprocedure('public.purge_deleted_org_audit(uuid)') AS oid) p
+  FROM (SELECT to_regprocedure($1) AS oid) p
   LEFT JOIN pg_catalog.pg_proc f ON f.oid = p.oid
   LEFT JOIN pg_catalog.pg_roles r ON r.oid = f.proowner
 ```
 
 `problems()`, in operator order: missing function ("run migrations"); owner neither superuser nor
-`BYPASSRLS` (names the owner, says every `org.deleted` would fail with `55000`, and gives the two
-fixes from `docs/deploy/fly.md`: `ALTER ROLE <owner> BYPASSRLS` or
-`ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO <exempt role>`); tenant role lacks
+`BYPASSRLS` (names the owner, says every `org.deleted` would fail with `55000`, and gives the
+fixes: `ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO <exempt role>` or migrating as an
+exempt role with `FLAGS_RUN_MIGRATIONS=false`; and, only when the owner is not `tenant_role`,
+`ALTER ROLE <owner> BYPASSRLS`, which the isolation proof would refuse when the owner is the
+tenant role); tenant role lacks
 `EXECUTE` (`GRANT EXECUTE ON FUNCTION purge_deleted_org_audit(uuid) TO <role>`). Role names are
 printed with `{:?}`; they come from our own catalog, not a caller.
 
@@ -196,14 +211,15 @@ None.
 None. Production's owner is the superuser attach role and `otto_app` existed before `0004` ran
 (the boot log already shows `tenant isolation enforced as role "otto_app"`), so the check is
 expected to pass. If it does not, the new machine fails to boot, Fly rolls back, and the fix is a
-human-only role change on `otto-db`, handed to Rob with the exact statement from the boot log.
+human-only change on `otto-db`, handed to Rob with the exact statement from the boot log (the
+`ALTER FUNCTION … OWNER TO` or `GRANT EXECUTE` form).
 
 ## 11. Error handling and edge cases
 
 - Catalog read fails (connection): the server refuses to start with a context line, as for the
   isolation proof; Fly restarts it.
-- Function missing: problem; the owner and exemption problems are not also reported (nothing to
-  judge).
+- Function missing: one problem; the owner, exemption, and `EXECUTE` problems are not also
+  reported (nothing to judge; `executable` is false then).
 - Owner exempt but tenant role lacks `EXECUTE`: one problem.
 - Both owner non-exempt and no `EXECUTE`: both, owner first.
 - A superuser tenant role: `has_function_privilege` is true; the isolation proof has already
@@ -212,14 +228,16 @@ human-only role change on `otto-db`, handed to Rob with the exact statement from
 ## 12. Testing approach
 
 - Unit tests in `audit_purge.rs`: `problems()` empty for a superuser owner and for a `BYPASSRLS`
-  owner; one problem naming the owner for neither; the missing-function problem alone; the
+  owner; one problem naming the owner for neither, offering `ALTER ROLE … BYPASSRLS` only when the
+  owner differs from the tenant role (a case where they are equal must not offer it); the missing-function problem alone; the
   `EXECUTE` problem naming the role; `summary()` names owner, exemption, and role.
 - DB tests in `crates/flags-core/tests/db.rs` (`#[sqlx::test(migrator = "flags_core::MIGRATOR")]`):
   - `check` on a freshly migrated database: no problems, tenant role `otto_app`, owner a superuser.
   - In one rolled-back transaction each (`CREATE ROLE`, `REVOKE`, `DROP` are transactional):
     owner handed to a `NOSUPERUSER NOBYPASSRLS` role, then `SET LOCAL ROLE otto_app` and
     `inspect` reports the owner problem naming that role; owner handed to a `NOSUPERUSER BYPASSRLS`
-    role passes; `EXECUTE` revoked from `otto_app` reports the `EXECUTE` problem; the function
+    role passes (the ACL survives the owner change, so this exercises only the exemption branch);
+    `EXECUTE` revoked from `otto_app` reports the `EXECUTE` problem; the function
     dropped reports the missing problem.
 - `main.rs` is wiring only; the server's existing e2e tests still pass.
 - Gates: test, lint, format, extra (migrations), and the `podman build` gate (`crates/**`).
