@@ -1,6 +1,6 @@
 # Answer MCP tool arguments containing NUL without a failed statement
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#66)
 **Issue:** #61
 
 ## 1. Brief

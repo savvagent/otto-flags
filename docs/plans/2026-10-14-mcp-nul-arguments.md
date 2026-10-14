@@ -69,7 +69,7 @@ split the tests.
 - Test: `crates/flags-core/src/eval.rs` (unit), `crates/flags-core/tests/db.rs`,
   `crates/flags-server/tests/e2e.rs`
 
-- [ ] **Step 1: Unit tests in `eval.rs`** (`mod tests`):
+- [x] **Step 1: Unit tests in `eval.rs`** (`mod tests`):
   `contains_nul_finds_nul_anywhere`: true for `json!("a\u{0}")`, `json!({"k\u{0}": 1})`,
   `json!({"a": [1, {"b": "\u{0}"}]})`; false for `json!({"a": ["b", 1, null, true]})`.
   `validation_refuses_nul`: `validate_variations(&json!({"on": {"configuration": {"x": "\u{0}"}}}))`
@@ -80,7 +80,7 @@ split the tests.
   Run: `cargo test -p flags-core --lib -- contains_nul validation_refuses_nul` (no database).
   Expected: FAIL (does not compile: `contains_nul` is missing).
 
-- [ ] **Step 2: DB test** in `crates/flags-core/tests/db.rs`, after `a_key_with_nul_finds_no_flag`:
+- [x] **Step 2: DB test** in `crates/flags-core/tests/db.rs`, after `a_key_with_nul_finds_no_flag`:
   `arguments_with_nul_find_nothing_or_are_refused` (`#[sqlx::test(migrator = "flags_core::MIGRATOR")]`).
   One org, `tx = db.begin(org)`, app `web` (default environments, i.e. `production`), flag `f`.
   Assert, all in the same transaction:
@@ -107,7 +107,7 @@ split the tests.
   Run: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db arguments_with_nul`
   Expected: FAIL (a database error, e.g. 22021/22P05, or a non-`Invalid` result).
 
-- [ ] **Step 3: e2e test** in `crates/flags-server/tests/e2e.rs`, after
+- [x] **Step 3: e2e test** in `crates/flags-server/tests/e2e.rs`, after
   `evaluating_a_key_with_nul_is_not_found`: `mcp_arguments_with_nul_are_not_internal_errors`.
   Use `start_platform`, `server`, and `org_with_flag(&s, &platform, Uuid::new_v4(), "checkout")`
   (app `web`). Then:
@@ -127,7 +127,7 @@ split the tests.
   Run: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e mcp_arguments_with_nul`
   Expected: FAIL (`internal_error`).
 
-- [ ] **Step 4: Implement.**
+- [x] **Step 4: Implement.**
   - `flags.rs`: generalize `unstorable`'s doc ("text no stored value can equal: Postgres `text`
     cannot hold NUL, so such text names nothing stored, and binding it would fail the statement
     (and with it the caller's transaction) instead of finding nothing"); rename its parameter
@@ -158,12 +158,12 @@ split the tests.
     binds NUL. Bind `environment.as_deref()` in the three queries and return it in
     `Health::environment`.
 
-- [ ] **Step 5: Run the targeted tests, then all gates.**
+- [x] **Step 5: Run the targeted tests, then all gates.**
   `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
   — all pass, report counts per binary; `cargo clippy --workspace --all-targets -- -D warnings`;
   `cargo fmt --all -- --check`; the migrations diff prints nothing.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
   `fix(core): answer nul in mcp tool arguments without a failed statement`, body: why (an
   argument with NUL failed its statement, so agents got `internal_error` and the server logged a
   failure; lookups now find nothing, writes refuse it as invalid input), ending `Fixes #61`.
