@@ -31,7 +31,7 @@ From #63 (found by the security review of #62 (#51); the behaviour predates it):
 
 ## 2. Premise corrections
 
-None. The code at `crates/flags-core/src/usage.rs:326-358` matches the brief.
+None. `ship_once`'s receipt handling matched the brief.
 
 ## 3. Assumptions
 
@@ -46,7 +46,6 @@ None. The code at `crates/flags-core/src/usage.rs:326-358` matches the brief.
   depth the issue asks for).
 - `event_id` is unique in `usage_outbox` (it is, by constraint), so a set of the batch's ids is
   exact.
-- Every Run Profile value was read from the Development Workflow section; none assumed.
 
 ## 4. Goal and success criteria
 
@@ -76,7 +75,9 @@ existing `usage_outbox_rejected` rows; any schema change (no unique constraint o
   `reschedule(db, &ids, "decode", cfg)` via `stored_reason(&Error::Decode(..))`, and return the
   `Decode` error, exactly as the miscount path does. The two checks share one small helper that
   builds the error, logs, and reschedules, so the paths cannot drift.
-- The insert gains `AND id = ANY($3)` bound to `&ids`.
+- The insert gains `AND id = ANY($3)` bound to `&ids`. An insert that copies no row (only possible
+  if the row left the batch after its claim lease ran out, or if the check stops holding) logs a
+  `warn` naming the event rather than passing silently.
 - The per-rejection `error!`/`debug!` logs stay in the insert loop, after validation, so a refused
   receipt's ids are never logged.
 
@@ -87,7 +88,7 @@ No public interface change; `ShipError` and the receipt types are unchanged.
 - **Metering:** strengthened; a usage event can no longer be recorded both as rejected and as
   delivered.
 - **The database is small and shared:** unchanged query count per batch; the set is bounded by
-  `MAX_USAGE_BATCH`.
+  the batch size (`ShipperConfig::batch`).
 - **Append-only migrations / rollout compatibility:** no migration.
 - **No SQL outside flags-core / runtime `sqlx::query` only:** holds.
 - Platform text stays out of logs above `debug` (#44): the new message carries counts only.

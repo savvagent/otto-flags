@@ -50,7 +50,7 @@ struct Platform {
     usage_status_hits: HashMap<Uuid, usize>,
     /// When set, every shipped usage event is rejected with this reason.
     reject_with: Option<String>,
-    /// When set, answered verbatim to every usage batch.
+    /// When set, answered verbatim to every usage batch, ahead of `reject_with`.
     receipt: Option<UsageReceipt>,
 }
 
@@ -1608,7 +1608,8 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
     assert_eq!(b_err, None);
     assert_eq!(b_attempts, 0);
 
-    // Repeated.
+    // Repeated: both rows are due, so the batch is A and B and the count (2)
+    // still matches; only the id check can refuse it.
     make_outbox_due(s.db.pool()).await;
     platform.lock().unwrap().receipt = Some(UsageReceipt {
         accepted: 0,

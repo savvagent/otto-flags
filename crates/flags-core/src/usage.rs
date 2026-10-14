@@ -331,16 +331,17 @@ pub async fn ship_once(
         );
         return Err(refuse_receipt(db, &ids, msg, cfg).await);
     }
-    // A rejected id outside this batch would be recorded as rejected while the
-    // row still ships later, and a repeated id would insert two rejected rows,
-    // both with the count check passing (#63). No platform-supplied id goes in
-    // the message.
+    // A rejected id outside this batch would be recorded as rejected while its
+    // row still ships later, and a repeated id would insert two rejected rows.
+    // Either receipt can pass the count check above, so the ids need their own
+    // check (#63). No platform-supplied id goes in the message.
     let mut not_yet_rejected: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();
-    let stray = receipt
-        .rejected
-        .iter()
-        .filter(|r| !not_yet_rejected.remove(&r.event_id))
-        .count();
+    let mut stray = 0;
+    for r in &receipt.rejected {
+        if !not_yet_rejected.remove(&r.event_id) {
+            stray += 1;
+        }
+    }
     if stray > 0 {
         let msg = format!(
             "the platform rejected {} usage events, {stray} of them not in this batch or repeated",
@@ -354,14 +355,15 @@ pub async fn ship_once(
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
         // replaced so it is bounded and cannot fail the batch (#51). Scoping
-        // the insert to this batch's rows repeats the check above, so a later
-        // change to that check still cannot move a row outside the batch (#63).
+        // the insert to this batch's rows is a second guard on the batch
+        // boundary, so a later change to the check above still cannot move a
+        // row outside the batch (#63).
         let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
             "the platform refused a usage event; moving it to usage_outbox_rejected");
         tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?reason,
             "the platform refused a usage event; moving it to usage_outbox_rejected");
-        sqlx::query(
+        let copied = sqlx::query(
             "INSERT INTO usage_outbox_rejected \
                (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
              SELECT event_id, org_id, user_id, tool, billable, occurred_at, $2 \
@@ -372,6 +374,14 @@ pub async fn ship_once(
         .bind(&ids)
         .execute(&mut *tx)
         .await?;
+        if copied.rows_affected() != 1 {
+            // Only reachable if the row left this batch after it was claimed
+            // (its claim lease ran out and another shipper took it), or if the
+            // check above stops holding: either way, say so rather than
+            // deleting the batch as if the event had been recorded.
+            tracing::warn!(event_id = %r.event_id, copied = copied.rows_affected(),
+                "a rejected usage event was not in this batch's rows; nothing recorded for it");
+        }
     }
     sqlx::query("DELETE FROM usage_outbox WHERE id = ANY($1)")
         .bind(&ids)

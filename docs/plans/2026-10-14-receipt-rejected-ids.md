@@ -20,11 +20,10 @@ reschedule with `decode`, return `Decode`) through one shared helper. The insert
 
 ## Global Constraints
 
-- Worktree only (`/home/robhicks/dev/otto-flags/.claude/worktrees/fix-63-validate-rejected-ids`);
-  `main` changes only through the PR.
-- Gates (from `CLAUDE.md` > Gates), from the worktree root. Every DB-touching `cargo test` runs
-  under the shared lock, because sibling worktrees share the Postgres cluster:
-  - test: `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
+- Worktree only (`CLAUDE.md` > Worktree > path); `main` changes only through the PR.
+- Gates (from `CLAUDE.md` > Gates), from the worktree root. DB tests in parallel worktrees share
+  one Postgres cluster, so they were serialised with a lock (`flock <lockfile> <command>`):
+  - test: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
   - lint: `cargo clippy --workspace --all-targets -- -D warnings`
   - format: `cargo fmt --all -- --check`
   - extra: `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` prints nothing
@@ -71,8 +70,8 @@ One task: a contained check in one function and the test that proves it.
     - `start_platform`, `server(pool, &url)`. Insert row A (due) and row B with
       `next_attempt_at = now() + interval '1 hour'`, both via
       `INSERT INTO usage_outbox (org_id, user_id, tool, billable[, next_attempt_at]) VALUES (...) RETURNING event_id`.
-    - Small `async fn` helpers taking `&otto_tenant::Db` (or `&PgPool`) for: count of `usage_outbox`, count of `usage_outbox_rejected`, and
-      making every row due (`UPDATE usage_outbox SET next_attempt_at = now()`).
+    - Small `async fn` helpers taking `&PgPool`: `row_count(pool, table)` and `make_outbox_due`
+      (`UPDATE usage_outbox SET next_attempt_at = now(), last_error = NULL`).
     - Case 1 (outside the batch): set `receipt = Some(UsageReceipt { accepted: 0, duplicates: 0,
       rejected: vec![RejectedEvent { event_id: b, reason: "x".into() }] })`. `ship_once(&s.db,
       &s.platform, &Default::default())` is `Err`, `failure_reason().reason == "decode"`;
@@ -85,7 +84,7 @@ One task: a contained check in one function and the test that proves it.
       `ship_once` returns `Ok(2)`; `usage_outbox_rejected` has exactly one row, its `event_id`
       is A and its `reason` is `"x"`; `usage_outbox` count 0.
 - [ ] **Step 2: Run, see it fail:**
-  `flock /tmp/claude-1000/-home-robhicks-dev-otto-flags/1ac68bfd-14da-4327-8f16-2c64a249eba5/scratchpad/db-test.lock env DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e a_receipt_naming_events_outside_the_batch_moves_nothing`
+  `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e a_receipt_naming_events_outside_the_batch_moves_nothing`
   — case 1 fails (`ship_once` returns `Ok(1)` and copies B into `usage_outbox_rejected`).
 - [ ] **Step 3: Implement** in `crates/flags-core/src/usage.rs` `ship_once`:
   - Factor the miscount branch into a helper, e.g.
@@ -93,15 +92,16 @@ One task: a contained check in one function and the test that proves it.
     which logs `tracing::error!("{msg}; keeping every row and retrying")`, builds
     `otto_resource::Error::Decode(msg)`, calls `reschedule(db, ids, &stored_reason(&err), cfg)`,
     and returns `err.into()`. The miscount branch uses it unchanged in behaviour.
-  - After the count check: `let mut unanswered: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();`
-    `let stray = receipt.rejected.iter().filter(|r| !unanswered.remove(&r.event_id)).count();`
+  - After the count check: `let mut not_yet_rejected: HashSet<Uuid> = rows.iter().map(|r| r.event_id).collect();`,
+    then a loop counting `stray` ids that `not_yet_rejected.remove` does not find.
     If `stray > 0`, return `Err(refuse_receipt(db, &ids, format!("the platform rejected {} usage
     events, {stray} of them not in this batch or repeated", receipt.rejected.len()), cfg).await)`.
     Add a comment saying why: an id outside the batch would be recorded as rejected while still
     shipped later; a repeated id would insert two rejected rows (#63). No platform-supplied id in
     the message.
   - The insert: `... FROM usage_outbox WHERE event_id = $1 AND id = ANY($3)`, `.bind(&ids)` third;
-    note in the comment that the insert can only reach this batch's rows.
+    note in the comment that the insert can only reach this batch's rows. If it copies no row,
+    log a `warn` naming the event (review follow-up).
   - `use std::collections::{HashMap, HashSet};`
   - The per-rejection `error!`/`debug!` logs stay inside the insert loop (not in the helper), so a
     refused receipt's ids are never logged.
