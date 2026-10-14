@@ -32,6 +32,16 @@ From #47 (found by the security review of #46 (#38); the behaviour predates it):
   arbitrary bytes invisibly after any base character, the same way the Cf tag characters
   (U+E0020..U+E007F) can. A model reads them; a human does not see them. Stripping Cf alone leaves
   that channel open, so `inert` replaces both (§3).
+- **Error text is not the only SDK-reported text `flag_health` returns.** `Health.variations` is
+  keyed by variation names taken from SDK evaluation telemetry (`EvalEvent.variation`), stored
+  through `stored(_, 64)` (length cap and NUL replacement only, `telemetry.rs:152`) and read back
+  from `flag_eval_hourly` unchanged (`health`, `telemetry.rs:312-331`). They never pass through
+  `inert`, so a public `sdk_` key can put control, format, and tag characters into the keys of that
+  map today. The issue's premise ("`flag_health` shows SDK-reported error text … after passing it
+  through `inert`") is right about error text and incomplete about the tool: the variation keys get
+  the same treatment (§6). Nothing else an MCP tool returns is SDK-reported: `rollback_events` and
+  `propose_rollback` carry numbers and agent-set environments, and an error's `environment` is not
+  returned.
 
 ## 3. Assumptions
 
@@ -49,9 +59,15 @@ From #47 (found by the security review of #46 (#38); the behaviour predates it):
   space, so `split_whitespace` folds it with its neighbours. A zero-width space between two words
   therefore becomes one space, and `"ab\u{200B}cd"` becomes `"ab cd"`; that is a visible mark that
   something was there, which is the point.
-- **Only `inert`.** It is the one place SDK-reported text is shown to an agent (`top_errors` in
-  `flag_health`; grep for `inert` finds no other caller). What is stored is unchanged: the raw text
-  stays in `flag_errors` as reported (minus NUL, #38), and only the view is cleaned.
+- **Clean the view, not the store.** `inert` is applied where `flag_health` builds its answer
+  (`top_errors` and now the variation keys, §2). What is stored is unchanged: the raw text stays in
+  `flag_errors` and `flag_eval_hourly` as reported (minus NUL, #38). Cleaning at record time would
+  merge buckets irreversibly and is not needed: no other path shows this text to an agent.
+- **Variation keys that clean to the same string are merged.** Two reported variations differing
+  only in hidden characters (`"a\u{202E}b"`, `"a\u{200B}b"`) both read `"a b"`; their counts are
+  summed under that key, which is what the map already does for repeated keys. A variation that
+  cleans to `""` is dropped, as an empty variation already is. The length cap stays 64 (the stored
+  cap, named once as `MAX_VARIATION`), so `inert` never adds an ellipsis to a stored variation.
 - **No other invisible characters.** Hangul fillers (U+115F, U+1160, U+3164) and other blank
   letters are category Lo; they can pad but not reorder or encode hidden text, and stripping
   letters is a judgment the issue does not ask for. Recorded in §12.
@@ -63,6 +79,8 @@ Error text reported through an SDK reaches an agent as plain, visibly ordered te
 hidden in it.
 
 - `inert` replaces every Cf character and every variation selector with a space before flattening.
+- `flag_health`'s `variations` keys pass through `inert`; a reported variation containing U+202E
+  shows as the cleaned string, its count merged with any variation that cleans to the same.
 - `"boom\u{202E}gnp.exe"` comes out as `"boom gnp.exe"`; `"a\u{200B}b"` as `"a b"`.
 - A unit test covers U+202E and U+200B (the AC), plus the tag characters and a variation selector.
 - Nothing else about `inert` changes: Cc still becomes a space, whitespace still flattens, the
@@ -70,7 +88,8 @@ hidden in it.
 
 ## 5. Scope
 
-**In:** `inert` and its unit test, in `crates/flags-core/src/telemetry.rs`.
+**In:** `inert`, `health`'s variation keys, and their tests, in `crates/flags-core/src/telemetry.rs`
+and `crates/flags-core/tests/db.rs`.
 
 **Out:** what `record_errors` stores; any other text an agent sees (flag names, descriptions,
 rollback reasons are written by authenticated agents, not public keys); the MCP schema docs, which
@@ -84,6 +103,10 @@ already call this text untrusted.
   Unicode 16.0, and the two variation-selector ranges, as one `matches!` over `char` ranges.
 - `inert` (`telemetry.rs:401`) maps `c` to `' '` when `hidden(c)` instead of when `c.is_control()`.
   Its doc comment says what is replaced and why.
+- `health` (`telemetry.rs:325-331`) keys `variations` by `inert(&variation, MAX_VARIATION)` and skips
+  a key that cleans to `""`.
+- New `const MAX_VARIATION: usize = 64;` beside the other caps, used by `record_evaluations`
+  (`telemetry.rs:152`, replacing the literal) and by `health`.
 
 No public interface changes. `inert` is private; `Health.top_errors` keeps its shape.
 
@@ -121,6 +144,13 @@ Unit tests beside the code (pure logic, per `CLAUDE.md` > Notes):
 - Add `reported_text_loses_invisible_characters`: bidi isolates, U+FEFF, a tag-character run
   (`"\u{E0001}\u{E0069}\u{E0067}"`), a variation selector, the soft hyphen; and that an ordinary
   accented letter (`"é"` as `e\u{0301}`) is kept.
+- A hidden character at the truncation boundary: `inert(&format!("{}\u{200B}{}", "x".repeat(298), "yy"), 300)`
+  is `"x"*298 + " y…"`, pinning that truncation counts the cleaned text.
+
+DB test in `crates/flags-core/tests/db.rs` (it needs `flag_eval_hourly`), beside
+`telemetry_rolls_up_and_feeds_health`: `health_shows_variation_names_cleaned` records enabled
+evaluations with variations `"a\u{202E}b"` (2), `"a\u{200B}b"` (3), `"\u{200B}"` (1), and `"on"` (4)
+and asserts `variations == {"a b": 5, "on": 4}` and `evaluations.enabled == 10`.
 
 Gates: test, lint, format, extra, and the `crates/**` podman build.
 
