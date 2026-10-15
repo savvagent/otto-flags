@@ -324,15 +324,16 @@ fn db_reason(e: &sqlx::Error) -> &'static str {
 ///   admin_shutdown `57P01` (a restart or failover, which is what a Fly
 ///   Postgres restart looks like, or a terminated backend), crash_shutdown
 ///   `57P02` (another backend crashed and every session was reset), and
-///   cannot_connect_now `57P03` (starting up or in recovery). Each clears in
-///   seconds, and a later attempt gets a fresh connection; classing them
-///   permanent would cool a flag's auto-rollback down for an hour after a
-///   routine restart. sqlx's pool already retries `57P03` while connecting.
+///   cannot_connect_now `57P03` (starting up or in recovery). Each usually
+///   clears in seconds, and a later attempt gets a fresh connection;
+///   classing them permanent would cool a flag's auto-rollback down for an
+///   hour after a routine restart. sqlx's pool already retries `57P03` while
+///   connecting.
 ///
 /// Not here: database_dropped `57P04` and any other `57xxx`
 /// (operator_intervention), which retrying cannot be assumed to fix, and the
-/// `08xxx` connection exceptions: sqlx reports a dropped connection as
-/// [`sqlx::Error::Io`] (transient), and one Postgres sends, such as
+/// `08xxx` connection exceptions: sqlx usually reports a dropped connection
+/// as [`sqlx::Error::Io`] (transient), and one Postgres sends, such as
 /// protocol_violation `08P01`, is not self-healing.
 const TRANSIENT_SQLSTATES: &[&str] = &[
     "40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03",
