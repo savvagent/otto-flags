@@ -87,9 +87,12 @@ impl FlagClient {
         // A key no flag can have would only change which endpoint the request (and its SDK
         // key) reaches; it gets its default without a request.
         if !is_valid_flag_key(flag_key) {
+            // Host code may build keys from input: log a bounded, escaped prefix.
+            let shown: String = flag_key.chars().take(64).collect();
             tracing::warn!(
-                "Flag key {:?} is not a valid flag key; using its default",
-                flag_key
+                "Flag key {:?} ({} bytes) is not a valid flag key; using its default",
+                shown,
+                flag_key.len()
             );
             return self.get_default_result(flag_key);
         }

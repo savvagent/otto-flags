@@ -541,16 +541,19 @@ async fn a_key_using_every_allowed_character_reaches_its_own_path() {
 }
 
 #[tokio::test]
-async fn a_base_url_path_prefix_and_trailing_slash_are_kept() {
+async fn a_base_url_path_prefix_is_kept_with_or_without_a_trailing_slash() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/flags/api/flags/test-flag/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
-    let client =
-        FlagClient::new(Config::new(KEY).with_base_url(format!("{}/flags/", server.uri())))
-            .unwrap();
-    assert!(client.is_enabled("test-flag", None).await);
+    for base in [
+        format!("{}/flags/", server.uri()),
+        format!("{}/flags", server.uri()),
+    ] {
+        let client = FlagClient::new(Config::new(KEY).with_base_url(base)).unwrap();
+        assert!(client.is_enabled("test-flag", None).await);
+    }
 }

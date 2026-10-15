@@ -54,6 +54,11 @@ X-SDK-Key: sdk_your_key_here
 
 Evaluates a feature flag for a given context.
 
+`{key}` is the flag key as one percent-encoded path segment. Flag keys are 1-128 ASCII letters,
+digits, `-`, `_` and `.`. Build the URL from path segments, never by string concatenation, and
+treat a key outside that set, or the dot segments `.` and `..` (which no URL path can carry), as
+a failed lookup: return the default without a request.
+
 #### Request
 
 ```http
