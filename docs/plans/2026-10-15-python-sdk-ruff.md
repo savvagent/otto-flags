@@ -48,25 +48,44 @@ can pass.
 
 Model: sonnet
 
-- [ ] Write tests: in `tests/test_client.py` and `tests/test_async_client.py`, call
-  `set_config_override("flag", {"bad": object()})` and assert it raises `ValueError` whose
-  `__cause__` is a `TypeError`.
-- [ ] Run pytest; the two new tests fail (`__cause__` is `None`).
-- [ ] `ruff check --fix --no-cache .` in `packages/python-server` (safe fixes only).
+Commands (from the worktree root; one venv for the task):
+- setup: `v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && "$v/bin/ruff" --version` (expect `ruff 0.17.0`)
+- red: `(cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider tests/test_client.py tests/test_async_client.py -k chains)`
+- full: `(cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src && "$v/bin/ruff" check --no-cache .)`
+
+- [ ] Write tests: `test_config_override_invalid_chains_cause` in `TestOverrides`
+  (`tests/test_client.py`, `client` fixture) and in `TestAsyncOverrides`
+  (`tests/test_async_client.py`, built like its neighbours from `async_config`;
+  `set_config_override` is synchronous, so no `await`): `set_config_override("flag", {"bad": object()})`
+  raises `ValueError` whose `__cause__` is a `TypeError`.
+- [ ] Run **red**; both new tests fail (`__cause__` is `None`). Record the output.
+- [ ] `(cd packages/python-server && "$v/bin/ruff" check --fix --no-cache .)` (safe fixes only).
+  Check the merged `with` statements in `realtime.py` stay unparenthesized (Python 3.9).
 - [ ] By hand: `from e` on both B904 raises; `contextlib.suppress(asyncio.CancelledError)` in
-  `realtime.py` and `telemetry.py` (import `contextlib` in the stdlib block); move the four
-  Django imports to the top of `examples/django_example.py`, leaving each section a comment naming
-  the imports it uses.
-- [ ] Run pytest (all pass), mypy (no issues), `ruff check --no-cache .` (All checks passed!).
-- [ ] Commit: `fix(python-sdk): fix the ruff check findings`.
+  `realtime.py` and `telemetry.py` (add `import contextlib` in the stdlib import block, sorted);
+  move the four Django imports to the top of `examples/django_example.py`, leaving each section a
+  one-line comment naming the imports it uses.
+- [ ] Run **full**: pytest all pass (record counts; 58 before + 2 new), mypy `Success`, ruff
+  `All checks passed!`. No `# noqa` added (`git diff | grep noqa` empty).
+- [ ] Commit: `fix(python-sdk): fix the ruff check findings`; body explains why and ends
+  `Fixes #19`; no attribution.
 
 ### Task 2: Gate on ruff
 
 Model: haiku
 
-- [ ] `pyproject.toml`: `"ruff>=0.1.0"` → `"ruff>=0.17.0"`.
-- [ ] `CLAUDE.md`: append `&& "$v/bin/ruff" check --no-cache .` to the `when packages/python-server/**`
-  gate; delete the sentence "`ruff check` reports 23 existing errors in `packages/python-server`
-  and is not part of its gate until #19."
-- [ ] Run the full gate command from the worktree root; all three tools pass.
-- [ ] Commit: `chore(python-sdk): run ruff check in the python gate`.
+- [ ] `packages/python-server/pyproject.toml`: `"ruff>=0.1.0"` → `"ruff>=0.17.0"`.
+- [ ] `CLAUDE.md`: append ` && "$v/bin/ruff" check --no-cache .` to the
+  `when packages/python-server/**` gate line; delete the sentence "`ruff check` reports 23
+  existing errors in `packages/python-server` and is not part of its gate until #19." (it spans two
+  lines; keep the following "The Go, Java, and Swift gates ..." text and re-wrap the paragraph at
+  100 columns). No other gate's `when` glob matches `CLAUDE.md`.
+- [ ] Run the new gate line verbatim from the worktree root; record pytest counts, the mypy line,
+  and the ruff line.
+- [ ] Commit: `chore(python-sdk): run ruff check in the python gate`; body explains why and ends
+  `Fixes #19`; no attribution.
+
+## Close-out (orchestrator, before merge)
+
+Per `CLAUDE.md` > Design docs > shipped: a final commit sets the spec's `**Status:**` to
+`IMPLEMENTED (#<PR>)` and ticks this plan's boxes.
