@@ -15,6 +15,22 @@ type ApiEvaluateRequest = components['schemas']['EvaluateFlag'];
 type ApiEvaluateResponse = components['schemas']['FlagEvaluationResponse'];
 
 /**
+ * Whether `key` can be a flag key. Mirrors the server's rule: 1-128 characters
+ * from `[A-Za-z0-9._-]`, and not `.` or `..`. The key is a URL path segment, and
+ * `.` and `..` cannot be carried in one (clients normalize them away), so no
+ * flag can have those keys. Checking before the request keeps an invalid key,
+ * and the SDK key sent with it, from steering the request elsewhere (#107).
+ */
+function isValidFlagKey(key: unknown): key is string {
+  return (
+    typeof key === 'string' &&
+    key !== '.' &&
+    key !== '..' &&
+    /^[A-Za-z0-9._-]{1,128}$/.test(key)
+  );
+}
+
+/**
  * Otto Flags Client for feature flag evaluation with AI-powered error detection
  */
 export class FlagClient {
@@ -330,6 +346,22 @@ export class FlagClient {
    * @returns Promise<FlagEvaluationResult>
    */
   async evaluate(flagKey: string, context?: FlagContext): Promise<FlagEvaluationResult> {
+    if (!isValidFlagKey(flagKey)) {
+      const described =
+        typeof flagKey === 'string'
+          ? `${JSON.stringify((flagKey as string).slice(0, 64))} (length ${(flagKey as string).length})`
+          : `non-string value of type ${typeof flagKey}`;
+      this.config.onError(
+        new Error(`Invalid flag key ${described}: keys are 1-128 characters of [A-Za-z0-9._-] and not "." or ".."`)
+      );
+      const fallbackKey = flagKey as unknown;
+      return {
+        key: typeof fallbackKey === 'string' ? fallbackKey : String(fallbackKey),
+        value: (typeof fallbackKey === 'string' && this.config.defaults[fallbackKey]) || false,
+        reason: 'error',
+      };
+    }
+
     const startTime = Date.now();
     const traceId = TelemetryService.generateTraceId();
 
@@ -387,7 +419,7 @@ export class FlagClient {
             controller.abort();
           }, 10000);
 
-          return fetch(`${this.config.baseUrl}/api/flags/${flagKey}/evaluate`, {
+          return fetch(`${this.config.baseUrl}/api/flags/${encodeURIComponent(flagKey)}/evaluate`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',

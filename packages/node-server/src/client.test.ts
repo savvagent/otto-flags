@@ -423,4 +423,75 @@ describe('FlagClient', () => {
       });
     });
   });
+
+  describe('flag key validation (#107)', () => {
+    const baseUrl = 'https://flags.example.test';
+    const invalidKeys = ['a/b', 'a?b', 'a#b', '.', '..', '', 'bad key', 'a'.repeat(129)];
+    let fetchMock: jest.Mock;
+    let originalFetch: typeof global.fetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      fetchMock = jest.fn();
+      global.fetch = fetchMock as any;
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    const makeClient = (onError: jest.Mock) =>
+      new FlagClient({
+        apiKey: 'sdk_test_key',
+        baseUrl,
+        enableRealtime: false,
+        enableTelemetry: false,
+        defaults: { 'a/b': true, '..': true },
+        onError,
+      });
+
+    test.each(invalidKeys)('returns the default without a request for key %j', async (key) => {
+      const onError = jest.fn();
+      const client = makeClient(onError);
+
+      const result = await client.evaluate(key);
+
+      expect(result.reason).toBe('error');
+      expect(result.value).toBe(key === 'a/b' || key === '..');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    test('rejects a non-string key without throwing', async () => {
+      const onError = jest.fn();
+      const client = makeClient(onError);
+
+      const result = await client.evaluate(undefined as any);
+
+      expect(result.reason).toBe('error');
+      expect(result.value).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+
+    test('fetches a valid key at one path segment', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: true }) });
+      const client = makeClient(jest.fn());
+
+      await client.evaluate('new-checkout.v2_b');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/new-checkout.v2_b/evaluate`);
+    });
+
+    test('treats ... as a valid key', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: true }) });
+      const client = makeClient(jest.fn());
+
+      await client.evaluate('...');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/.../evaluate`);
+    });
+  });
 });
