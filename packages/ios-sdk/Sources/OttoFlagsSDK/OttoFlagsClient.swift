@@ -97,7 +97,11 @@ private struct VariationOverrideEntry {
 /// Main Otto Flags SDK client for feature flag evaluation
 public class OttoFlagsClient {
     private let config: OttoFlagsConfig
-    private var flagCache: [String: CacheEntry] = [:]
+    /// Evaluations by flag key, then by context key (the sorted-keys JSON of the request's
+    /// `context` object): a flag's result depends on who is asking, so the flag key alone is
+    /// not enough (savvagent/otto-flags#127). In memory only, bounded per flag.
+    private var flagCache: [String: [String: CacheEntry]] = [:]
+    private static let maxContextsPerFlag = 10_000
     private var configOverrides: [String: ConfigOverrideEntry] = [:]
     private var variationOverrides: [String: VariationOverrideEntry] = [:]
     private var webSocketTask: URLSessionWebSocketTask?
@@ -166,8 +170,23 @@ public class OttoFlagsClient {
             throw OttoFlagsError.invalidFlagKey(Self.describeInvalidKey(flagKey))
         }
 
+        // JSONSerialization raises an uncatchable exception for a value JSON cannot hold
+        // (a Date, a custom type in the attributes); check first and fail the lookup instead.
+        let evaluateBody = evaluationBody(for: context)
+        guard JSONSerialization.isValidJSONObject(evaluateBody) else {
+            throw OttoFlagsError.invalidContext
+        }
+
+        // The cache key is the request's context, computed before the lookup.
+        let contextKey: String? = evaluateBody["context"]
+            .flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+            .flatMap { String(data: $0, encoding: .utf8) }
+
         // Check cache first
-        if let cached = flagCache[flagKey] {
+        let cachedEntry: CacheEntry? = contextKey.flatMap { key in
+            queue.sync { flagCache[flagKey]?[key] }
+        }
+        if let cached = cachedEntry {
             var configuration = cached.configuration
             var variation = cached.variation
 
@@ -205,12 +224,6 @@ public class OttoFlagsClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = config.timeout
 
-        // JSONSerialization raises an uncatchable exception for a value JSON cannot hold
-        // (a Date, a custom type in the attributes); check first and fail the lookup instead.
-        let evaluateBody = evaluationBody(for: context)
-        guard JSONSerialization.isValidJSONObject(evaluateBody) else {
-            throw OttoFlagsError.invalidContext
-        }
         request.httpBody = try JSONSerialization.data(withJSONObject: evaluateBody)
 
         let (data, response) = try await session.data(for: request)
@@ -229,8 +242,16 @@ public class OttoFlagsClient {
         var variation = json["variation"] as? String
 
         // Update cache
-        queue.async { [weak self] in
-            self?.flagCache[flagKey] = CacheEntry(value: enabled, configuration: configuration, variation: variation)
+        if let contextKey {
+            let entry = CacheEntry(value: enabled, configuration: configuration, variation: variation)
+            queue.sync {
+                var contexts = flagCache[flagKey] ?? [:]
+                if contexts.count >= Self.maxContextsPerFlag && contexts[contextKey] == nil {
+                    contexts.removeAll()
+                }
+                contexts[contextKey] = entry
+                flagCache[flagKey] = contexts
+            }
         }
 
         // Apply overrides to evaluated result
@@ -379,20 +400,20 @@ public class OttoFlagsClient {
     ///   - config: Configuration dictionary to override with
     ///   - merge: Whether to merge with existing configuration (default: false)
     public func setConfigOverride(flagKey: String, config: [String: Any], merge: Bool = false) {
-        queue.async { [weak self] in
-            self?.configOverrides[flagKey] = ConfigOverrideEntry(config: config, merge: merge, timestamp: Date())
+        queue.sync {
+            self.configOverrides[flagKey] = ConfigOverrideEntry(config: config, merge: merge, timestamp: Date())
             // Clear cache to force re-evaluation with override
-            self?.flagCache.removeValue(forKey: flagKey)
+            self.flagCache.removeValue(forKey: flagKey)
         }
     }
 
     /// Clear configuration override for a flag
     /// - Parameter flagKey: The key of the feature flag
     public func clearConfigOverride(flagKey: String) {
-        queue.async { [weak self] in
-            self?.configOverrides.removeValue(forKey: flagKey)
+        queue.sync {
+            self.configOverrides.removeValue(forKey: flagKey)
             // Clear cache to get fresh API values
-            self?.flagCache.removeValue(forKey: flagKey)
+            self.flagCache.removeValue(forKey: flagKey)
         }
     }
 
@@ -402,20 +423,20 @@ public class OttoFlagsClient {
     ///   - flagKey: The key of the feature flag
     ///   - variation: The variation identifier to force
     public func setVariationOverride(flagKey: String, variation: String) {
-        queue.async { [weak self] in
-            self?.variationOverrides[flagKey] = VariationOverrideEntry(variation: variation, timestamp: Date())
+        queue.sync {
+            self.variationOverrides[flagKey] = VariationOverrideEntry(variation: variation, timestamp: Date())
             // Clear cache to force re-evaluation with override
-            self?.flagCache.removeValue(forKey: flagKey)
+            self.flagCache.removeValue(forKey: flagKey)
         }
     }
 
     /// Clear variation override for a flag
     /// - Parameter flagKey: The key of the feature flag
     public func clearVariationOverride(flagKey: String) {
-        queue.async { [weak self] in
-            self?.variationOverrides.removeValue(forKey: flagKey)
+        queue.sync {
+            self.variationOverrides.removeValue(forKey: flagKey)
             // Clear cache to get fresh API values
-            self?.flagCache.removeValue(forKey: flagKey)
+            self.flagCache.removeValue(forKey: flagKey)
         }
     }
 
@@ -458,10 +479,10 @@ public class OttoFlagsClient {
 
     /// Clear all configuration and variation overrides
     public func clearAllOverrides() {
-        queue.async { [weak self] in
-            self?.configOverrides.removeAll()
-            self?.variationOverrides.removeAll()
-            self?.flagCache.removeAll()
+        queue.sync {
+            self.configOverrides.removeAll()
+            self.variationOverrides.removeAll()
+            self.flagCache.removeAll()
         }
     }
 
@@ -513,15 +534,13 @@ public class OttoFlagsClient {
         guard let data = message.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let flagKey = json["flagKey"] as? String,
-              let enabled = json["enabled"] as? Bool else {
+              json["enabled"] is Bool else {
             return
         }
 
-        let configuration = json["configuration"] as? [String: Any]
-        let variation = json["variation"] as? String
-
+        // The message carries one result, but the cache holds one per context: drop them all.
         queue.async { [weak self] in
-            self?.flagCache[flagKey] = CacheEntry(value: enabled, configuration: configuration, variation: variation)
+            self?.flagCache.removeValue(forKey: flagKey)
         }
     }
 
@@ -550,11 +569,9 @@ public class OttoFlagsClient {
 
                     for flag in flags {
                         if let key = flag["key"] as? String,
-                           let enabled = flag["enabled"] as? Bool {
-                            let configuration = flag["configuration"] as? [String: Any]
-                            let variation = flag["variation"] as? String
+                           flag["enabled"] is Bool {
                             queue.async { [weak self] in
-                                self?.flagCache[key] = CacheEntry(value: enabled, configuration: configuration, variation: variation)
+                                self?.flagCache.removeValue(forKey: key)
                             }
                         }
                     }

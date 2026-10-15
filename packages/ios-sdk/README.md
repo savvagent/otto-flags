@@ -283,7 +283,7 @@ let config = OttoFlagsConfig(
 
 ### Caching
 
-The SDK automatically caches flag evaluations to improve performance. Configure polling interval:
+The SDK automatically caches flag evaluations to improve performance, per flag and per user context, so one user's result is never served to another. Configure polling interval:
 
 ```swift
 let config = OttoFlagsConfig(
