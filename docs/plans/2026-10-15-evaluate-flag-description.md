@@ -40,7 +40,10 @@ migration, dependency, or behavior change).
 
 **Files:**
 - Modify: `crates/flags-mcp/src/tools/insight.rs` (`evaluate_flag`'s `#[tool]` description)
-- Modify: `crates/flags-server/tests/e2e.rs` (`tools_list_carries_annotations`)
+- Modify: `crates/flags-mcp/src/server.rs` (`INSTRUCTIONS`: evaluate_flag answers "without
+  changing any flag", not "without touching anything"; added after review)
+- Modify: `crates/flags-server/tests/e2e.rs` (`tools_list_carries_annotations`, and
+  `an_agent_ships_a_flag_and_an_app_evaluates_it` asserts the dry run's one row is unbilled)
 
 - [ ] **Step 1: Write the failing test.** In `tools_list_carries_annotations`, assert that the
   `description` `tools/list` serves for `evaluate_flag` does not contain `records nothing` and
@@ -48,7 +51,8 @@ migration, dependency, or behavior change).
 - [ ] **Step 2: Run it and see it fail:**
   `cargo test -p flags-server --test e2e tools_list_carries_annotations`.
 - [ ] **Step 3: Implement.** Replace "Changes nothing and records nothing." with wording that
-  says it changes no flag and that the call is recorded as usage but not billed.
+  says it changes no flag and that the call is recorded as usage but not billed. Make the server
+  `INSTRUCTIONS` sentence about evaluate_flag say it changes no flag, so the two agree.
 - [ ] **Step 4: Run it and see it pass**, then the full gates above.
 - [ ] **Step 5: Commit** `docs(mcp): say evaluate_flag records unbilled usage`, body explaining
   why, ending `Fixes #89`.

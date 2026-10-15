@@ -392,7 +392,7 @@ async fn sdk(
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
     let (url, platform) = start_platform().await;
-    let s = server(pool, &url).await;
+    let s = server(pool.clone(), &url).await;
     let org = Uuid::new_v4();
     let admin = token(
         &platform,
@@ -510,6 +510,14 @@ async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
     .unwrap();
     assert_eq!(dry["evaluation"]["enabled"], true);
     assert_eq!(dry["evaluation"]["reason"]["kind"], "rule");
+    // The dry run changes no flag but is recorded as unbilled usage, as its
+    // description says (#89).
+    let billable: Vec<bool> =
+        sqlx::query_scalar("SELECT billable FROM usage_outbox WHERE tool = 'evaluate_flag'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(billable, vec![false]);
 
     // The SDK sees the same answer, on both route spellings.
     for path in [
