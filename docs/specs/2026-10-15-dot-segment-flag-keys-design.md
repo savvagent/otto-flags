@@ -1,6 +1,6 @@
 # Refuse the flag keys `.` and `..`
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#110)
 **Issue:** #105
 
 ## 1. Brief

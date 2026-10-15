@@ -46,24 +46,24 @@ Files:
 - Modify: `crates/flags-mcp/src/tools/flags.rs` (`CreateFlagArgs::key` doc)
 - Modify: `docs/SDK-DEVELOPER-GUIDE.md` (Flag Evaluation note)
 
-- [ ] **Step 1: Write the failing unit test** in `flags.rs` `mod tests`:
+- [x] **Step 1: Write the failing unit test** in `flags.rs` `mod tests`:
   `dot_segment_keys_are_refused`: `validate_key(".")`, `validate_key("..")`,
   `validate_key(" .. ")` are `Err(Error::Invalid(_))` whose message contains "dot segment";
   `validate_key("...")`, `"a.b"`, `".a"`, `"a."` are `Ok` and unchanged.
-- [ ] **Step 2: Write the failing DB test** in `tests/db.rs`:
+- [x] **Step 2: Write the failing DB test** in `tests/db.rs`:
   `create_flag_refuses_dot_segment_keys`: create an app, then for `"."` and `".."` call
   `create_flag` and assert `err.code() == "invalid_argument"`; then `list_flags(&app, true)` is
   empty.
-- [ ] **Step 3: Run** `cargo test -p flags-core dot_segment` (with `DATABASE_URL`) and see both
+- [x] **Step 3: Run** `cargo test -p flags-core dot_segment` (with `DATABASE_URL`) and see both
   fail.
-- [ ] **Step 4: Implement**: in `validate_key`, after the charset check, return
+- [x] **Step 4: Implement**: in `validate_key`, after the charset check, return
   `Error::Invalid(format!("flag key {key:?} is a URL dot segment, which SDKs cannot evaluate over REST; choose another key"))`
   when `key == "." || key == ".."`. Add a short doc comment on `validate_key` giving the reason
   (path segment in `POST /api/flags/{key}/evaluate` and `POST /api/evaluate/{key}`, #105).
-- [ ] **Step 5: Doc**: `CreateFlagArgs::key` doc becomes "Letters, digits, '-', '_', '.', but not
+- [x] **Step 5: Doc**: `CreateFlagArgs::key` doc becomes "Letters, digits, '-', '_', '.', but not
   '.' or '..' alone; at most 128 characters. Cannot be changed later." In
   `docs/SDK-DEVELOPER-GUIDE.md` under Flag Evaluation, note that a flag key is never `.` or `..`
   (URL dot segments), so an SDK may refuse them locally.
-- [ ] **Step 6: Run** the targeted tests (pass), then all gates above.
-- [ ] **Step 7: Commit** `fix(core): refuse the flag keys "." and ".."` with a why-body ending
+- [x] **Step 6: Run** the targeted tests (pass), then all gates above.
+- [x] **Step 7: Commit** `fix(core): refuse the flag keys "." and ".."` with a why-body ending
   `Fixes #105`.
