@@ -24,7 +24,7 @@ known-red gate entry.
   - `cargo fmt --check`
   - `cargo clippy --locked --all-targets -- -D warnings`
   - `cargo test --locked`
-  - after Task 1–2, also `cd examples/rust-server && cargo fmt --check` and `cargo clippy --locked
+  - after Task 1–2, also, from the repo root, `cd examples/rust-server && cargo fmt --check` and `cargo clippy --locked
     --all-targets -- -D warnings` (known red, #16: no new failures; it does not compile on main)
 - Evidence: pass/fail/ignored counts per test binary; skipped or ignored tests are not a pass; no
   test may need network beyond the local wiremock server.
@@ -47,6 +47,9 @@ known-red gate entry.
 | **Rewrite.** `packages/rust-server/tests/integration_test.rs` | Ported tests on the current API |
 | **Create.** `.github/workflows/rust-sdk.yml` | CI for the crate |
 | **Modify.** `CLAUDE.md` | Gates, Ship > merge gate, Notes on CI |
+
+The README names neither the route nor the response field, so it needs no change. Commit steps
+run from the repo root.
 
 ## Task Order & Rationale
 
@@ -358,7 +361,7 @@ Then run `cargo fmt` (the file must match rustfmt output).
 
 - [ ] **Step 4: Full gates.** `cargo fmt --check`; `cargo clippy --locked --all-targets -- -D
   warnings`; `cargo test --locked` (lib 1, dynamic_config_test 6, integration_test 10,
-  override_test 8, doc-tests 0 run/1 ignored-as-no_run is fine).
+  override_test 8, doc-tests 1 passed — the `no_run` quick start compiles).
 
 - [ ] **Step 5: Commit.**
 

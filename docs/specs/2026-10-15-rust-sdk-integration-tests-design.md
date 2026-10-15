@@ -102,7 +102,7 @@ workflow, `CLAUDE.md` (Gates, Ship > merge gate, Notes on CI), README if it name
 the field.
 
 Out: the SDK's cache keying (it caches per flag key, ignoring the context, so targeted results
-leak between users within the TTL; a follow-up issue); telemetry/event tracking (the SDK has none;
+leak between users within the TTL; #91); telemetry/event tracking (the SDK has none;
 `test_track_event` is dropped, not reimplemented); removing the server's `/api/evaluate/{key}`
 alias; `examples/rust-server` (#16); publishing.
 
