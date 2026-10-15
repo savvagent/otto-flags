@@ -5593,3 +5593,34 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
         "raw pool access outside the allowed sites; route it through `unpinned::begin`"
     );
 }
+
+/// `.` and `..` are URL dot segments, so an SDK evaluating them over
+/// `POST /api/flags/{key}/evaluate` or `POST /api/evaluate/{key}` reaches
+/// another route (#105). They are refused before anything is written.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn create_flag_refuses_dot_segment_keys(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    for key in [".", ".."] {
+        let err = tx
+            .create_flag(
+                &app,
+                NewFlag {
+                    key: key.into(),
+                    ..Default::default()
+                },
+                actor,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_argument", "{key:?}: {err}");
+    }
+    assert!(tx.list_flags(&app, true).await.unwrap().is_empty());
+}
