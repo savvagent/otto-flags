@@ -301,7 +301,11 @@ public class OttoFlagsClient {
             return defaultValue
         }
         if defaultValue is String {
-            return (result.variation as? T) ?? defaultValue
+            // Unwrap first: with an optional T, `nil as? T` would succeed as a wrapped nil.
+            guard let name = result.variation, let value = name as? T else {
+                return defaultValue
+            }
+            return value
         }
         if defaultValue is Bool {
             return (result.value as? T) ?? defaultValue

@@ -46,6 +46,20 @@ def mock_api():
         yield respx_mock
 
 
+def server_body(key: str, enabled: bool) -> dict[str, object]:
+    """The evaluate response exactly as the server sends it (docs/SDK-DEVELOPER-GUIDE.md)."""
+    return {
+        "key": key,
+        "enabled": enabled,
+        "scope": "application",
+        "variation": None,
+        "configuration": None,
+        "timestamp": 1700000000,
+        "version": 3,
+        "context": {"environment": "production"},
+    }
+
+
 def mock_flag_response(
     respx_mock: respx.MockRouter,
     flag_key: str,

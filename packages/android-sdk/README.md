@@ -183,26 +183,24 @@ val config = OttoFlagsConfig(
 
 ### Getting Variation Values
 
+`getVariation` evaluates the flag. With a `String` default it returns the variation name (or
+the default when the flag has no variation); with a `Boolean` default it returns whether the flag
+is enabled. Any other type, and any failure, returns the default. Use `getConfig` for a flag's
+configuration.
+
 ```kotlin
-// Get string variation
+// Variation name, or "light" when the flag has none
 val theme = client.getVariation(
     flagKey = "app-theme",
     userContext = context,
     defaultValue = "light"
 )
 
-// Get numeric variation
-val maxItems = client.getVariation(
-    flagKey = "max-items",
+// Enabled state, or false on failure
+val enabled = client.getVariation(
+    flagKey = "new-checkout",
     userContext = context,
-    defaultValue = 10
-)
-
-// Get map variation
-val config = client.getVariation(
-    flagKey = "app-config",
-    userContext = context,
-    defaultValue = mapOf("key" to "value")
+    defaultValue = false
 )
 ```
 

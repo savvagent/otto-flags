@@ -189,9 +189,11 @@ class OttoFlagsClient(
                 // The result is "enabled" (docs/SDK-DEVELOPER-GUIDE.md). getBoolean would
                 // also accept the strings "true"/"false"; only a JSON boolean counts (#112).
                 val enabled = jsonResponse.opt("enabled") as? Boolean
-                    ?: return@withContext Result.failure(
-                        OttoFlagsException("The evaluate response has no boolean \"enabled\"")
-                    )
+                    ?: run {
+                        val message = "The evaluate response for $flagKey has no boolean \"enabled\""
+                        logError(message)
+                        return@withContext Result.failure(OttoFlagsException(message))
+                    }
 
                 // The server sends both fields, as null when the flag has none: isNull is
                 // true for a missing key and for JSON null.

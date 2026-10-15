@@ -6,6 +6,7 @@ import respx
 
 from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
 from otto_flags.exceptions import InvalidAPIKeyError, InvalidFlagKeyError
+from tests.conftest import server_body
 
 
 @pytest.fixture
@@ -414,19 +415,6 @@ class TestAsyncInvalidFlagKey:
         assert result.reason == "evaluated"
 
 
-def _server_body(key: str, enabled: bool) -> dict[str, object]:
-    """The evaluate response exactly as the server sends it (crates/flags-api sdk.rs)."""
-    return {
-        "key": key,
-        "enabled": enabled,
-        "scope": "application",
-        "variation": None,
-        "configuration": None,
-        "timestamp": 1700000000,
-        "version": 3,
-        "context": {"environment": "production"},
-    }
-
 
 class TestAsyncEvaluateContract:
     """The evaluate call follows docs/SDK-DEVELOPER-GUIDE.md (#112)."""
@@ -439,7 +427,7 @@ class TestAsyncEvaluateContract:
     ) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
-        ).mock(return_value=httpx.Response(200, json=_server_body("checkout", enabled)))
+        ).mock(return_value=httpx.Response(200, json=server_body("checkout", enabled)))
         async_config.defaults = {"checkout": not enabled}
         async with AsyncFlagClient(async_config) as client:
             result = await client.evaluate("checkout")

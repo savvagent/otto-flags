@@ -501,6 +501,7 @@ describe('FlagClient', () => {
       expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/${key}/evaluate`);
     });
   });
+
   describe('evaluate contract (#112)', () => {
     const baseUrl = 'https://flags.example.test';
     let fetchMock: jest.Mock;

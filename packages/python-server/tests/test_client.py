@@ -6,7 +6,7 @@ import respx
 
 from otto_flags import FlagClient, FlagClientConfig, FlagContext
 from otto_flags.exceptions import InvalidAPIKeyError, InvalidFlagKeyError
-from tests.conftest import mock_flag_response, mock_flags_list_response
+from tests.conftest import mock_flag_response, mock_flags_list_response, server_body
 
 
 class TestFlagClientConstruction:
@@ -449,19 +449,6 @@ class TestInvalidFlagKey:
         assert result.reason == "evaluated"
 
 
-def _server_body(key: str, enabled: bool) -> dict[str, object]:
-    """The evaluate response exactly as the server sends it (crates/flags-api sdk.rs)."""
-    return {
-        "key": key,
-        "enabled": enabled,
-        "scope": "application",
-        "variation": None,
-        "configuration": None,
-        "timestamp": 1700000000,
-        "version": 3,
-        "context": {"environment": "production"},
-    }
-
 
 class TestEvaluateContract:
     """The evaluate call follows docs/SDK-DEVELOPER-GUIDE.md (#112)."""
@@ -473,7 +460,7 @@ class TestEvaluateContract:
     ) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
-        ).mock(return_value=httpx.Response(200, json=_server_body("checkout", enabled)))
+        ).mock(return_value=httpx.Response(200, json=server_body("checkout", enabled)))
         client_config.defaults = {"checkout": not enabled}
         with FlagClient(client_config) as client:
             result = client.evaluate("checkout")
