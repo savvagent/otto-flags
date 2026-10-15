@@ -75,6 +75,11 @@ pub enum Error {
     )]
     EntitlementUnavailable { feature: String },
 
+    /// Every SDK key lookup permit was taken for the whole wait
+    /// (`keys::KeyLookups`, #120). Nothing was looked up.
+    #[error("too many SDK key lookups are in progress; retry shortly")]
+    Busy,
+
     #[error(transparent)]
     Platform(#[from] otto_resource::Error),
 
@@ -100,6 +105,7 @@ impl Error {
             Error::QuotaExceeded { .. } => "quota_exceeded",
             Error::FeatureNotInPlan { .. } => "feature_not_in_plan",
             Error::EntitlementUnavailable { .. } | Error::Platform(_) => "platform_unavailable",
+            Error::Busy => "busy",
             Error::Tenant(t) => t.code(),
             Error::Db(_) => "internal_error",
         }
@@ -108,7 +114,7 @@ impl Error {
     /// Whether repeating the same call unchanged could succeed.
     pub fn retriable(&self) -> bool {
         match self {
-            Error::Db(_) | Error::EntitlementUnavailable { .. } => true,
+            Error::Db(_) | Error::EntitlementUnavailable { .. } | Error::Busy => true,
             Error::Platform(p) => p.is_retriable(),
             Error::Tenant(otto_tenant::Error::Db(_)) => true,
             _ => false,
@@ -118,14 +124,15 @@ impl Error {
     /// Whether this failure is the kind that passes on its own: contention
     /// (serialization failure, deadlock, a lock or statement timeout), a
     /// connection or pool problem, the database shutting down, restarting, or
-    /// still starting up, or the platform being unreachable. Narrower
+    /// still starting up, the platform being unreachable, or every SDK key
+    /// lookup permit being taken ([`Error::Busy`]). Narrower
     /// than [`Error::retriable`], which tells an agent any database error is
     /// worth one more try: a background job retrying on a schedule must not
     /// keep retrying a constraint violation or a missing table.
     pub fn is_transient(&self) -> bool {
         match self {
             Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => db_is_transient(e),
-            Error::EntitlementUnavailable { .. } => true,
+            Error::EntitlementUnavailable { .. } | Error::Busy => true,
             Error::Platform(p) => p.is_retriable(),
             _ => false,
         }
@@ -427,6 +434,7 @@ mod tests {
             Error::EntitlementUnavailable {
                 feature: "auto_rollback".into(),
             },
+            Error::Busy,
         ] {
             assert!(transient.is_transient(), "{transient:?}");
         }
@@ -510,6 +518,7 @@ mod tests {
                 None,
             ),
             (Error::AccessRevoked, "access_revoked", None),
+            (Error::Busy, "busy", None),
         ];
         for (e, reason, status) in cases {
             let f = e.failure_reason();
@@ -666,5 +675,7 @@ mod tests {
         // ...including ones a scheduled retry must not keep repeating.
         let dropped = Error::Db(db("57P04"));
         assert!(dropped.retriable() && !dropped.is_transient());
+        // A refused key lookup: worth retrying, and not the server's text.
+        assert!(Error::Busy.retriable() && !Error::Busy.is_internal());
     }
 }

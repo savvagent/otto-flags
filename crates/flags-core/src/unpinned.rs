@@ -7,7 +7,8 @@
 //! touch only the tables deliberately left outside row-level security
 //! (`app_keys`, `deleted_orgs`, `removed_members`).
 //!
-//! They still go through [`begin`], never a bare query on the pool: the pool
+//! They still go through [`begin`] (or [`Held::begin`], on a connection the
+//! key lookup holds), never a bare query on the pool: the pool
 //! may connect as a role row-level security does not apply to (production's
 //! attach role is a superuser), and a later query on that connection that
 //! named a tenant table by mistake would read every org's rows (#80). Inside
@@ -18,7 +19,8 @@
 //! raw pool query anywhere else.
 
 use otto_tenant::Db;
-use sqlx::{Postgres, Transaction};
+use sqlx::pool::PoolConnection;
+use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
 /// The `search_path` every tenant, unpinned, and maintenance transaction runs
 /// with (#97): unqualified names resolve in `public` after the built-ins,
@@ -62,7 +64,56 @@ pub(crate) async fn begin_as_tenant_role(
     db: &Db,
     maintenance: bool,
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
-    let mut tx = db.pool().begin().await?;
+    enter(db.pool().begin().await?, db, maintenance).await
+}
+
+/// A pool connection held across one unpinned transaction, for the key
+/// lookup ([`crate::keys::resolve_hash`]), which must await the connection's
+/// return to the pool itself so its permit covers the whole checkout (#120).
+///
+/// Opaque on purpose: the raw connection never leaves this module, so the
+/// only thing a holder can run on it is [`Held::begin`]'s probed transaction,
+/// never a bare query as the pool's role (#80).
+pub(crate) struct Held(PoolConnection<Postgres>);
+
+impl Held {
+    /// Take a connection from `db`'s pool.
+    pub(crate) async fn acquire(db: &Db) -> sqlx::Result<Self> {
+        Ok(Self(db.pool().acquire().await?))
+    }
+
+    /// [`begin`] on the held connection: the same probe, role switch, search
+    /// path, and refusal, with no maintenance marker.
+    pub(crate) async fn begin<'c>(
+        &'c mut self,
+        db: &Db,
+    ) -> sqlx::Result<Transaction<'c, Postgres>> {
+        let conn: &'c mut PgConnection = &mut self.0;
+        enter(conn.begin().await?, db, false).await
+    }
+
+    /// Return the connection to the pool, and wait until it is back: the
+    /// rollback of any transaction left open and sqlx's release ping run
+    /// inside this call, not in the task sqlx spawns when a `PoolConnection`
+    /// is dropped. A connection that fails the ping is closed instead.
+    pub(crate) async fn release(mut self) {
+        self.0.return_to_pool().await;
+    }
+}
+
+/// The most connections `db`'s pool opens. Reads the pool's options; touches
+/// no table.
+pub(crate) fn max_connections(db: &Db) -> u32 {
+    db.pool().options().get_max_connections()
+}
+
+/// Run the role probe in the freshly opened `tx` and switch it into the
+/// tenant role, or refuse it; see [`begin_as_tenant_role`].
+async fn enter<'c>(
+    mut tx: Transaction<'c, Postgres>,
+    db: &Db,
+    maintenance: bool,
+) -> sqlx::Result<Transaction<'c, Postgres>> {
     // One round trip for the probes, the marker, the role switch, and the
     // search path (these run on every SDK key lookup). The probes are a
     // MATERIALIZED CTE so they read `current_user` before the outer select
@@ -139,7 +190,7 @@ pub(crate) mod tests {
     use sqlx::PgPool;
 
     /// The current role and the maintenance marker inside `tx`.
-    async fn role_and_marker(tx: &mut Transaction<'static, Postgres>) -> (String, String) {
+    async fn role_and_marker(tx: &mut Transaction<'_, Postgres>) -> (String, String) {
         sqlx::query_as(
             "SELECT current_user::text, coalesce(current_setting('app.maintenance', true), '')",
         )
@@ -159,6 +210,24 @@ pub(crate) mod tests {
             role_and_marker(&mut tx).await,
             (db.tenant_role().to_string(), String::new())
         );
+    }
+
+    /// The same on a held connection (`Held::begin`, #120): the
+    /// tenant role, no marker, the pinned search path.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_held_connection_begins_as_the_tenant_role_without_the_marker(pool: PgPool) {
+        let db = Db::from_pool(pool);
+        let mut conn = Held::acquire(&db).await.unwrap();
+        let mut tx = conn.begin(&db).await.unwrap();
+        assert_eq!(
+            role_and_marker(&mut tx).await,
+            (db.tenant_role().to_string(), String::new())
+        );
+        let path: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(path, SEARCH_PATH);
     }
 
     /// Every unpinned transaction resolves names in `public` only (#97).
