@@ -1,6 +1,6 @@
 # Call the audit purge function by schema
 
-**Status:** APPROVED
+**Status:** IMPLEMENTED (#99)
 **Issue:** #53
 
 ## 1. Brief
