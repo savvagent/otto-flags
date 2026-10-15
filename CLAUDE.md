@@ -62,7 +62,7 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - when Dockerfile, .dockerignore, Cargo.toml, Cargo.lock, rust-toolchain.toml, crates/**: podman build -t otto-flags:check .
 - when package.json, pnpm-lock.yaml, pnpm-workspace.yaml, packages/angular/**, packages/astro/**, packages/mcp-datadog/**, packages/mcp-dynatrace/**, packages/mcp-newrelic/**, packages/mcp-pagerduty/**, packages/mcp-sdk/**, packages/mcp-sentry/**, packages/mcp-splunk/**, packages/nextjs/**, packages/node-server/**, packages/react/**, packages/remix/**, packages/solid/**, packages/svelte/**, packages/sveltekit/**, packages/typescript/**, packages/vue/**, examples/angular-app/**, examples/astro-app/**, examples/nextjs-app/**, examples/node-backend/**, examples/react-app/**, examples/remix-app/**, examples/solid-app/**, examples/svelte-app/**, examples/sveltekit-app/**, examples/vue-app/**: pnpm install --frozen-lockfile && pnpm lint && pnpm build && pnpm test
 - when packages/rust-server/**: cd packages/rust-server && cargo fmt --check
-- when packages/rust-server/**: cd packages/rust-server && cargo clippy --locked --all-targets --keep-going -- -D warnings
+- when packages/rust-server/**: cd packages/rust-server && cargo clippy --locked --all-targets -- -D warnings
 - when packages/rust-server/**: cd packages/rust-server && cargo test --locked
 - when packages/rust-server/**, examples/rust-server/**: cd examples/rust-server && cargo fmt --check
 - when packages/rust-server/**, examples/rust-server/**: cd examples/rust-server && cargo clippy --locked --all-targets -- -D warnings
@@ -71,7 +71,6 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - when packages/python-server/**: v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src && "$v/bin/ruff" check --no-cache .
 - when packages/java-server/**: cd packages/java-server && mvn -B verify
 - when packages/ios-sdk/**: cd packages/ios-sdk && swift test
-- known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile; every other target must stay clean) — #4
 - known red: examples/rust-server `cargo fmt --check` and `cargo clippy` (does not compile) — #16
 - known red: Go SDK `go vet` and `go test` (no `go.sum`) — #17
 - evidence: report pass counts per test binary; `cargo test` without `DATABASE_URL` panics ("DATABASE_URL must be set") rather than skipping, so a panic there is a missing variable, not a test failure; `DATABASE_URL` points only at the local Postgres on 15434, never at a Fly database
@@ -105,7 +104,7 @@ has reviewed or commented on any PR here (#3, #6, #8, #10).
 
 ### Ship
 - deploy: ci-auto
-- merge gate: on the PR's head SHA: `rust`, `docker-build`, `migrations-append-only` (CI workflow) succeeded; `Test` (SDKs workflow) succeeded when any changed file matches `packages/**`, `examples/**`, `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml` (the workflow's own path filter); plus every other check that ran on the head SHA (the ruleset requires none)
+- merge gate: on the PR's head SHA: `rust`, `docker-build`, `migrations-append-only` (CI workflow) succeeded; `Test` (SDKs workflow) succeeded when any changed file matches `packages/**`, `examples/**`, `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml` (the workflow's own path filter); `Rust SDK` (Rust SDK workflow) succeeded when any changed file matches `packages/rust-server/**` or `.github/workflows/rust-sdk.yml`; plus every other check that ran on the head SHA (the ruleset requires none)
 - verify: the SHA proxy is the `deploy` job of the CI run for the merge SHA (`gh run list -R savvagent/otto-flags --workflow CI --commit <merge SHA> --json databaseId,status,conclusion`, then `gh run view <id> -R savvagent/otto-flags --json jobs`); `/readyz` does not report a SHA. Then `fly releases -a otto-flags` shows a new release; `fly status -a otto-flags` shows the `app` machines on it; `curl -s https://otto-flags.savvagent.com/readyz` returns `{"status":"ready"}` (the first request may resume a suspended machine); `fly logs -a otto-flags --no-tail` shows `applying migrations`, `tenant isolation enforced as role "otto_app"`, and `the otto platform accepted this service's credential`; then exercise the changed surface read-only (`/mcp` tools via an MCP client, `whoami` first, or the changed `/api/...` route). A change outside `crates/`, `Dockerfile`, `fly.toml`, and the root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` (SDKs, examples, docs, workflows) redeploys unchanged server code: verify health only and state that the changed surface is not deployed. A machine failing `/readyz` fails the deploy: merged, not live. Do not assume Fly rolled it back: `fly status` must show no `app` machine left on the failed release (moving one back is a hand deploy, Rob's; `docs/deploy/fly.md`, When a migration fails). A previous release boots against a newer schema because `MIGRATOR` ignores migration versions it does not know (`crates/flags-core/src/migrate.rs`).
 - release: server: none (continuous deploy of every push to `main`). Changesets apply to pnpm packages only: a change to a published pnpm package (`packages/*` with a `package.json`) adds a changeset (`pnpm changeset`); docs- and test-only changes do not. npm publishing is not automated (`.github/workflows/release.yml` triggers on `master`, which does not exist) and no `@otto-flags/*` package is on npm, so a merged SDK change is merged, not published. The Rust crate (`packages/rust-server`, `otto-flags`), Go, Python, Java, iOS, and Android SDKs are not published (not on crates.io, PyPI, Maven Central, or the Go proxy; the Go module path names a repo, `savvagent/otto-flags-go-server-sdk`, that does not exist); a release is a human decision (Rob). Do not bump their versions in a change PR.
 - version files: packages/*/package.json, packages/rust-server/Cargo.toml, packages/python-server/pyproject.toml, packages/java-server/pom.xml, packages/android-sdk/build.gradle.kts
@@ -195,8 +194,9 @@ crate module docs.
   MCP, SDK API, and webhook behavior in `crates/flags-server/tests/e2e.rs` against its mock platform.
   A test that captures `tracing` output gets its own `tests/` binary (callsite-interest caching;
   see `crates/flags-mcp/tests/failure_logs.rs`).
-- Only the JS/TS packages have CI (`.github/workflows/sdks.yml`). The Go, Python, Java, Swift,
-  Kotlin, and Rust SDKs have none; their local gates are under Gates.
+- The JS/TS packages have CI in `.github/workflows/sdks.yml` and the Rust SDK in
+  `.github/workflows/rust-sdk.yml`. The Go, Python, Java, Swift, and Kotlin SDKs have none; their
+  local gates are under Gates.
 - `CONTRIBUTING.md` predates the server and covers only the SDKs: its `feature/` branch prefix,
   automated-release description, and "MIT for all contributions" line do not match this section,
   `release.yml`, or `NOTICE`. This section wins.
