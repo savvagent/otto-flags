@@ -1,4 +1,4 @@
-use crate::types::Context;
+use crate::types::{Context, Metadata};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -15,6 +15,7 @@ pub(crate) struct CacheEntry {
     pub value: bool,
     pub configuration: Option<serde_json::Value>,
     pub variation: Option<String>,
+    pub metadata: Option<Metadata>,
     pub expires_at: Instant,
 }
 
@@ -90,6 +91,7 @@ impl Cache {
         value: bool,
         configuration: Option<serde_json::Value>,
         variation: Option<String>,
+        metadata: Option<Metadata>,
     ) {
         if let Ok(mut entries) = self.entries.write() {
             let contexts = entries.entry(flag_key.to_string()).or_default();
@@ -107,6 +109,7 @@ impl Cache {
                     value,
                     configuration,
                     variation,
+                    metadata,
                     expires_at: Instant::now() + self.ttl,
                 },
             );
@@ -163,8 +166,8 @@ mod tests {
     #[test]
     fn entries_are_per_flag_and_context() {
         let cache = Cache::new(Duration::from_secs(60));
-        cache.set("f", "c1".into(), true, None, None);
-        cache.set("f", "c2".into(), false, None, None);
+        cache.set("f", "c1".into(), true, None, None, None);
+        cache.set("f", "c2".into(), false, None, None, None);
 
         assert_eq!(cache.get_entry("f", "c1").map(|e| e.value), Some(true));
         assert_eq!(cache.get_entry("f", "c2").map(|e| e.value), Some(false));
@@ -175,9 +178,9 @@ mod tests {
     #[test]
     fn invalidating_a_flag_drops_every_context_of_that_flag_only() {
         let cache = Cache::new(Duration::from_secs(60));
-        cache.set("f", "c1".into(), true, None, None);
-        cache.set("f", "c2".into(), false, None, None);
-        cache.set("g", "c1".into(), true, None, None);
+        cache.set("f", "c1".into(), true, None, None, None);
+        cache.set("f", "c2".into(), false, None, None, None);
+        cache.set("g", "c1".into(), true, None, None, None);
 
         cache.invalidate(Some("f"));
 
@@ -190,11 +193,11 @@ mod tests {
     fn a_full_flag_with_nothing_expired_is_cleared_and_takes_the_new_entry() {
         let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 3);
         for i in 0..3 {
-            cache.set("f", i.to_string(), true, None, None);
+            cache.set("f", i.to_string(), true, None, None, None);
         }
-        cache.set("g", "0".into(), true, None, None);
+        cache.set("g", "0".into(), true, None, None, None);
 
-        cache.set("f", "new".into(), false, None, None);
+        cache.set("f", "new".into(), false, None, None, None);
 
         assert_eq!(cache.get_entry("f", "new").map(|e| e.value), Some(false));
         assert!(cache.get_entry("f", "0").is_none());
@@ -220,11 +223,11 @@ mod tests {
     fn a_full_flag_sweeps_expired_entries_and_keeps_live_ones() {
         let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 4);
         for key in ["live", "old-0", "old-1", "old-2"] {
-            cache.set("f", key.into(), true, None, None);
+            cache.set("f", key.into(), true, None, None, None);
         }
         backdate(&cache, "f", &["old-0", "old-1", "old-2"]);
 
-        cache.set("f", "new".into(), false, None, None);
+        cache.set("f", "new".into(), false, None, None, None);
 
         assert!(cache.get_entry("f", "live").is_some());
         assert!(cache.get_entry("f", "new").is_some());
@@ -237,11 +240,11 @@ mod tests {
         // would be swept on nearly every new context.
         let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 4);
         for key in ["a", "b", "c", "old"] {
-            cache.set("f", key.into(), true, None, None);
+            cache.set("f", key.into(), true, None, None, None);
         }
         backdate(&cache, "f", &["old"]);
 
-        cache.set("f", "new".into(), false, None, None);
+        cache.set("f", "new".into(), false, None, None, None);
 
         assert_eq!(len(&cache, "f"), 1);
         assert!(cache.get_entry("f", "new").is_some());
@@ -250,10 +253,10 @@ mod tests {
     #[test]
     fn refreshing_an_existing_context_in_a_full_flag_keeps_the_others() {
         let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 2);
-        cache.set("f", "a".into(), true, None, None);
-        cache.set("f", "b".into(), true, None, None);
+        cache.set("f", "a".into(), true, None, None, None);
+        cache.set("f", "b".into(), true, None, None, None);
 
-        cache.set("f", "a".into(), false, None, None);
+        cache.set("f", "a".into(), false, None, None, None);
 
         assert_eq!(cache.get_entry("f", "a").map(|e| e.value), Some(false));
         assert!(cache.get_entry("f", "b").is_some());

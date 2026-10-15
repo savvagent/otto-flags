@@ -153,6 +153,8 @@ async fn a_response_without_enabled_falls_back_to_the_default() {
     )
     .unwrap();
     assert!(client.is_enabled("test-flag", None).await);
+    let result = client.evaluate("test-flag", None).await.unwrap();
+    assert_eq!(result.reason, "error");
 }
 
 #[tokio::test]
@@ -192,11 +194,19 @@ async fn an_unreachable_server_falls_back_to_the_default() {
             .with_default("test-flag", true),
     )
     .unwrap();
-    assert!(matches!(
-        client.evaluate("test-flag", None).await,
-        Err(OttoFlagsError::RequestFailed(_))
-    ));
+    // A lookup never returns `Err` (#96): every method falls back to the default.
+    let result = client.evaluate("test-flag", None).await.unwrap();
+    assert!(result.value);
+    assert_eq!(result.reason, "error");
     assert!(client.is_enabled("test-flag", None).await);
+    assert!(client
+        .get_config("test-flag", None)
+        .await
+        .unwrap()
+        .is_none());
+    let variation = client.get_variation("test-flag", None).await.unwrap();
+    assert_eq!(variation.variation, "control");
+    assert!(variation.enabled);
 }
 
 #[tokio::test]
@@ -555,5 +565,80 @@ async fn a_base_url_path_prefix_is_kept_with_or_without_a_trailing_slash() {
     ] {
         let client = FlagClient::new(Config::new(KEY).with_base_url(base)).unwrap();
         assert!(client.is_enabled("test-flag", None).await);
+    }
+}
+
+/// A 200 the SDK cannot read is a failed lookup: default, `reason: "error"`, and not cached, so
+/// the next call asks again (#92, #96).
+async fn falls_back_uncached_on(response: ResponseTemplate) {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/test-flag/evaluate"))
+        .respond_with(response)
+        .expect(2)
+        .mount(&server)
+        .await;
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_default("test-flag", true),
+    )
+    .unwrap();
+
+    for _ in 0..2 {
+        let result = client.evaluate("test-flag", None).await.unwrap();
+        assert!(result.value);
+        assert_eq!(result.reason, "error");
+        assert!(result.metadata.is_none());
+    }
+}
+
+#[tokio::test]
+async fn a_non_json_body_falls_back_and_is_not_cached() {
+    falls_back_uncached_on(ResponseTemplate::new(200).set_body_string("<html>portal</html>")).await;
+}
+
+#[tokio::test]
+async fn a_body_without_a_boolean_enabled_falls_back_and_is_not_cached() {
+    falls_back_uncached_on(
+        ResponseTemplate::new(200).set_body_json(json!({ "enabled": "yes", "value": true })),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn an_invalid_base_url_falls_back() {
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url("not a url")
+            .with_default("test-flag", true),
+    )
+    .unwrap();
+    let result = client.evaluate("test-flag", None).await.unwrap();
+    assert!(result.value);
+    assert_eq!(result.reason, "error");
+}
+
+#[tokio::test]
+async fn metadata_carries_the_version_and_scope_the_server_sends() {
+    let server = MockServer::start().await;
+    mock_evaluate(
+        &server,
+        "test-flag",
+        200,
+        json!({ "key": "test-flag", "enabled": true, "scope": "application", "version": 7 }),
+    )
+    .await;
+
+    let client = client(&server);
+    for expected_reason in ["evaluated", "cached"] {
+        let result = client.evaluate("test-flag", None).await.unwrap();
+        assert_eq!(result.reason, expected_reason);
+        let metadata = result.metadata.expect("metadata");
+        assert_eq!(metadata.version, Some(7));
+        assert_eq!(metadata.scope.as_deref(), Some("application"));
+        assert!(metadata.flag_id.is_none());
+        assert!(metadata.description.is_none());
+        assert!(metadata.variant.is_none());
     }
 }

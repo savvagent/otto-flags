@@ -51,7 +51,8 @@ the server returns, or are dropped."
   `version` and `scope`; keep `flag_id`, `description`, `variant` as fields documented as not sent
   by the server (always `None`), since removing them would break callers that read them. Derive
   `Default` on `Metadata` so callers can build one with `..Default::default()`. Adding public
-  fields breaks only code that builds `Metadata` with a struct literal; the crate is unpublished
+  fields breaks only code that builds `Metadata` with a struct literal or destructures it
+  exhaustively; the crate is unpublished
   (0.1.0) and nothing in the repo (including `examples/rust-server`) builds one, so this is
   accepted as additive in practice and named here.
 - Cached hits carry the metadata of the response they came from (today `None`): `CacheEntry`
@@ -109,8 +110,8 @@ None. SDK-only: post-merge verification is server health only; not published.
 
 - Log text names the flag key (`{:?}`) and the failure kind (status code, `reqwest` error, "body
   is not JSON", "no boolean `enabled`"); never the SDK key or body.
-- `reqwest` errors can include the request URL; the URL holds only `base_url` and the key, no
-  secrets (the key is a header).
+- `reqwest` errors are logged with `without_url()`: the URL holds only `base_url` and the key
+  (the SDK key is a header), but a `base_url` with userinfo would otherwise reach the log.
 - A timeout (`Config::timeout`) is a transport error: fallback.
 
 ## 11. Testing approach

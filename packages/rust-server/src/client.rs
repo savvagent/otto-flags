@@ -79,6 +79,11 @@ impl FlagClient {
     /// Results are cached for `Config::cache_ttl` per flag key and evaluation context (the
     /// context as sent, after `application_id` is filled in): a different context, such as
     /// another user or other attributes, is evaluated by the server.
+    ///
+    /// A lookup does not return `Err`. Any failure (an invalid key or `base_url`, the server
+    /// unreachable or timing out, a non-2xx status, a response that is not the evaluate
+    /// response) gives the flag's configured default with `reason: "error"`, is logged at
+    /// `warn`, and is not cached. The `Result` is kept for compatibility.
     pub async fn evaluate(
         &self,
         flag_key: &str,
@@ -146,42 +151,35 @@ impl FlagClient {
                 configuration,
                 variation,
                 reason: "cached".to_string(),
-                metadata: None,
+                metadata: cached_entry.metadata.clone(),
             });
         }
 
-        // Make API request
-        let url = self.evaluate_url(flag_key)?;
-        let body = json!({ "context": ctx });
-
-        let response = self
-            .http_client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_msg = format!("API error: {}", response.status());
-            tracing::error!("{}", error_msg);
-            return self.get_default_result(flag_key);
-        }
-
-        // Parse response
-        let data: serde_json::Value = response.json().await?;
-
-        let value = data["enabled"]
-            .as_bool()
-            .or_else(|| self.config.defaults.get(flag_key).copied())
-            .unwrap_or(false);
+        let data = match self.fetch(flag_key, &ctx).await {
+            Ok(data) => data,
+            Err(why) => {
+                tracing::warn!(
+                    "Flag {:?} lookup failed ({}); using its default",
+                    flag_key,
+                    why
+                );
+                return self.get_default_result(flag_key);
+            }
+        };
+        let value = data["enabled"].as_bool().unwrap_or_default();
 
         // The server always sends the key, as `null` when the flag has no configuration;
         // `null` means absent (`object?` in docs/SDK-DEVELOPER-GUIDE.md).
         let mut configuration = data.get("configuration").filter(|v| !v.is_null()).cloned();
         let mut variation = data["variation"].as_str().map(String::from);
 
-        // Cache the result (including configuration and variation) for this context
+        let metadata = Metadata {
+            version: data["version"].as_i64(),
+            scope: data["scope"].as_str().map(String::from),
+            ..Metadata::default()
+        };
+
+        // Cache the result (including configuration, variation and metadata) for this context
         if let Some(key) = ctx_key {
             self.cache.set(
                 flag_key,
@@ -189,6 +187,7 @@ impl FlagClient {
                 value,
                 configuration.clone(),
                 variation.clone(),
+                Some(metadata.clone()),
             );
         }
 
@@ -214,12 +213,6 @@ impl FlagClient {
             }
         }
 
-        let metadata = Metadata {
-            flag_id: data["flag_id"].as_str().map(String::from),
-            description: data["description"].as_str().map(String::from),
-            variant: data["variant"].as_str().map(String::from),
-        };
-
         tracing::debug!("Flag '{}' evaluated: {}", flag_key, value);
 
         Ok(EvaluationResult {
@@ -230,6 +223,32 @@ impl FlagClient {
             reason: "evaluated".to_string(),
             metadata: Some(metadata),
         })
+    }
+
+    /// POST the evaluate request and return the response body, which is known to carry a
+    /// boolean `enabled`; or a short description of why not, for the log.
+    async fn fetch(&self, flag_key: &str, ctx: &Context) -> Result<serde_json::Value, String> {
+        let url = self.evaluate_url(flag_key).map_err(|e| e.to_string())?;
+        let response = self
+            .http_client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&json!({ "context": ctx }))
+            .send()
+            .await
+            // The URL is already in the log line's context; drop it from the error text.
+            .map_err(|e| format!("request failed: {}", e.without_url()))?;
+        if !response.status().is_success() {
+            return Err(format!("status {}", response.status()));
+        }
+        let data: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| "the body is not JSON".to_string())?;
+        if !data["enabled"].is_boolean() {
+            return Err("the body has no boolean `enabled`".to_string());
+        }
+        Ok(data)
     }
 
     /// `<base_url>/api/flags/<key>/evaluate`, with the key as one encoded path segment and any
@@ -244,7 +263,7 @@ impl FlagClient {
         Ok(url)
     }
 
-    /// Check if a flag is enabled (convenience method)
+    /// Check if a flag is enabled (convenience method); the default on any failure
     pub async fn is_enabled(&self, flag_key: &str, context: Option<Context>) -> bool {
         match self.evaluate(flag_key, context).await {
             Ok(result) => result.value,
@@ -256,7 +275,8 @@ impl FlagClient {
     }
 
     /// Get dynamic configuration for a flag (Phase 1)
-    /// Returns configuration if flag is enabled, otherwise returns None
+    /// Returns configuration if flag is enabled, otherwise returns None. Like `evaluate`, a
+    /// lookup failure falls back (to `None`) rather than returning `Err`.
     pub async fn get_config(
         &self,
         flag_key: &str,
@@ -272,7 +292,8 @@ impl FlagClient {
     }
 
     /// Get variation details for multi-variant flags (Phase 2)
-    /// Returns variation name, enabled status, and configuration
+    /// Returns variation name, enabled status, and configuration. Like `evaluate`, a lookup
+    /// failure falls back (to `"control"` and the default) rather than returning `Err`.
     pub async fn get_variation(
         &self,
         flag_key: &str,
