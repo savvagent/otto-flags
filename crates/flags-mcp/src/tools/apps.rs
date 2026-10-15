@@ -59,7 +59,8 @@ impl Flags {
     #[tool(
         name = "list_apps",
         description = "The apps in this organization (each codebase or service that evaluates \
-                       flags), with their environments and public client keys. Free."
+                       flags), with their environments and public client keys. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn list_apps(
         &self,
@@ -79,7 +80,12 @@ impl Flags {
         name = "create_app",
         description = "Register an app (a codebase or service that will evaluate flags) and issue \
                        its SDK keys. Returns the server key once; tell the person to store it as a \
-                       secret. Needs the apps:admin scope and an owner or admin role."
+                       secret. Needs the apps:admin scope and an owner or admin role.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     pub async fn create_app(
         &self,
@@ -106,7 +112,12 @@ impl Flags {
     #[tool(
         name = "update_app",
         description = "Replace an app's list of environments. Needs the apps:admin scope and an \
-                       owner or admin role."
+                       owner or admin role.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn update_app(
         &self,
@@ -131,7 +142,12 @@ impl Flags {
         name = "rotate_app_keys",
         description = "Replace an app's SDK key(s). The old key stops working at once, so the new \
                        one must be deployed promptly. Use when a server key may have leaked. Needs \
-                       the apps:admin scope and an owner or admin role."
+                       the apps:admin scope and an owner or admin role.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn rotate_app_keys(
         &self,
