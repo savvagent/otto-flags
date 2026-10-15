@@ -29,6 +29,8 @@ through a capped chunk reader.
 - Invariants: a lookup never returns `Err` or panics into the host; the SDK REST contract and
   request shape are unchanged; MIT package, no server code copied; public API changes are only
   `Config::failure_cooldown` + `Config::with_failure_cooldown` (spec §3).
+- Only `packages/rust-server` changes: the `crates/` workspace gates and `podman build` do not
+  apply; post-merge verification is health only (spec §9).
 - No version bump; the crate is unpublished. No changeset (not a pnpm package).
 - Worktree only; trunk changes only through the PR.
 - Commit format: `feat(sdk): <imperative, lower-case>`, a why-body ending `Fixes #111`; no
@@ -93,11 +95,9 @@ Steps:
   `"Wed, 21 Oct 2015 07:28:00 GMT"`.
 - [ ] Add `mod backoff;` to `lib.rs` and the type stubs so the tests compile; run `cargo test
   --locked --lib` from `packages/rust-server` and see the new tests fail.
-- [ ] Implement; run `cargo test --locked --lib` and see them pass; run `cargo clippy --locked
-  --all-targets -- -D warnings` (the module is unused by the client until Task 2: add no
-  `allow(dead_code)`; instead do Task 1 and Task 2 in one commit if clippy flags dead code).
-- [ ] Do not commit separately if dead-code warnings would fail clippy; otherwise commit
-  `feat(sdk): add a cooldown window for failed rust sdk lookups` with a why-body, `Refs #111`.
+- [ ] Implement; run `cargo test --locked --lib` and see them pass. No commit: the module has no
+  non-test caller until Task 2, so clippy's dead-code lint fails until then (add no
+  `allow(dead_code)`). Tasks 1 and 2 run in one dispatch and land in Task 2's commit.
 
 ### Task 2: Skip lookups during a cooldown and cap the body
 
@@ -151,7 +151,12 @@ Steps:
      `{"enabled":false,"pad":"<MAX+1 bytes of x>"}` for `big` (wiremock sets `Content-Length`) →
      `reason == "error"`, value = default `true`; then `other` (200 `{"enabled":true}`) evaluates
      (per-flag scope). The chunk-loop path (no `Content-Length`) cannot be produced with wiremock;
-     cover it with a unit test of the cap arithmetic if extracted, else note it in the report.
+     And `an_oversized_body_without_content_length_falls_back`: a `tokio::net::TcpListener` on
+     `127.0.0.1:0` that answers one request with `HTTP/1.1 200 OK`, `Transfer-Encoding: chunked`,
+     and MAX+1 bytes in several chunks, then closes; the lookup returns the default with `reason
+     == "error"`. And `a_body_exactly_at_the_cap_is_read`: a 200 JSON body of exactly
+     `MAX_RESPONSE_BYTES` bytes with `"enabled":true` (pad a string field to size) evaluates with
+     `reason == "evaluated"` (default `false`).
   5. `a_zero_cooldown_asks_the_server_every_time`: zero cooldown, 500, two lookups → 2 requests.
 - [ ] Run `cargo test --locked --test backoff_test`, see it fail (compile error on
   `with_failure_cooldown` counts as failing first).
@@ -160,9 +165,11 @@ Steps:
   `tests/dynamic_config_test.rs`, `tests/override_test.rs`, `tests/telemetry_test.rs`) that fails
   because a later lookup on the same client is now skipped gets `.with_failure_cooldown(
   Duration::ZERO)` and a comment saying why (known: `unknown_flag_falls_back_to_the_default`,
-  `falls_back_uncached_on`). Change nothing else in them; list each in the report.
-- [ ] Run all gates (SDK fmt/clippy/test; example fmt/clippy). Record per-binary counts.
+  `falls_back_uncached_on`). Also add it to `server_error_falls_back_to_the_default` and
+  `an_unreachable_server_falls_back_to_the_default`, whose later calls are meant to reach the
+  server. Import `std::time::Duration` where needed. Change nothing else; list each in the report.
 - [ ] Update README and doc comments.
+- [ ] Run all gates (SDK fmt/clippy/test; example fmt/clippy). Record per-binary counts.
 - [ ] Commit `feat(sdk): back off after failed rust sdk lookups and cap the response read`, why-body,
   `Fixes #111`.
 
