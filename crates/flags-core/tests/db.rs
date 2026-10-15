@@ -5509,14 +5509,13 @@ async fn app_with_key(db: &Db, org: OrgId) -> String {
     issued.client_key.unwrap()
 }
 
-/// Unpinned lookups (key resolution, the revocation check) read `public`, not
-/// a shadowing `otto_app` schema that says the org is deleted and holds no keys.
+/// The revocation check reads `public`, not a shadowing `otto_app` schema
+/// that says the org is deleted.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
-async fn unpinned_lookups_ignore_a_shadowing_schema(pool: PgPool) {
+async fn revocation_checks_ignore_a_shadowing_schema(pool: PgPool) {
     let db = db(pool.clone()).await;
     let org = OrgId::new();
-    let key = app_with_key(&db, org).await;
-    shadow_schema(&pool, &["deleted_orgs", "app_keys"]).await;
+    shadow_schema(&pool, &["deleted_orgs"]).await;
     sqlx::query("INSERT INTO otto_app.deleted_orgs (org_id) VALUES ($1)")
         .bind(org)
         .execute(&pool)
@@ -5525,6 +5524,16 @@ async fn unpinned_lookups_ignore_a_shadowing_schema(pool: PgPool) {
     assert!(!platform_events::revoked(&db, org, UserId::new())
         .await
         .unwrap());
+}
+
+/// Key resolution reads `public`, not a shadowing `otto_app` schema that
+/// holds no keys.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn key_resolution_ignores_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let key = app_with_key(&db, org).await;
+    shadow_schema(&pool, &["app_keys", "deleted_orgs"]).await;
     let owner = keys::resolve(&db, &key)
         .await
         .unwrap()

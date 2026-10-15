@@ -62,9 +62,10 @@ pub(crate) async fn begin_as_tenant_role(
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
     let mut tx = db.pool().begin().await?;
     // One round trip for the probes, the marker, the role switch, and the
-    // search path (these run on every SDK key lookup). The probes are a MATERIALIZED CTE so they
-    // read `current_user` before the outer select list can switch the role.
-    // Each `set_config` sits in its own select-list column inside a CASE: a
+    // search path (these run on every SDK key lookup). The probes are a
+    // MATERIALIZED CTE so they read `current_user` before the outer select
+    // list can switch the role. Each conditional `set_config` sits in its own
+    // select-list column inside a CASE: a
     // volatile function in a CASE arm runs only when that arm is taken, and
     // a column of its own is never skipped the way one operand of a boolean
     // expression can be. Exemption is a role attribute, never inherited
