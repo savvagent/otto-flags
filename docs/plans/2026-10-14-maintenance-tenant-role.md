@@ -38,7 +38,7 @@ not-assumable fallback, and that every caller still works across orgs on the sup
   queries only (no `query!`); small shared database (no extra connection, no fan-out); no
   migration (append-only rule untouched).
 - Commit format: `<type>(<scope>): <imperative, lower-case>`, body explains why and ends
-  `Refs #73` (the PR body carries `Fixes #73`). No attribution of any kind (no Co-Authored-By, no
+  `Fixes #73`. No attribution of any kind (no Co-Authored-By, no
   "Generated with", no credit markers).
 
 ## File Structure
@@ -213,7 +213,7 @@ production's pool connects as a superuser, so background sweeps, the
 checker's backstop, and the usage shipper ran RLS-exempt. Drop into the
 tenant role as pinned transactions do, when it can be assumed.
 
-Refs #73"
+Fixes #73"
 ```
 
 ---
@@ -311,20 +311,20 @@ async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
     assert_eq!(telemetry::sweep(&db).await.unwrap(), 6);
     assert_eq!(platform_events::sweep(&db, keep_days).await.unwrap(), 2);
     for table in ["flag_errors", "flag_eval_hourly", "rollback_events", "platform_events"] {
-        let orgs_left: Vec<OrgId> = sqlx::query_scalar(&format!(
-            "SELECT org_id FROM {table} ORDER BY org_id"
-        ))
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-        let mut expected = orgs.to_vec();
+        // Uuid orders bytewise, as Postgres orders uuid; OrgId has no Ord.
+        let orgs_left: Vec<uuid::Uuid> =
+            sqlx::query_scalar(&format!("SELECT org_id FROM {table} ORDER BY org_id"))
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let mut expected: Vec<uuid::Uuid> = orgs.iter().map(|o| o.as_uuid()).collect();
         expected.sort();
         assert_eq!(orgs_left, expected, "{table}: each org keeps its fresh row");
     }
 }
 ```
 
-If `policy_fixture`'s signature, `OrgId`'s `Ord`/`Decode`, or the `set_policy` arguments differ
+If `policy_fixture`'s signature or the `set_policy` arguments differ
 from the above, adapt to what the file uses (the existing `unpinned_sweeps_delete_as_otto_app` is
 authoritative) without changing what is asserted.
 
@@ -384,9 +384,6 @@ async fn the_shipper_reaches_every_org_on_the_superuser_pool(pool: PgPool) {
 }
 ```
 
-Check how the mock counts `shipped` for rejected events (`e2e.rs` around line 130–150) and adjust
-only the `shipped` assertion if it differs; the outbox/rejected counts are the point.
-
 - [ ] **Step 3: Run both tests.**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db sweeps_reach_every_org_on_the_superuser_pool`
@@ -394,7 +391,8 @@ and `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -
 Expected: 1 passed each, not skipped. (These pass with or without Task 1 — a superuser sees every
 org — so there is no red step; Task 1's unit test is what shows they now run as `otto_app`.)
 
-- [ ] **Step 4: Full gates.** test, lint, format as in Global Constraints.
+- [ ] **Step 4: Full gates.** Run `cargo fmt --all` first (rustfmt will re-wrap these snippets),
+  then test, lint, and format as in Global Constraints.
 
 - [ ] **Step 5: Commit.**
 
@@ -406,7 +404,7 @@ The sweeps and the usage shipper now run as otto_app even on the
 superuser test pool, so two-org tests there show the marker policies
 still let them reach every org.
 
-Refs #73"
+Fixes #73"
 ```
 
 ---
@@ -437,7 +435,9 @@ Refs #73"
   run directly on the pool without pinning an org still runs as the superuser attach role, which
   RLS does not apply to; request paths pin through `begin_live`. A release from before #73 runs
   its background work as the attach role, so it keeps working during the rollout overlap and
-  after a rollback. Ad-hoc diagnostics as a role subject to RLS need
+  after a rollback. Under a pool role subject to RLS, a release from before `0005` ships no usage
+  while it runs against that schema, and the rows wait in the outbox until a newer release ships
+  them. Ad-hoc diagnostics as a role subject to RLS need
   `SET LOCAL app.maintenance = 'on'` in their transaction to see across orgs.
 ```
 
@@ -446,7 +446,9 @@ Refs #73"
   and sets the `app.maintenance` marker the unpinned RLS policies require." Re-wrap to the
   file's ~100-column width.
 
-- [ ] **Step 3: Gates.** `cargo fmt --all -- --check` (docs only; no code change).
+- [ ] **Step 3: Gates.** `cargo fmt --all -- --check`; the migrations extra gate
+  (`git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` prints
+  nothing); `podman build -t otto-flags:check .` (the image builds with Task 1's change).
 
 - [ ] **Step 4: Commit.**
 
@@ -457,5 +459,5 @@ git commit -m "docs: maintenance transactions run as otto_app
 The RLS notes said the marker changes nothing in production; it now
 does, because maintenance transactions drop into the tenant role.
 
-Refs #73"
+Fixes #73"
 ```
