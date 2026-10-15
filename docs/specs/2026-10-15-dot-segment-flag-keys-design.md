@@ -32,7 +32,7 @@ From #105 (found while working #95):
    `validate_key` already returns for every other malformed key: `Error::Invalid`
    (`invalid_argument`). Reusing `invalid_key` would tell an agent its credentials are wrong.
 2. **`create_flag` is the only path that sets a key.** `validate_key` has one caller
-   (`FlagsExt::create_flag`, `flags.rs:273`), and no statement in `flags-core` updates
+   (`FlagsExt::create_flag`), and no statement in `flags-core` updates
    `feature_flags.key` (keys "cannot be changed later", per the `create_flag` tool doc). Restore,
    rollback, and update address an existing flag by key and never set one.
 
@@ -72,8 +72,8 @@ change to stored data.
 ## 6. Architecture
 
 - `crates/flags-core/src/flags.rs` `validate_key`: after the charset check, refuse
-  `key == "." || key == ".."` with `Error::Invalid("flag key {key:?} is a URL dot segment; SDKs
-  cannot evaluate it over REST")`-style wording. The check runs on the trimmed key, as the stored
+  `.` and `..` with `Error::Invalid`: "flag key \".\" is a URL dot segment, which SDKs cannot
+  evaluate over REST; choose another key". The check runs on the trimmed key, as the stored
   key is the trimmed key.
 - `crates/flags-mcp/src/tools/flags.rs` `CreateFlagArgs::key` doc: add "not '.' or '..'". This
   changes the tool's JSON-schema description text only (no field, type, or name changes).
@@ -125,7 +125,7 @@ None: no secret, config key, scope, migration, or registration.
 
 - Unit test beside `validate_key` (`flags.rs` `mod tests`): refused and accepted cases above.
 - `crates/flags-core/tests/db.rs`: `create_flag` with `..` returns `invalid_argument`, and
-  `list`/`get` afterwards finds no such flag.
+  `list_flags` (archived included) afterwards is empty.
 - Gates: workspace test, clippy, fmt, migrations-unchanged check, `podman build`.
 
 ## 12. Risks & open questions

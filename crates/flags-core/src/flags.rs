@@ -148,8 +148,8 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
-/// A flag key, trimmed. `.` and `..` are refused although their characters are
-/// allowed: SDKs send the key as a URL path segment (`POST
+/// Validates and trims a flag key. `.` and `..` are refused although their
+/// characters are allowed: SDKs send the key as a URL path segment (`POST
 /// /api/flags/{key}/evaluate`, `POST /api/evaluate/{key}`), where URL parsers
 /// resolve them as dot segments and the request reaches another route (#105).
 fn validate_key(key: &str) -> Result<String> {
@@ -165,7 +165,7 @@ fn validate_key(key: &str) -> Result<String> {
             "flag key {key:?} may contain only letters, digits, '-', '_' and '.'"
         )));
     }
-    if key == "." || key == ".." {
+    if matches!(key, "." | "..") {
         return Err(Error::Invalid(format!(
             "flag key {key:?} is a URL dot segment, which SDKs cannot evaluate over REST; \
              choose another key"
