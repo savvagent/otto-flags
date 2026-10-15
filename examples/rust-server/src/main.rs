@@ -1,8 +1,8 @@
 //! Example Axum server that evaluates Otto Flags with the Rust server SDK.
 //!
 //! Configuration comes from the environment (see `Settings::from_env`):
-//! `OTTO_FLAGS_SDK_KEY` (required), `OTTO_FLAGS_API_URL`, `OTTO_FLAGS_ENVIRONMENT`, and `PORT`;
-//! `RUST_LOG` sets the log filter.
+//! `OTTO_FLAGS_SDK_KEY` (required: the app's server key `srv_...`, or its client key `sdk_...`),
+//! `OTTO_FLAGS_API_URL`, `OTTO_FLAGS_ENVIRONMENT`, and `PORT`; `RUST_LOG` sets the log filter.
 
 use axum::{
     extract::{Query, State},
@@ -50,7 +50,7 @@ impl Settings {
     fn from_env(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let var = |name: &str| lookup(name).filter(|v| !v.is_empty());
         let sdk_key = var("OTTO_FLAGS_SDK_KEY")
-            .ok_or("OTTO_FLAGS_SDK_KEY is not set; use the app's SDK key (sdk_...)")?;
+            .ok_or("OTTO_FLAGS_SDK_KEY is not set; use the app's server key (srv_...)")?;
         let port = match var("PORT") {
             Some(p) => p
                 .parse()
@@ -143,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let state = AppState {
-        flags,
+        flags: flags.clone(),
         environment: settings.environment,
     };
 
@@ -158,8 +158,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Server listening on {}", listener.local_addr()?);
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    // Send the evaluations still queued for telemetry before exiting.
+    flags.flush().await;
     Ok(())
+}
+
+/// Resolves on Ctrl-C, or on SIGTERM (how containers and Fly stop a process).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("cannot listen for Ctrl-C: {e}");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("cannot listen for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("Shutting down");
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -273,6 +306,13 @@ mod tests {
         assert_eq!(settings.api_url, "http://localhost:8080");
         assert_eq!(settings.environment, "staging");
         assert_eq!(settings.port, 9000);
+    }
+
+    #[test]
+    fn a_server_key_is_accepted() {
+        let settings = Settings::from_env(lookup(&[("OTTO_FLAGS_SDK_KEY", "srv_abc")])).unwrap();
+        assert_eq!(settings.sdk_key, "srv_abc");
+        assert!(FlagClient::new(Config::new(&settings.sdk_key)).is_ok());
     }
 
     #[test]

@@ -40,7 +40,8 @@ Acceptance criteria (#93):
   text field truncated client-side to the server's limit (on a char boundary) so a batch stays
   well under the body limit.
 - **Which lookups count.** Only results that carry the server's answer (`reason` `"evaluated"` or
-  `"cached"`), with the value and variation returned to the host. A fallback (`"error"`) is not
+  `"cached"`), with the server's (or cached) value and variation, not a local variation override,
+  which would skew flag health. A fallback (`"error"`) is not
   an evaluation of the flag, and a refused key names no flag. One event per lookup, cached or not:
   the server counts lookups.
 - **Errors are explicit.** New `FlagClient::track_error(ErrorReport)`; `ErrorReport::new(flag_key,
@@ -48,14 +49,20 @@ Acceptance criteria (#93):
   `ErrorReport::from_error(flag_key, flag_enabled, &error)` (type from `std::any::type_name`,
   message from `Display`). The SDK cannot see host errors on its own.
 - **Delivery.** Events queue in memory and are sent in batches: every 5 s by a background task,
-  as soon as either queue reaches 100 events, and on `FlagClient::flush().await`. Evaluations go
-  up to 1 000 per request, errors up to 100 (≤ ~1 MB after truncation). The queue is bounded at
+  as soon as either queue reaches 100 events, and on `FlagClient::flush().await`. A request
+  carries at most 1 000 events and about 1 MiB of serialized JSON (measured per event, so
+  multi-byte or escape-heavy text cannot push a batch past the server's 2 MB body limit; a
+  character cap alone would not). The queue is bounded at
   10 000 events per kind; past that, new events are dropped and counted, and the next flush logs
   how many. A failed send (transport error or non-2xx) is logged at `warn` and the batch is
   dropped: telemetry never retries, never blocks or fails a lookup, and never returns `Err`.
 - **Background task.** Started on the first queued event when a Tokio runtime is current
   (`Handle::try_current`), so `FlagClient::new` stays synchronous and never panics outside a
-  runtime. It holds only a `Weak` reference and exits once every clone of the client is dropped.
+  runtime. It waits on a `sleep` (not an `interval`, whose first tick is immediate) or an
+  `Arc<Notify>` it owns, and upgrades its `Weak` reference only to send, so it never keeps the
+  client alive; dropping the last client wakes it and it exits. A drop guard, built before the
+  task is spawned, clears the "running" flag however the task ends (including when its runtime
+  shuts down, even before its first poll), so an event in a later runtime starts a new task.
   A host should call `flush().await` before shutdown; dropped clients do not flush (no async drop).
 - `Config::with_telemetry(bool)` is added; `enable_telemetry: false` queues nothing.
 - Telemetry is sent with whatever key the client holds (the guide: a server SDK uses `srv_`).
@@ -91,13 +98,14 @@ Out: retries and on-disk buffering; SSE (`enable_realtime`); wrapping host callb
 `src/telemetry.rs`:
 
 - `Telemetry { inner: Arc<Inner> }` (Clone), `Inner { http, base_url, api_key, enabled,
-  queues: Mutex<Queues>, wake: tokio::sync::Notify, started: AtomicBool }`,
+  queues: Mutex<Queues>, wake: Arc<Notify>, running: Arc<AtomicBool> }` (`Drop` notifies),
   `Queues { evaluations: Vec<Value>, errors: Vec<Value>, dropped: u64 }`.
 - `track_evaluation(&self, flag_key, result, variation: Option<&str>, environment: Option<&str>)`
   and `track_error(&self, report: ErrorReport)`: no-op if disabled; push under the lock (drop and
   count when at the bound); if a queue reached 100, `wake.notify_one()`; `ensure_flusher()`.
-- `ensure_flusher`: if `Handle::try_current()` is `Ok` and `started` flips false→true, spawn a
-  loop: `select!` on a 5 s sleep and `wake.notified()`; upgrade the `Weak<Inner>` or exit; flush.
+- `ensure_flusher`: if `Handle::try_current()` is `Ok` and `running` flips false→true, spawn a
+  loop: `select!` on a 5 s sleep and `wake.notified()`; upgrade the `Weak<Inner>` or exit; flush;
+  drop the strong reference before waiting again.
 - `flush(&self)`: swap both queues out under the lock (never held across an await), then POST
   chunks to `<base_url>/api/telemetry/evaluations` (`{"evaluations": [...]}`) and `/errors`
   (`{"errors": [...]}`), URL built from path segments like `evaluate_url`.
@@ -114,7 +122,8 @@ its message changes.
 ## 7. Invariants impact
 
 - Never throw on a lookup: telemetry is fire-and-forget; lookups are unchanged in result.
-- SDK REST contract: uses the documented telemetry endpoints and bodies as written in the guide.
+- SDK REST contract: uses the documented telemetry endpoints, sending only fields the server
+  reads (the guide's example omits `variation`, which the server accepts).
 - Evaluations are counted, not stored, and no end-user context persisted: the SDK sends no
   `user_id`/context; error text is the host's own and the server truncates and expires it.
 - Client keys public / server key secret: the key travels only in the `Authorization` header to

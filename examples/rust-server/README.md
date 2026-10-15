@@ -10,23 +10,15 @@ Example Axum server that evaluates Otto Flags with the Otto Flags Rust Server SD
 - Configured fallbacks: `is_enabled` never fails; on any error (unreachable API, a rejected key,
   an unknown flag) the SDK logs it and returns the default set with `Config::with_default`, so a
   flag lookup never breaks a request
-- axum 0.7: `tokio::net::TcpListener` + `axum::serve`
-
-## Known limitations
-
-These are open in the Rust SDK, not in this example, and they matter when you run it against a
-real API:
-
-- The SDK caches results per flag key for 60 seconds, ignoring the context, so one user's result
-  is served to the next ([#91](https://github.com/savvagent/otto-flags/issues/91)).
-- The SDK accepts only the public client key (`sdk_`), not the server key (`srv_`) the SDK guide
-  recommends for servers, and it reports no telemetry
-  ([#93](https://github.com/savvagent/otto-flags/issues/93)).
+- Telemetry: the SDK reports each answered lookup (no user data) for flag health and
+  auto-rollback, and the example calls `flush()` after a graceful shutdown (Ctrl-C or SIGTERM)
+  so queued events are not lost
+- axum 0.7: `tokio::net::TcpListener` + `axum::serve` with graceful shutdown
 
 ## Prerequisites
 
 - Stable Rust and Cargo
-- An Otto Flags app and its SDK key (`sdk_...`). An agent creates the app and gets its keys over
+- An Otto Flags app and its server key (`srv_...`). An agent creates the app and gets its keys over
   MCP (`create_app`); the flags this example reads are `new-ui`, `beta-features`,
   `advanced-analytics`, and `advanced-processing`. A flag that does not exist falls back to the
   example's default, which is off for all four.
@@ -35,7 +27,7 @@ real API:
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
-| `OTTO_FLAGS_SDK_KEY` | yes | | The app's SDK key (`sdk_...`; the SDK rejects other keys) |
+| `OTTO_FLAGS_SDK_KEY` | yes | | The app's server key (`srv_...`, recommended: it is secret, and its telemetry drives auto-rollback) or its public client key (`sdk_...`) |
 | `OTTO_FLAGS_API_URL` | no | `https://otto-flags.savvagent.com` | Otto Flags API base URL |
 | `OTTO_FLAGS_ENVIRONMENT` | no | `development` | Environment flags are evaluated in |
 | `PORT` | no | `8083` | Port the example listens on |
@@ -47,7 +39,7 @@ A variable set to an empty string counts as unset. The server exits with an erro
 ## Run
 
 ```bash
-export OTTO_FLAGS_SDK_KEY=sdk_your_key_here
+export OTTO_FLAGS_SDK_KEY=srv_your_server_key_here
 cargo run --release
 ```
 
