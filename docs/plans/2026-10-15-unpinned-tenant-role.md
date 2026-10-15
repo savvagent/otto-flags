@@ -48,7 +48,7 @@ Model: opus
   `crates/flags-core/src/keys.rs`, `crates/flags-core/src/platform_events.rs`,
   `crates/flags-core/tests/db.rs`, `CLAUDE.md`, `docs/deploy/fly.md`
 
-- [ ] **Step 1: failing tests.** In `unpinned.rs` add `#[sqlx::test(migrator = "crate::MIGRATOR")]`
+- [x] **Step 1: failing tests.** In `unpinned.rs` add `#[sqlx::test(migrator = "crate::MIGRATOR")]`
   tests: `begin_runs_as_the_tenant_role_without_the_marker`,
   `begin_sees_no_tenant_rows` (insert a `flag_apps` row on the superuser pool, count inside the
   transaction is 0), `begin_reads_and_writes_the_pre_org_tables` (insert into `deleted_orgs`,
@@ -56,13 +56,13 @@ Model: opus
   In `tests/db.rs` add `no_raw_pool_queries_outside_the_allowed_sites` with the allowlist
   `flags-core/src/unpinned.rs: 1`, `flags-core/src/migrate.rs: 1`,
   `flags-server/src/health.rs: 1`, `flags-server/src/main.rs: 1`.
-- [ ] **Step 2: run, see them fail** (`cargo test -p flags-core` with `DATABASE_URL`): the unit
+- [x] **Step 2: run, see them fail** (`cargo test -p flags-core` with `DATABASE_URL`): the unit
   tests do not compile; the check reports `keys.rs`, `platform_events.rs`, `maintenance.rs`.
-- [ ] **Step 3: implement.** Move the probe into `unpinned::begin_as_tenant_role`; make
+- [x] **Step 3: implement.** Move the probe into `unpinned::begin_as_tenant_role`; make
   `maintenance::begin` a call to it; switch the four call sites; keep `revoked_on`'s SQL.
-- [ ] **Step 4: run, see them pass**, plus the full gates.
-- [ ] **Step 5: docs.** `CLAUDE.md` invariant bullet: one clause naming `unpinned::begin` and the
+- [x] **Step 4: run, see them pass**, plus the full gates.
+- [x] **Step 5: docs.** `CLAUDE.md` invariant bullet: one clause naming `unpinned::begin` and the
   check. `docs/deploy/fly.md` RLS note: replace "A query run directly on the pool ... still runs as
   the superuser attach role" with the new behavior.
-- [ ] **Step 6: commit** `refactor(core): run unpinned queries as the tenant role`, body explains
+- [x] **Step 6: commit** `refactor(core): run unpinned queries as the tenant role`, body explains
   why, ends `Fixes #80`.

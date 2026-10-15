@@ -1,6 +1,6 @@
 # Unpinned queries run as the tenant role
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#100)
 **Issue:** #80
 
 ## 1. Brief
