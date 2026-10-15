@@ -2995,15 +2995,20 @@ async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
     }
 }
 
-/// Rejected usage events are kept for operators for
-/// `usage::REJECTED_RETENTION_DAYS`, then swept across every org (#74), as
-/// `otto_app` in a maintenance transaction (#73) even on this superuser pool.
+/// Rejected usage events are kept `usage::REJECTED_RETENTION_DAYS` days for
+/// operators, then swept across every org (#74), in a maintenance transaction
+/// (as `otto_app` even on this superuser pool; `maintenance`'s tests prove the
+/// role). A row a day inside the window pins the cutoff and its unit.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn rejected_usage_is_swept_after_its_retention(pool: PgPool) {
     let db = db(pool.clone()).await;
     let orgs = [OrgId::new(), OrgId::new()];
     for org in orgs {
-        for days in [usage::REJECTED_RETENTION_DAYS + 1, 1] {
+        for days in [
+            usage::REJECTED_RETENTION_DAYS + 1,
+            usage::REJECTED_RETENTION_DAYS - 1,
+            1,
+        ] {
             sqlx::query(
                 "INSERT INTO usage_outbox_rejected \
                  (event_id, org_id, user_id, tool, billable, occurred_at, reason, rejected_at) \
@@ -3029,7 +3034,11 @@ async fn rejected_usage_is_swept_after_its_retention(pool: PgPool) {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!((total, expired), (1, 0), "each org keeps its fresh row");
+        assert_eq!(
+            (total, expired),
+            (2, 0),
+            "each org keeps its rows inside the window"
+        );
     }
 }
 

@@ -12,8 +12,8 @@
 //!   on the `(id, attempts)` it set, so a lapsed claim cannot touch a newer
 //!   one's rows.
 //! - **Refused events are kept, then swept.** An event the platform rejects
-//!   outright moves to `usage_outbox_rejected` with its reason, is kept
-//!   [`REJECTED_RETENTION_DAYS`], and goes with its org on `org.deleted`.
+//!   outright moves to `usage_outbox_rejected` with its reason, is kept for
+//!   [`REJECTED_RETENTION_DAYS`] days, and goes with its org on `org.deleted`.
 //! - **Enforcing** reads the platform's cached usage status (and counts this
 //!   org's unshipped rows on top). Off by default. If the platform cannot
 //!   answer, the call is allowed and still recorded.
@@ -435,7 +435,8 @@ pub async fn ship_once(
 
 /// Delete rejected usage events older than [`REJECTED_RETENTION_DAYS`],
 /// across every org, in a maintenance transaction ([`crate::maintenance`]),
-/// which the table's unpinned policies require. Returns how many went.
+/// which the table's unpinned policies require. Returns the number of rows
+/// deleted.
 pub async fn sweep_rejected(db: &Db) -> Result<u64> {
     let mut tx = crate::maintenance::begin(db).await?;
     let swept = sqlx::query(
