@@ -1,21 +1,80 @@
+//! Example Axum server that evaluates Otto Flags with the Rust server SDK.
+//!
+//! Configuration comes from the environment (see `Settings::from_env`):
+//! `OTTO_FLAGS_SDK_KEY` (required), `OTTO_FLAGS_API_URL`, `OTTO_FLAGS_ENVIRONMENT`, and `PORT`.
+
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     routing::{get, post},
     Json, Router,
 };
-use otto_flags::{EvaluationContext, OttoFlagsClient, OttoFlagsConfig};
+use otto_flags::{Config, Context, FlagClient};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// The production Otto Flags API, used when `OTTO_FLAGS_API_URL` is not set.
+const DEFAULT_API_URL: &str = "https://otto-flags.savvagent.com";
+const DEFAULT_ENVIRONMENT: &str = "development";
+const DEFAULT_PORT: u16 = 8083;
+
+/// Flags this example reads, with the value each falls back to when the API cannot be reached.
+const FLAG_DEFAULTS: &[(&str, bool)] = &[
+    ("new-ui", false),
+    ("beta-features", false),
+    ("advanced-analytics", false),
+    ("advanced-processing", false),
+];
+
+/// Settings read from the environment.
+#[derive(Debug, PartialEq, Eq)]
+struct Settings {
+    sdk_key: String,
+    api_url: String,
+    environment: String,
+    port: u16,
+}
+
+impl Settings {
+    /// Reads settings through `lookup` (normally `std::env::var(..).ok()`).
+    fn from_env(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let sdk_key = lookup("OTTO_FLAGS_SDK_KEY")
+            .ok_or("OTTO_FLAGS_SDK_KEY is not set; use the app's SDK key (sdk_...)")?;
+        if !sdk_key.starts_with("sdk_") {
+            return Err("OTTO_FLAGS_SDK_KEY must be an SDK key starting with sdk_".into());
+        }
+        let port = match lookup("PORT") {
+            Some(p) => p
+                .parse()
+                .map_err(|_| format!("PORT is not a port number: {p}"))?,
+            None => DEFAULT_PORT,
+        };
+        Ok(Self {
+            sdk_key,
+            api_url: lookup("OTTO_FLAGS_API_URL").unwrap_or_else(|| DEFAULT_API_URL.into()),
+            environment: lookup("OTTO_FLAGS_ENVIRONMENT")
+                .unwrap_or_else(|| DEFAULT_ENVIRONMENT.into()),
+            port,
+        })
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
-    otto_flags: Arc<OttoFlagsClient>,
+    // `FlagClient` is cheap to clone: its cache and HTTP client are shared.
+    flags: FlagClient,
+    environment: String,
+}
+
+impl AppState {
+    /// An evaluation context for one user in the configured environment.
+    fn context(&self, user_id: &str) -> Context {
+        Context::new()
+            .with_user_id(user_id)
+            .with_environment(&self.environment)
+    }
 }
 
 #[derive(Deserialize)]
@@ -50,45 +109,30 @@ struct HealthResponse {
     status: String,
 }
 
-#[derive(Serialize)]
-struct ErrorResponse {
-    error: String,
-}
-
 #[tokio::main]
-async fn main() {
-    // Initialize tracing
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::registry()
         .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "rust_server_example=info,tower_http=info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "rust_server_example=info,otto_flags=info,tower_http=info".into()
+            }),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // Get configuration from environment
-    let api_url = env::var("OTTO_FLAGS_API_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
-    let sdk_key = env::var("OTTO_FLAGS_SDK_KEY").unwrap_or_else(|_| "your-sdk-key".to_string());
-    let port = env::var("PORT").unwrap_or_else(|_| "8083".to_string());
+    let settings = Settings::from_env(|name| std::env::var(name).ok())?;
 
-    // Initialize Otto Flags client
-    let config = OttoFlagsConfig::builder()
-        .api_url(&api_url)
-        .sdk_key(&sdk_key)
-        .environment("development")
-        .cache_enabled(true)
-        .cache_ttl(60) // 1 minute
-        .build();
-
-    let otto_flags = OttoFlagsClient::new(config)
-        .await
-        .expect("Failed to initialize Otto Flags client");
+    let config = FLAG_DEFAULTS.iter().fold(
+        Config::new(&settings.sdk_key).with_base_url(&settings.api_url),
+        |config, (key, value)| config.with_default(*key, *value),
+    );
+    let flags = FlagClient::new(config)?;
 
     let state = AppState {
-        otto_flags: Arc::new(otto_flags),
+        flags,
+        environment: settings.environment.clone(),
     };
 
-    // Build application routes
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/features", get(get_features))
@@ -96,18 +140,18 @@ async fn main() {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Start server
-    let addr: SocketAddr = format!("0.0.0.0:{}", port)
-        .parse()
-        .expect("Invalid address");
+    let addr = SocketAddr::from(([0, 0, 0, 0], settings.port));
+    let listener = tokio::net::TcpListener::bind(addr).await?;
 
-    tracing::info!("Server starting on {}", addr);
-    tracing::info!("Otto Flags API URL: {}", api_url);
+    tracing::info!("Server listening on {}", listener.local_addr()?);
+    tracing::info!(
+        "Otto Flags API URL: {} (environment: {})",
+        settings.api_url,
+        settings.environment
+    );
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .expect("Failed to start server");
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -116,100 +160,112 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+/// Reports which features are on for a user. `is_enabled` never fails: if the API cannot be
+/// reached it returns the flag's configured default, so this handler always answers.
 async fn get_features(
     State(state): State<AppState>,
     Query(params): Query<FeaturesQuery>,
-) -> Result<Json<FeaturesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let user_id = params.user_id;
-
-    let ctx = EvaluationContext::builder()
-        .user_id(&user_id)
-        .build();
-
-    // Check multiple feature flags
-    let new_ui = state
-        .otto_flags
-        .is_enabled("new-ui", &ctx)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to check feature flags: {}", e),
-                }),
-            )
-        })?;
-
-    let beta_features = state
-        .otto_flags
-        .is_enabled("beta-features", &ctx)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to check feature flags: {}", e),
-                }),
-            )
-        })?;
-
-    let advanced_analytics = state
-        .otto_flags
-        .is_enabled("advanced-analytics", &ctx)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to check feature flags: {}", e),
-                }),
-            )
-        })?;
+) -> Json<FeaturesResponse> {
+    let ctx = state.context(&params.user_id);
 
     let mut features = HashMap::new();
-    features.insert("newUI".to_string(), new_ui);
-    features.insert("betaFeatures".to_string(), beta_features);
-    features.insert("advancedAnalytics".to_string(), advanced_analytics);
+    for (flag, name) in [
+        ("new-ui", "newUI"),
+        ("beta-features", "betaFeatures"),
+        ("advanced-analytics", "advancedAnalytics"),
+    ] {
+        let enabled = state.flags.is_enabled(flag, Some(ctx.clone())).await;
+        features.insert(name.to_string(), enabled);
+    }
 
-    Ok(Json(FeaturesResponse { user_id, features }))
+    Json(FeaturesResponse {
+        user_id: params.user_id,
+        features,
+    })
 }
 
+/// Processes data with the advanced or basic method, gated on `advanced-processing`.
 async fn process_data(
     State(state): State<AppState>,
     Json(request): Json<DataRequest>,
-) -> Result<Json<DataResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let user_id = request.user_id.unwrap_or_else(|| "anonymous".to_string());
+) -> Json<DataResponse> {
+    let user_id = request.user_id.as_deref().unwrap_or("anonymous");
+    let ctx = state
+        .context(user_id)
+        .with_attribute("endpoint", serde_json::json!("/api/data"));
 
-    let mut attributes = HashMap::new();
-    attributes.insert("endpoint".to_string(), "/api/data".to_string());
-
-    let ctx = EvaluationContext::builder()
-        .user_id(&user_id)
-        .attributes(attributes)
-        .build();
-
-    let advanced_processing = state
-        .otto_flags
-        .is_enabled("advanced-processing", &ctx)
+    let method = if state
+        .flags
+        .is_enabled("advanced-processing", Some(ctx))
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to check feature flag: {}", e),
-                }),
-            )
-        })?;
-
-    let method = if advanced_processing {
+    {
         "advanced"
     } else {
         "basic"
     };
 
-    Ok(Json(DataResponse {
+    Json(DataResponse {
         processed: true,
         method: method.to_string(),
         data: request.data,
-    }))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
+        let vars: HashMap<String, String> = vars
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        move |name| vars.get(name).cloned()
+    }
+
+    #[test]
+    fn sdk_key_is_required() {
+        assert!(Settings::from_env(lookup(&[])).is_err());
+    }
+
+    #[test]
+    fn sdk_key_must_be_a_client_sdk_key() {
+        let err = Settings::from_env(lookup(&[("OTTO_FLAGS_SDK_KEY", "srv_abc")])).unwrap_err();
+        assert!(err.contains("sdk_"), "{err}");
+    }
+
+    #[test]
+    fn defaults_to_production_development_and_port_8083() {
+        let settings = Settings::from_env(lookup(&[("OTTO_FLAGS_SDK_KEY", "sdk_abc")])).unwrap();
+        assert_eq!(
+            settings,
+            Settings {
+                sdk_key: "sdk_abc".into(),
+                api_url: "https://otto-flags.savvagent.com".into(),
+                environment: "development".into(),
+                port: 8083,
+            }
+        );
+    }
+
+    #[test]
+    fn every_variable_is_honoured() {
+        let settings = Settings::from_env(lookup(&[
+            ("OTTO_FLAGS_SDK_KEY", "sdk_abc"),
+            ("OTTO_FLAGS_API_URL", "http://localhost:8080"),
+            ("OTTO_FLAGS_ENVIRONMENT", "staging"),
+            ("PORT", "9000"),
+        ]))
+        .unwrap();
+        assert_eq!(settings.api_url, "http://localhost:8080");
+        assert_eq!(settings.environment, "staging");
+        assert_eq!(settings.port, 9000);
+    }
+
+    #[test]
+    fn a_bad_port_is_an_error() {
+        let err = Settings::from_env(lookup(&[("OTTO_FLAGS_SDK_KEY", "sdk_abc"), ("PORT", "x")]))
+            .unwrap_err();
+        assert!(err.contains("PORT"), "{err}");
+    }
 }
