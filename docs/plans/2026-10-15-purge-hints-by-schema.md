@@ -51,7 +51,7 @@ missing-function message adds a catalog query and a `SET SCHEMA public` statemen
 
 **Model:** sonnet
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   Unit tests in `audit_purge.rs`:
   `suggested_statements_name_the_function_by_schema` (owner problem contains
   `format!("ALTER FUNCTION {FUNCTION} OWNER TO")`, grant problem contains
@@ -67,13 +67,13 @@ missing-function message adds a catalog query and a `SET SCHEMA public` statemen
   `ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`; then `RESET ROLE`,
   `ALTER FUNCTION stray.purge_deleted_org_audit(uuid) SET SCHEMA public`, `SET LOCAL ROLE otto_app`;
   `inspect` gives no problems; roll back. Doc comment: it proves the advice (#98).
-- [ ] **Step 2: Run them and see the new ones fail.**
+- [x] **Step 2: Run them and see the new ones fail.**
   `DATABASE_URL=postgres://flags:flags@localhost:15447/otto_flags cargo test -p flags-core audit_purge`
   (the DB test fails on the missing advice, not on setup; the unit tests fail on the unqualified text).
-- [ ] **Step 3: Implement** in `audit_purge.rs`: `purge_name!()` and `purge_function!()` as in the
+- [x] **Step 3: Implement** in `audit_purge.rs`: `purge_name!()` and `purge_function!()` as in the
   spec, defined above their uses; `{FUNCTION}` in the owner, grant, and summary text; the
   missing-function message per spec section 4. Update the two quoted lines in `docs/deploy/fly.md`.
-- [ ] **Step 4: Run the gates and see them pass**, all of Global Constraints.
-- [ ] **Step 5: Commit** `fix(core): name the purge function by schema in the startup hints`, body
+- [x] **Step 4: Run the gates and see them pass**, all of Global Constraints.
+- [x] **Step 5: Commit** `fix(core): name the purge function by schema in the startup hints`, body
   explaining why (a pasted statement could act on a same-named function elsewhere on the
   `search_path`; 0004 will not re-run once recorded), ending `Fixes #98`. No attribution.

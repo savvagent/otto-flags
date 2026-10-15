@@ -5445,3 +5445,36 @@ async fn audit_purge_check_reports_a_missing_function(pool: PgPool) {
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("does not exist"), "{problems:?}");
 }
+
+/// The missing-function advice works (#98): 0004 creates the function
+/// unqualified, so it can land outside `public` while 0004 is recorded as
+/// applied and migrations will not re-run it. The check then reports it
+/// missing and suggests moving it back, and after that move it passes.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
+    let mut tx = pool.begin().await.unwrap();
+    for statement in [
+        "CREATE SCHEMA stray",
+        "ALTER FUNCTION purge_deleted_org_audit(uuid) SET SCHEMA stray",
+        "SET LOCAL ROLE otto_app",
+    ] {
+        sqlx::query(statement).execute(&mut *tx).await.unwrap();
+    }
+    let report = audit_purge::inspect(&mut tx).await.unwrap();
+    assert_eq!(report.owner, None);
+    let problems = report.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    let advice = "ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public";
+    assert!(problems[0].contains(advice), "{problems:?}");
+
+    for statement in [
+        "RESET ROLE".to_string(),
+        advice.replace("<schema>", "stray"),
+        "SET LOCAL ROLE otto_app".to_string(),
+    ] {
+        sqlx::query(&statement).execute(&mut *tx).await.unwrap();
+    }
+    let report = audit_purge::inspect(&mut tx).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert_eq!(report.problems(), Vec::<String>::new());
+}

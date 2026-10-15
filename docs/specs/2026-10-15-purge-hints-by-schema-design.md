@@ -43,7 +43,10 @@ Found by the security review of the #53 fix (#99). Quoted from #98 (untrusted ti
   instead gives the operator a catalog query that finds it and the statement that moves it back.
 - **The remedy for a function outside `public` is `ALTER FUNCTION <schema>.… SET SCHEMA public`.**
   0004 pins the function's own `search_path` and qualifies every table it touches, so moving it
-  does not change what it does; owner and grants move with it. If the query finds nothing, the
+  does not change what it does; owner and grants move with it. This assumes 0004's tables are in
+  `public`, as `PURGE` (#53) and the function body already do; a deployment whose tables also
+  landed elsewhere is out of scope. On Postgres 15+ only a superuser (or the owner holding CREATE
+  on `public`) may move a function into `public`, so the message says "as a superuser". If the query finds nothing, the
   function was dropped, and the message says to recreate it from
   `crates/flags-core/migrations/0004_audit_purge.sql`, since migrations will not.
 - **One source for the name.** The existing private `purge_function!()` macro is split into the
@@ -61,9 +64,10 @@ inspected, and the missing-function message is correct whether or not 0004 has r
   `GRANT EXECUTE ON FUNCTION public.purge_deleted_org_audit(uuid) TO …`, built from `FUNCTION`.
 - `summary()` reads `audit purge … : public.purge_deleted_org_audit(uuid) is owned by …`.
 - The missing-function problem keeps `does not exist` and the run-migrations advice, and adds: if
-  0004 is recorded as applied, find the function (catalog query) and move it into `public`
-  (`ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`), or recreate it from
-  0004's file if it is gone.
+  0004 is recorded as applied (version 4 in `_sqlx_migrations`), find the function (catalog
+  query) and, as a superuser, move it into `public`
+  (`ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`, quoting `<schema>`
+  if it needs it), or recreate it from 0004's file if it is gone.
 - A DB test proves the advice: with the function moved to another schema, the check reports it
   missing with that advice, and after the suggested `SET SCHEMA public` the check passes.
 - Every existing test passes unchanged. No migration.
