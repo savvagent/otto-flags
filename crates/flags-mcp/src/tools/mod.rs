@@ -56,8 +56,8 @@ pub const NAMES: &[&str] = &[
 ];
 
 /// Tools that only read. The rule: no write scope is required and no state
-/// changes; every tool meters a usage row through `Flags::charge`, but a read's
-/// row is not billable. `readOnlyHint = true` lets connector clients run these
+/// changes. Every tool but `propose_rollback` records a usage row through
+/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true` lets connector clients run these
 /// without asking. `propose_rollback` is a dry run and belongs here.
 pub const READ_ONLY: &[&str] = &[
     "whoami",
@@ -91,8 +91,9 @@ pub const DESTRUCTIVE: &[&str] = &[
 
 /// Writes whose repeat has no further effect (`idempotentHint = true`). This
 /// excludes every billable tool, since each call records usage: a repeat is
-/// another charge. Only `remove_rollback_policy` is not billable, and removing
-/// an absent policy changes nothing.
+/// another charge. Of the writes, only `remove_rollback_policy` is not
+/// billable, and removing an absent policy deletes nothing and writes no audit
+/// row; only its non-billable usage row repeats.
 pub const IDEMPOTENT: &[&str] = &["remove_rollback_policy"];
 
 #[cfg(test)]
@@ -166,6 +167,10 @@ mod tests {
         }
     }
 
+    /// Cross-checks the classification against the code. The source scan
+    /// matches names, not behaviour: it catches a read-only tool that checks
+    /// a write scope or admin role, or a write that checks none, in its own
+    /// body (archive and restore delegate to `set_archived`).
     #[test]
     fn read_only_tools_change_nothing() {
         for name in READ_ONLY {
@@ -196,7 +201,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name}: not found in any tool source"));
             assert!(!body.is_empty(), "{name} in {file}: empty body");
             assert!(
-                !body.contains("pub async fn"),
+                !body.contains("\n    pub ")
+                    && !body.contains("\n    async fn ")
+                    && !body.contains("\n    fn "),
                 "{name} in {file}: body runs into the next function"
             );
             let writes = ["FLAGS_WRITE", "APPS_ADMIN", "require_admin", "set_archived"];
