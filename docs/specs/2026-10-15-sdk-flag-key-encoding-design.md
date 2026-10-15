@@ -1,6 +1,6 @@
 # SDKs send the flag key as one path segment
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#118)
 **Issue:** #107
 
 ## 1. Brief

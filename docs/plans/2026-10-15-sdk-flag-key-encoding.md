@@ -102,7 +102,7 @@ they are one task.
 
 **Model:** sonnet
 
-- [ ] Write failing jest tests in both packages, with `global.fetch` mocked. Construct each client
+- [x] Write failing jest tests in both packages, with `global.fetch` mocked. Construct each client
   with `enableRealtime: false, enableTelemetry: false`; otherwise the realtime and telemetry
   calls hit the fetch mock.
   - For each of `a/b`, `a?b`, `a#b`, `.`, `..`, `''`, `bad key` and a 129-character key:
@@ -110,35 +110,35 @@ they are one task.
     `onError` is called once.
   - A valid key, `new-checkout.v2_b`, calls fetch with `<baseUrl>/api/flags/new-checkout.v2_b/evaluate`.
   - The key `...` is valid and fetches.
-- [ ] Run `pnpm --filter @otto-flags/sdk test` and `pnpm --filter @otto-flags/node-server test`
+- [x] Run `pnpm --filter @otto-flags/sdk test` and `pnpm --filter @otto-flags/node-server test`
   and see the new tests fail.
-- [ ] Implement `isValidFlagKey` and the guard in each `client.ts`, and wrap the key in
+- [x] Implement `isValidFlagKey` and the guard in each `client.ts`, and wrap the key in
   `encodeURIComponent`.
-- [ ] Add the two patch changesets. Each is a `.changeset/*.md` file with frontmatter naming the
+- [x] Add the two patch changesets. Each is a `.changeset/*.md` file with frontmatter naming the
   package, and a one-line summary.
-- [ ] Run the full pnpm gate and see it pass. Report the counts per package.
+- [x] Run the full pnpm gate and see it pass. Report the counts per package.
 
 ### Task 2: Python SDK
 
 **Model:** sonnet
 
-- [ ] Write failing tests in `tests/test_client.py` and `tests/test_async_client.py`, with respx
+- [x] Write failing tests in `tests/test_client.py` and `tests/test_async_client.py`, with respx
   routes asserting `called is False` or checking `respx` call counts. The cases are the same as
   Task 1, and each also asserts that `on_error` received an `InvalidFlagKeyError`. A valid key
   hits `/api/flags/new-checkout.v2_b/evaluate`.
-- [ ] Run pytest and see the new tests fail.
-- [ ] Implement:
+- [x] Run pytest and see the new tests fail.
+- [x] Implement:
   - `_flag_key.py` with `is_valid_flag_key(key: str) -> bool` and `describe_flag_key(key) -> str`
     (the bounded repr plus the length).
   - `InvalidFlagKeyError(OttoFlagsError)`, exported from `otto_flags`.
   - The guard at the top of both `evaluate` methods, and the `quote(flag_key, safe="")` URL.
-- [ ] Run the full Python gate and see it pass (pytest count, mypy, ruff).
+- [x] Run the full Python gate and see it pass (pytest count, mypy, ruff).
 
 ### Task 3: Go SDK
 
 **Model:** sonnet
 
-- [ ] Write a test in a new file `packages/go-server/flagkey_test.go`. The existing
+- [x] Write a test in a new file `packages/go-server/flagkey_test.go`. The existing
   `client_test.go` uses config fields that no longer exist; do not copy its setup. Use the real
   `Config`: `APIKey` (must start with `sdk_`), `BaseURL`, `EnableRealtime: false`,
   `EnableTelemetry: false`, `Defaults`, `OnError`. Read `types.go` and `NewClient`.
@@ -146,20 +146,20 @@ they are one task.
   - The invalid keys (as in Task 1) give 0 requests, the default value, `Reason == "error"`, and
     `errors.Is(err, ErrInvalidFlagKey)`.
   - A valid key reaches path `/api/evaluate/new-checkout.v2_b`.
-- [ ] Implement:
+- [x] Implement:
   - `var ErrInvalidFlagKey = errors.New(...)`.
   - The check, using a loop or a regexp; regexp `$` in Go matches only at end of text.
   - Name the URL variable something other than `url` for clarity.
   - The guard at the top of `Evaluate`: call `OnError`, then return `c.getDefaultResult(flagKey, err), err`.
   - `url.PathEscape(flagKey)` in the `Sprintf`.
-- [ ] Gate not run. Self-check that it compiles by reading it: imports (`errors`, `net/url`) and
+- [x] Gate not run. Self-check that it compiles by reading it: imports (`errors`, `net/url`) and
   no shadowing. Note in the report that the package's tests cannot compile today.
 
 ### Task 4: Java SDK
 
 **Model:** sonnet
 
-- [ ] Write a test in a new class `packages/java-server/src/test/java/com/savvagent/ottoflags/sdk/FlagKeyTest.java`
+- [x] Write a test in a new class `packages/java-server/src/test/java/com/savvagent/ottoflags/sdk/FlagKeyTest.java`
   with `MockWebServer` (JUnit 5). The existing `FlagClientTest` uses builder methods that no
   longer exist; do not copy its setup. Use the real `FlagClientConfig.builder(apiKey)` with
   `.baseUrl(...)`, `.enableRealtime(false)`, `.enableTelemetry(false)`, `.defaults(...)` and
@@ -167,50 +167,50 @@ they are one task.
   - The invalid keys give `getRequestCount() == 0`, the default value, and reason `"error"`.
   - A valid key's request path is `/api/evaluate/new-checkout.v2_b`.
 
-- [ ] Implement a private static `isValidFlagKey`, and the guard at the top of `evaluate` that
+- [x] Implement a private static `isValidFlagKey`, and the guard at the top of `evaluate` that
   logs, calls `onError`, and returns `new FlagEvaluationResult(flagKey, default, "error", null)`.
   Build the URL as
   `HttpUrl.get(config.getBaseUrl()).newBuilder().addPathSegment("api").addPathSegment("evaluate").addPathSegment(flagKey).build()`.
-- [ ] Gate not run. Self-check the imports (`okhttp3.HttpUrl`) and types.
+- [x] Gate not run. Self-check the imports (`okhttp3.HttpUrl`) and types.
 
 ### Task 5: iOS SDK
 
 **Model:** sonnet
 
-- [ ] Add an `internal init(config: OttoFlagsConfig, session: URLSession)`. The public
+- [x] Add an `internal init(config: OttoFlagsConfig, session: URLSession)`. The public
   `init(config:)` delegates to it with `URLSession(configuration: .default)`.
-- [ ] Write tests in `OttoFlagsClientNetworkTests.swift`. Build the client with a session whose
+- [x] Write tests in `OttoFlagsClientNetworkTests.swift`. Build the client with a session whose
   configuration has `protocolClasses = [MockURLProtocol.self]`, and with `enableWebSocket: false`.
   Record the URLs of requests through `MockURLProtocol.requestHandler`. Count only requests whose
   path ends in `/evaluate` or `/variation`, because polling may fetch other paths.
   - `evaluate` with each invalid key throws `OttoFlagsError.invalidFlagKey` with 0 requests.
   - `getVariation` with an invalid key returns `defaultValue` with 0 requests.
   - A valid key's request URL path is `/v1/flags/new-checkout.v2_b/evaluate`.
-- [ ] Implement:
+- [x] Implement:
   - `case invalidFlagKey(String)`, where the associated message comes from
     `String(reflecting:)` of the 64-character prefix plus the length.
   - A private static `isValidFlagKey` that checks `utf8` bytes.
   - The guard at the top of `evaluate` and `getVariation`.
   - Encoding with the unreserved `CharacterSet`, in both URLs.
-- [ ] Gate not run. Self-check by reading.
+- [x] Gate not run. Self-check by reading.
 
 ### Task 6: Android SDK
 
 **Model:** sonnet
 
-- [ ] Write tests in `OttoFlagsClientNetworkTest.kt`, or a new class beside it, with a client
+- [x] Write tests in `OttoFlagsClientNetworkTest.kt`, or a new class beside it, with a client
   built with `enableLogging = false` so `android.util.Log` is never called. Keep the guard inside
   the existing `try`.
   - `evaluate` with each invalid key returns `Result.failure` and `mockWebServer.requestCount == 0`.
   - `getVariation` returns `defaultValue` with no request.
   - A valid key's `takeRequest().path` is `/v1/flags/new-checkout.v2_b/evaluate`.
-- [ ] Implement a private `isValidFlagKey` and the guard. Build the URL with
+- [x] Implement a private `isValidFlagKey` and the guard. Build the URL with
   `config.apiUrl.toHttpUrl().newBuilder().addPathSegment("v1").addPathSegment("flags").addPathSegment(flagKey).addPathSegment("evaluate"|"variation").build()`,
   importing `okhttp3.HttpUrl.Companion.toHttpUrl`.
-- [ ] No gate. Self-check by reading.
+- [x] No gate. Self-check by reading.
 
 ### Task 7 (orchestrator): commit, review, record
 
-- [ ] Commit each task's files separately (`fix(sdk): …`, ending `Fixes #107`).
-- [ ] Run the final full gates (pnpm, Python), then open the PR. The PR body lists the Go, Java
+- [x] Commit each task's files separately (`fix(sdk): …`, ending `Fixes #107`).
+- [x] Run the final full gates (pnpm, Python), then open the PR. The PR body lists the Go, Java
   and Swift gates as not run (no toolchain) and notes that Android has no gate.
