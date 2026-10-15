@@ -59,7 +59,8 @@ async fn mock_flag(server: &MockServer, flag: &str, template: ResponseTemplate) 
 async fn requests_during_the_cooldown_are_skipped_and_the_next_one_after_reaches_the_server() {
     let server = MockServer::start().await;
     mock_status(&server, ResponseTemplate::new(500)).await;
-    let client = client(server.uri(), Duration::from_millis(300), &["a", "b"]);
+    // Long enough that the skipped lookups below fit inside it on a loaded host.
+    let client = client(server.uri(), Duration::from_secs(1), &["a", "b"]);
 
     let first = client.evaluate("a", None).await.unwrap();
     assert_eq!(first.reason, "error");
@@ -72,7 +73,7 @@ async fn requests_during_the_cooldown_are_skipped_and_the_next_one_after_reaches
     }
     assert_eq!(requests(&server).await, 1, "skipped during the cooldown");
 
-    tokio::time::sleep(Duration::from_millis(350)).await;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
     client.evaluate("a", None).await.unwrap();
     assert_eq!(requests(&server).await, 2, "the first lookup after it");
 }
@@ -179,9 +180,15 @@ async fn an_oversized_body_falls_back_for_that_flag_only() {
     assert_eq!(r.reason, "error");
     assert!(r.value, "the default, not the body's false");
 
-    // Per-flag scope: another flag still reaches the server.
+    // Per-flag scope: another flag still reaches the server, and `big` itself is skipped.
     let other = client.evaluate("other", None).await.unwrap();
     assert_eq!(other.reason, "evaluated");
+    assert_eq!(client.evaluate("big", None).await.unwrap().reason, "error");
+    assert_eq!(
+        requests_to(&server, "big").await,
+        1,
+        "skipped the second time"
+    );
 }
 
 #[tokio::test]
@@ -229,11 +236,13 @@ async fn a_body_exactly_at_the_cap_is_read() {
             .set_body_bytes(body_of_len(MAX)),
     )
     .await;
-    let mut config = Config::new(KEY)
-        .with_base_url(server.uri())
-        .with_default("edge", false);
-    config = config.with_failure_cooldown(Duration::from_secs(30));
-    let client = FlagClient::new(config).unwrap();
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_default("edge", false)
+            .with_failure_cooldown(Duration::from_secs(30)),
+    )
+    .unwrap();
 
     let r = client.evaluate("edge", None).await.unwrap();
     assert_eq!(r.reason, "evaluated");
@@ -249,4 +258,31 @@ async fn a_zero_cooldown_asks_the_server_every_time() {
     client.evaluate("a", None).await.unwrap();
     client.evaluate("a", None).await.unwrap();
     assert_eq!(requests(&server).await, 2);
+}
+
+#[tokio::test]
+async fn a_cached_answer_is_still_served_during_a_cooldown() {
+    let server = MockServer::start().await;
+    mock_flag(
+        &server,
+        "cached",
+        ResponseTemplate::new(200).set_body_json(json!({ "enabled": false })),
+    )
+    .await;
+    mock_flag(&server, "broken", ResponseTemplate::new(500)).await;
+    let client = client(server.uri(), Duration::from_secs(30), &["cached", "broken"]);
+
+    assert_eq!(
+        client.evaluate("cached", None).await.unwrap().reason,
+        "evaluated"
+    );
+    // A client-wide failure opens a window...
+    assert_eq!(
+        client.evaluate("broken", None).await.unwrap().reason,
+        "error"
+    );
+    // ...but the cached answer, not the default, is still served.
+    let r = client.evaluate("cached", None).await.unwrap();
+    assert_eq!(r.reason, "cached");
+    assert!(!r.value);
 }

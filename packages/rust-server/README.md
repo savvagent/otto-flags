@@ -425,7 +425,9 @@ below) pauses only that flag; any other failure (a timeout, a 5xx, a rejected ke
 that is not an evaluate response) pauses every flag. A `Retry-After` in seconds on a 429 or 503
 lengthens the window, up to 60 seconds; it never shortens it. Cached answers are still served
 during a cooldown, and the first lookup after it goes to the server. The SDK reads at most
-1 MiB of a response body; a larger one is a failed lookup for that flag.
+1 MiB of a response body; a larger one is a failed lookup for that flag. A `base_url` with a wrong
+path prefix makes every flag answer 404, which pauses each flag separately: one warning per flag
+per window.
 
 ```rust
 let result = client.evaluate("my-flag", None).await?;

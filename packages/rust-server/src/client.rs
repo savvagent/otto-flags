@@ -24,37 +24,6 @@ pub enum OttoFlagsError {
     ApiError(String),
 }
 
-/// Read a response body of at most `cap` bytes: checked against `Content-Length` before reading,
-/// and against the bytes read so far otherwise, so no more than the cap plus one chunk is held.
-async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, Failure> {
-    let too_large = || Failure::flag("the body is larger than 1 MiB");
-    if response
-        .content_length()
-        .is_some_and(|len| len > cap as u64)
-    {
-        return Err(too_large());
-    }
-    let mut body = Vec::new();
-    loop {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                if body.len() + chunk.len() > cap {
-                    return Err(too_large());
-                }
-                body.extend_from_slice(&chunk);
-            }
-            Ok(None) => return Ok(body),
-            // A timeout or reset while reading the body.
-            Err(e) => {
-                return Err(Failure::new(format!(
-                    "reading the body failed: {}",
-                    e.without_url()
-                )))
-            }
-        }
-    }
-}
-
 /// Whether the server could hold this flag key, and a URL path can address it.
 ///
 /// Mirrors the server's key rule (1-128 ASCII letters, digits, `-`, `_`, `.`; `validate_key` in
@@ -100,6 +69,37 @@ impl Failure {
         Self {
             scope: Scope::Flag,
             ..Self::new(why)
+        }
+    }
+}
+
+/// Read a response body of at most `cap` bytes: checked against `Content-Length` before reading,
+/// and against the bytes read so far otherwise, so no more than the cap plus one chunk is held.
+async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, Failure> {
+    let too_large = || Failure::flag(format!("the body is larger than {} KiB", cap / 1024));
+    if response
+        .content_length()
+        .is_some_and(|len| len > cap as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > cap {
+                    return Err(too_large());
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(body),
+            // A timeout or reset while reading the body.
+            Err(e) => {
+                return Err(Failure::new(format!(
+                    "reading the body failed: {}",
+                    e.without_url()
+                )))
+            }
         }
     }
 }
@@ -179,9 +179,9 @@ impl FlagClient {
     /// compatibility.
     ///
     /// After a failed lookup, lookups return the default without a request for
-    /// `Config::failure_cooldown` (see there for which lookups it covers), and only the first
-    /// failure of a window is logged. A cached answer is still served. The response body is
-    /// read up to 1 MiB; a larger one is a failed lookup.
+    /// `Config::failure_cooldown` (see there for which lookups it covers), and a window logs one
+    /// warning (plus one per lookup already in flight when it opened). A cached answer is still
+    /// served. The response body is read up to 1 MiB; a larger one is a failed lookup.
     pub async fn evaluate(
         &self,
         flag_key: &str,
