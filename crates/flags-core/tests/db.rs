@@ -5478,3 +5478,76 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
     tx.rollback().await.unwrap();
     assert_eq!(report.problems(), Vec::<String>::new());
 }
+
+/// Every query on the pool's own role, outside a pinned (`begin_live`),
+/// maintenance (`maintenance::begin`), or unpinned (`unpinned::begin`)
+/// transaction, runs as whatever role the pool connects as. In production that
+/// is the superuser attach role, which row-level security does not apply to,
+/// so a raw pool query that named a tenant table would read every org's rows
+/// (#80). Only the sites below may reach the pool directly; each says why. A
+/// new one fails here: route it through `unpinned::begin` (flags-core), or add
+/// it with its reason if it touches no table a tenant role is constrained on.
+///
+/// Textual, over each workspace crate's non-test `src`: comment lines and the
+/// trailing `#[cfg(test)] mod tests` are skipped. It catches `.pool()` and
+/// `begin_unpinned`, the ways `otto_tenant::Db` hands out an unconstrained
+/// connection.
+#[test]
+fn no_raw_pool_queries_outside_the_allowed_sites() {
+    let allowed: BTreeMap<&str, usize> = BTreeMap::from([
+        // The helper itself: opens the transaction it then drops into the
+        // tenant role.
+        ("flags-core/src/unpinned.rs", 1),
+        // Migrations run as the migrating role: DDL, grants, and the
+        // security-definer purge function's owner.
+        ("flags-core/src/migrate.rs", 1),
+        // `/readyz` runs `SELECT 1`: asks about the connection, touches no
+        // table, and must not depend on the tenant role being assumable.
+        ("flags-server/src/health.rs", 1),
+        // The notify listener's dedicated `LISTEN` connection: no table query.
+        ("flags-server/src/main.rs", 1),
+    ]);
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut dirs = vec![crates.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(crates).unwrap();
+            if path.is_dir() {
+                // Every crate's `src`, at any depth below it; never `tests`,
+                // `target`, or `migrations`.
+                let in_src = rel
+                    .components()
+                    .nth(1)
+                    .is_none_or(|c| c.as_os_str() == "src");
+                if in_src {
+                    dirs.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            let code = text
+                .find("#[cfg(test)]\nmod tests")
+                .map_or(text.as_str(), |end| &text[..end]);
+            let n: usize = code
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| l.matches(".pool()").count() + l.matches("begin_unpinned").count())
+                .sum();
+            if n > 0 {
+                found.insert(rel.to_string_lossy().replace('\\', "/"), n);
+            }
+        }
+    }
+    let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        found, allowed,
+        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+    );
+}

@@ -30,6 +30,7 @@ pub mod platform_events;
 pub mod rollback;
 pub mod scopes;
 pub mod telemetry;
+mod unpinned;
 pub mod usage;
 
 pub use error::{Error, Result};

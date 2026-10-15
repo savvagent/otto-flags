@@ -87,7 +87,7 @@ pub(crate) async fn begin_with_marker(db: &Db, maintenance: bool) -> sqlx::Resul
 `begin_with_marker` is today's `maintenance::begin` body (`maintenance.rs:48-91`) with the
 marker made conditional: `CASE WHEN $2 THEN set_config('app.maintenance', 'on', true) END` as the
 first select-list column (a volatile function inside a CASE arm is evaluated only when the arm is
-taken). The error text names the kind ("maintenance" or "unpinned"). `maintenance::begin` becomes
+taken), so the decoded column becomes `Option<String>` (NULL without the marker). The error text names the kind ("maintenance" or "unpinned"). `maintenance::begin` becomes
 `crate::unpinned::begin_with_marker(db, true)`; its tests stay where they are.
 
 Call sites:
@@ -115,7 +115,9 @@ signatures and errors (`Error::Db`).
 ## 7. Invariants impact
 
 - **Tenant isolation, RLS under `otto_app`:** strengthened; unpinned non-maintenance queries now
-  run as `otto_app` and see no tenant row (no pinned org, no marker).
+  run as `otto_app` and read no tenant row (no pinned org, no marker). Writes are what
+  each tenant table's policies allow unpinned: `audit_events_append` admits an unpinned INSERT, as
+  it does for any `otto_app` transaction today; no caller of the helper writes a tenant table.
 - **Request paths use `begin_live`; unpinned cross-org only via `maintenance::begin`:** unchanged.
   `unpinned::begin` grants no cross-org access to tenant tables; it is for the pre-org tables.
   `CLAUDE.md` gets one clause naming it.
@@ -135,8 +137,9 @@ None: no secret, config key, scope, or migration. Rollback-compatible trivially 
 ## 10. Error handling and edge cases
 
 - Pool role exempt and tenant role not assumable, or tenant role exempt: key resolution,
-  revocation checks, and webhook tombstones fail with `Error::Db(Configuration)` (SDK requests
-  503/500, MCP requests 503, webhook 5xx so the platform retries) instead of running
+  revocation checks, and webhook tombstones fail with `Error::Db(Configuration)`, answered as
+  each surface answers any non-transient database error (a 5xx; the webhook's makes the platform
+  retry) instead of running
   unconstrained. Startup's `verify_tenant_isolation` already refuses that configuration, so this
   is reachable only after a runtime role change; it fails closed, as maintenance does.
 - `revoked` failing is already answered 503, never "not revoked".

@@ -62,8 +62,12 @@ const LIFECYCLE_LOCK: i32 = 0x666c_6c63;
 /// platform's cached introspection says. An `Err` is a database failure and
 /// must be answered `503`, not treated as "not revoked".
 pub async fn revoked(db: &Db, org: OrgId, user: UserId) -> Result<bool> {
-    let mut conn = db.pool().acquire().await?;
-    revoked_on(&mut conn, org, Some(user)).await
+    // Unpinned, as the tenant role (`crate::unpinned`): the tombstone tables
+    // are outside RLS.
+    let mut tx = crate::unpinned::begin(db).await?;
+    let revoked = revoked_on(&mut tx, org, Some(user)).await?;
+    tx.commit().await?;
+    Ok(revoked)
 }
 
 async fn revoked_on(
@@ -176,11 +180,14 @@ async fn first_delivery(tx: &mut Tx<'_>, event: &WebhookEvent, kind: &str) -> Re
 
 async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcome> {
     // Tombstone first, on its own, so authentication and SDK keys refuse this
-    // org from now on -- before, not as part of, the purge.
+    // org from now on -- before, not as part of, the purge. Unpinned, as the
+    // tenant role (`crate::unpinned`); `deleted_orgs` is outside RLS.
+    let mut tomb = crate::unpinned::begin(db).await?;
     sqlx::query("INSERT INTO deleted_orgs (org_id) VALUES ($1) ON CONFLICT (org_id) DO NOTHING")
         .bind(org)
-        .execute(db.pool())
+        .execute(&mut *tomb)
         .await?;
+    tomb.commit().await?;
 
     let mut tx = db.begin(org).await?;
     exclude_requests(&mut tx, org).await?;
@@ -244,14 +251,18 @@ async fn member_removed(
     org: OrgId,
     user: UserId,
 ) -> Result<Outcome> {
+    // Unpinned, as the tenant role (`crate::unpinned`); `removed_members` is
+    // outside RLS.
+    let mut tomb = crate::unpinned::begin(db).await?;
     sqlx::query(
         "INSERT INTO removed_members (org_id, user_id) VALUES ($1, $2) \
          ON CONFLICT (org_id, user_id) DO UPDATE SET removed_at = now()",
     )
     .bind(org)
     .bind(user)
-    .execute(db.pool())
+    .execute(&mut *tomb)
     .await?;
+    tomb.commit().await?;
 
     let mut tx = db.begin(org).await?;
     exclude_requests(&mut tx, org).await?;

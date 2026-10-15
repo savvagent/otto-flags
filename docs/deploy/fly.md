@@ -347,9 +347,11 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   (#73), so in production too the marker policies are what let them see across orgs; if the pool's
   role were exempt from RLS and could not assume `otto_app` (or `otto_app` itself were exempt),
   they fail rather than run unconstrained, logged with `reason="configuration"`, so that reason
-  from the shipper, sweeps, or checker backstop after a role change points here. A query
-  run directly on the pool without pinning an org still runs as the superuser attach role, which
-  RLS does not apply to; request paths pin through `begin_live`. A release from before #73 runs
+  from the shipper, sweeps, or checker backstop after a role change points here. Queries
+  that cannot pin an org (SDK key resolution, the revocation check, the lifecycle tombstones) run
+  in `unpinned::begin`, which drops into `otto_app` the same way but sets no marker, so they see
+  no tenant row (#80); request paths pin through `begin_live`. Only migrations, `/readyz`'s
+  `SELECT 1`, and the notify listener's `LISTEN` connection still run as the attach role. A release from before #73 runs
   its background work as the attach role, so it keeps working during the rollout overlap and
   after a rollback. Under a pool role subject to RLS, a release from before `0005` ships no usage
   while it runs against that schema, and the rows wait in the outbox until a newer release ships

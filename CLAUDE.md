@@ -152,6 +152,9 @@ crate module docs.
   sweeps, the rollback checker's due-policy scan, the usage shipper), which runs as `otto_app`
   when the pool can assume it, else as the pool role only if RLS applies to it, refusing
   otherwise, and sets the `app.maintenance` marker the unpinned RLS policies require.
+  Other unpinned queries (key resolution, revocation, tombstones) go through
+  `flags_core::unpinned::begin`: the same role drop, no marker. A new raw `.pool()` query fails
+  `no_raw_pool_queries_outside_the_allowed_sites` (`crates/flags-core/tests/db.rs`).
 - **No SQL outside `flags-core`**, and only runtime `sqlx::query`/`query_as`, never `query!`
   macros (the Docker build has no database).
 - **Client keys are public.** `sdk_` and `srv_` keys are stored as SHA-256 hashes; a client key
