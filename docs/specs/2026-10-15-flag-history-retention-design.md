@@ -42,8 +42,12 @@ deletion triggers (flags are archived, never deleted).
   agents roll back to the previous version or a recent one. 100 is five times the default view
   and keeps any rollback an incident plausibly needs, while bounding one flag's history at 100
   snapshots. A snapshot is the flag's name, description, status, environments, variations and
-  configuration; with part 2's per-flag cap that is at most about 64 KiB, so 100 versions are at
-  most about 6.4 MiB per flag before TOAST compression, and in practice a few hundred KB.
+  configuration. When this ships, the only size bound on a snapshot is #115's per-configuration
+  cap: a flag's configuration plus up to 20 variations' at 32 KiB each, about 672 KiB, plus its
+  rules. So the worst case at merge is about 66 MiB of history per flag before TOAST
+  compression, against unbounded today. Part 2 of #123 (next PR) adds a per-flag total cap; at
+  64 KiB the worst case becomes about 6.4 MiB per flag. Real flags are a few hundred bytes, so
+  100 versions of one are tens of KB.
 - **Pruned synchronously, in the writer's transaction.** `record_version` deletes the flag's
   versions older than the newest 100 right after inserting the new one. It runs in the same
   tenant transaction under the same flag row lock as the write, touches only that flag's rows
@@ -56,6 +60,11 @@ deletion triggers (flags are archived, never deleted).
   rollback, keeps inserting without pruning; the next write by this release prunes. Nothing the
   previous release reads depends on old versions existing: its `rollback_flag` already reports
   `version_not_found` for a missing version.
+- **Pruning also drops who made the pruned changes and why.** `flag_versions` is the audit
+  trail for flag changes (`crates/flags-core/src/audit.rs` leaves them out of `audit_events`
+  for that reason). Accepted: the trail of a flag becomes its newest 100 changes. Copying
+  pruned rows' actor and reason into `audit_events` would move the same unbounded growth to
+  another table. The `audit.rs` module doc is updated to say so.
 - **`rollback_events.flag_version` may name a pruned version.** It records which version an
   auto-rollback created (no foreign key). After 100 further changes that version is gone from
   `flag_history`; the event still says which version it was. Acceptable: the event is the
@@ -79,6 +88,8 @@ behave predictably at the bound.
 ## 5. Scope
 
 **In:** `crates/flags-core/src/flags.rs` (constant, prune in `record_version`, module docs),
+`crates/flags-core/src/audit.rs` (module doc: flag changes are recorded in the newest 100
+versions),
 `crates/flags-core/src/error.rs` (`VersionNotFound` message), the `flag_history` and
 `rollback_flag` tool descriptions (`crates/flags-mcp/src/tools/insight.rs`,
 `crates/flags-mcp/src/tools/flags.rs`), DB tests.
@@ -111,7 +122,10 @@ behave predictably at the bound.
   first: ..."; `rollback_flag` mentions it can restore any version `flag_history` shows.
 - Module docs of `flags.rs` state the retention.
 
-No public interface is added. The MCP tools' output shapes are unchanged.
+No interface is added and no shape changes, but it is a behavior narrowing of the MCP
+contract (not additive): `rollback_flag` to a version more than 100 changes old, which succeeded
+before, now returns `version_not_found`; `flag_history` returns at most 100 rows where it could
+return 200. The SDK REST contract is untouched.
 
 ## 7. Invariants impact
 
@@ -152,6 +166,8 @@ DB tests in `crates/flags-core/tests/db.rs`:
   with `version_not_found` and a message naming the 100-version bound; rollback to 6 (the oldest
   retained) succeeds and restores version 6's state as version 106, after which version 6 is
   pruned and 7..=106 remain; the default rollback works.
+- In the same test, a second flag `g` in the same app with a few versions keeps all of them:
+  pruning touches only the written flag.
 - An existing test that counts `flag_versions` rows stays green (fewer than 100 versions).
 
 Gates: workspace test (dedicated Postgres), clippy, fmt, migrations-unchanged check,
@@ -161,5 +177,7 @@ Gates: workspace test (dedicated Postgres), clippy, fmt, migrations-unchanged ch
 
 - An agent that wants to restore a state more than 100 changes old cannot. That state is in no
   agent's working view (`flag_history` defaults to 20), and the constant is one line to raise.
+- Until part 2 ships, a snapshot can be about 672 KiB, so 100 versions of a maximal flag are
+  about 66 MiB (see section 3). Part 2 follows directly.
 - The prune makes each write slightly heavier (one indexed `DELETE`); negligible next to the
   write's own `UPDATE`, `INSERT`, and `pg_notify`.
