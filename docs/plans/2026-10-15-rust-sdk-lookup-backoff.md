@@ -1,7 +1,7 @@
 # Rust SDK Lookup Backoff and Response Cap Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** After a failed lookup the Rust SDK skips requests for a short cooldown (honouring
 `Retry-After`), logs once per window, and reads at most 1 MiB of an evaluate response.
@@ -84,7 +84,7 @@ Behavior (spec §3, §6):
   out others, #111) and why the map is bounded.
 
 Steps:
-- [ ] Write unit tests in `#[cfg(test)] mod tests` of `backoff.rs` using a fixed `let t0 =
+- [x] Write unit tests in `#[cfg(test)] mod tests` of `backoff.rs` using a fixed `let t0 =
   Instant::now();` and `t0 + Duration::from_millis(..)`:
   client window blocks every flag until it ends (exactly at end → `None`); flag window blocks only
   that flag; `retry_after` longer than cooldown extends the window, capped at 60 s, shorter than
@@ -93,9 +93,9 @@ Steps:
   `client_until`; per-flag map: 256 live entries then a 257th is not recorded, but after they
   expire a new one is (pruned); `parse_retry_after("5")`, `" 7 "`, `"0"`, `"-1"`, `""`,
   `"Wed, 21 Oct 2015 07:28:00 GMT"`.
-- [ ] Add `mod backoff;` to `lib.rs` and the type stubs so the tests compile; run `cargo test
+- [x] Add `mod backoff;` to `lib.rs` and the type stubs so the tests compile; run `cargo test
   --locked --lib` from `packages/rust-server` and see the new tests fail.
-- [ ] Implement; run `cargo test --locked --lib` and see them pass. No commit: the module has no
+- [x] Implement; run `cargo test --locked --lib` and see them pass. No commit: the module has no
   non-test caller until Task 2, so clippy's dead-code lint fails until then (add no
   `allow(dead_code)`). Tasks 1 and 2 run in one dispatch and land in Task 2's commit.
 
@@ -135,7 +135,7 @@ Behavior:
   `Retry-After`, one warning per window, and the 1 MiB cap.
 
 Steps:
-- [ ] Write `tests/backoff_test.rs` (wiremock, same helpers style as `integration_test.rs`, key
+- [x] Write `tests/backoff_test.rs` (wiremock, same helpers style as `integration_test.rs`, key
   `sdk_test_key`), each with `with_default(.., true)` so fallbacks are distinguishable:
   1. `requests_during_the_cooldown_are_skipped_and_the_next_one_after_reaches_the_server`:
      cooldown 300 ms; a 500 mock; count with `server.received_requests()`:
@@ -158,24 +158,24 @@ Steps:
      `MAX_RESPONSE_BYTES` bytes with `"enabled":true` (pad a string field to size) evaluates with
      `reason == "evaluated"` (default `false`).
   5. `a_zero_cooldown_asks_the_server_every_time`: zero cooldown, 500, two lookups → 2 requests.
-- [ ] Run `cargo test --locked --test backoff_test`, see it fail (compile error on
+- [x] Run `cargo test --locked --test backoff_test`, see it fail (compile error on
   `with_failure_cooldown` counts as failing first).
-- [ ] Implement `types.rs`, `client.rs` changes.
-- [ ] Run the whole suite. Every existing test (in `tests/integration_test.rs`,
+- [x] Implement `types.rs`, `client.rs` changes.
+- [x] Run the whole suite. Every existing test (in `tests/integration_test.rs`,
   `tests/dynamic_config_test.rs`, `tests/override_test.rs`, `tests/telemetry_test.rs`) that fails
   because a later lookup on the same client is now skipped gets `.with_failure_cooldown(
   Duration::ZERO)` and a comment saying why (known: `unknown_flag_falls_back_to_the_default`,
   `falls_back_uncached_on`). Also add it to `server_error_falls_back_to_the_default` and
   `an_unreachable_server_falls_back_to_the_default`, whose later calls are meant to reach the
   server. Import `std::time::Duration` where needed. Change nothing else; list each in the report.
-- [ ] Update README and doc comments.
-- [ ] Run all gates (SDK fmt/clippy/test; example fmt/clippy). Record per-binary counts.
-- [ ] Commit `feat(sdk): back off after failed rust sdk lookups and cap the response read`, why-body,
+- [x] Update README and doc comments.
+- [x] Run all gates (SDK fmt/clippy/test; example fmt/clippy). Record per-binary counts.
+- [x] Commit `feat(sdk): back off after failed rust sdk lookups and cap the response read`, why-body,
   `Fixes #111`.
 
 ### Task 3: Record as shipped
 
 Model: haiku
 
-- [ ] After the PR exists: spec `**Status:**` → `IMPLEMENTED (#<PR>)`; tick this plan's boxes;
+- [x] After the PR exists: spec `**Status:**` → `IMPLEMENTED (#<PR>)`; tick this plan's boxes;
   commit `docs(sdk): mark rust sdk lookup backoff implemented`, `Refs #111`.

@@ -1,6 +1,6 @@
 # Rust SDK lookups back off after a failure and read a bounded response
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#117)
 **Issue:** #111
 
 ## 1. Brief
