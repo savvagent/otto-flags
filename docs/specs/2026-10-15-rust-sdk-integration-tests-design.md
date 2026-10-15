@@ -87,8 +87,12 @@ contract.
   `override_test`, with no `#[ignore]`.
 - A ported test fails if the SDK reads `value` instead of `enabled`, or calls `/api/evaluate/{key}`
   (wiremock returns 404 for unmatched routes, which the SDK turns into the default).
-- `.github/workflows/rust-sdk.yml` runs fmt, clippy, and test, all `--locked` where cargo accepts
-  it, on PRs and pushes touching the crate.
+- `.github/workflows/rust-sdk.yml` (job `Rust SDK`, `working-directory: packages/rust-server`,
+  `dtolnay/rust-toolchain@stable` with `rustfmt` and `clippy`; the root `rust-toolchain.toml` also
+  applies there) runs fmt, clippy, and test, all `--locked` where cargo accepts it, on PRs and
+  pushes touching the crate or the workflow.
+- `CLAUDE.md` > Ship > merge gate names the new check: `Rust SDK` succeeded when any changed file
+  matches `packages/rust-server/**` or `.github/workflows/rust-sdk.yml`.
 - `CLAUDE.md` > Gates has no Rust SDK known-red line and no `--keep-going`.
 
 ## 5. Scope
@@ -152,6 +156,9 @@ All in `packages/rust-server/tests/`, against `wiremock::MockServer` with `Confi
   and `"control"` on error; `Config` and `Context` builders set their fields (pure tests).
 - `override_test.rs`: unchanged logic; mocks move to the documented route and `enabled`.
 - `dynamic_config_test.rs`: mocks move to the documented route and `enabled`.
+- Tests do not assert on `Metadata` (`flag_id`, `description`, `variant`): the server sends none of
+  those fields. Each test uses a fresh client, so the per-key cache never hides a second mock;
+  error results are not cached (`get_default_result` returns before `cache.set`).
 - Mocks match the exact route with `path(...)` so a regression to the old route or field fails a
   test (the mock server 404s unmatched requests and the SDK returns the default `false`).
 
