@@ -194,9 +194,10 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
 
     // Children before parents. Every statement names the org (guard 1) in
     // addition to the pinned policy (guard 2); app_keys has no policy and
-    // relies on the predicate alone. usage_outbox_rejected holds user ids
-    // (#74); the shipper cannot re-create a purged org's rows, since it only
-    // records a rejection for an outbox row its own fenced DELETE removed.
+    // relies on the predicate alone. usage_outbox_rejected is purged too: it
+    // holds user ids (#74). The shipper cannot re-create a purged org's rows:
+    // since #67 it records a rejection only for an outbox row its own fenced
+    // DELETE removed, and the purge has already deleted the org's outbox rows.
     let mut deleted = serde_json::Map::new();
     for table in [
         "rollback_events",
