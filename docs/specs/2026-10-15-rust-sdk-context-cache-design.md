@@ -126,14 +126,17 @@ None. SDK-only change: post-merge verification is server health only; the SDK is
 
 Gates (Development Workflow > Gates, `packages/rust-server/**`): `cargo fmt --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked` in
-`packages/rust-server`; `examples/rust-server` fmt and clippy are known red (#16) and compared
-against an `origin/main` baseline.
+`packages/rust-server`; `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D
+warnings`, and `cargo test --locked` in `examples/rust-server` (a path dependent of this crate,
+green since #90).
 
 - `tests/integration_test.rs`: different `user_id`s each get their own answer (A, B, A, B: two
   requests total, second A and B are `cached` with their own values); contexts differing in one
   attribute each get their own answer; identical contexts with attributes inserted in different
-  orders hit the cache.
-- `src/cache.rs` unit tests: `context_key` is order-independent and distinguishes different
+  orders hit the cache; `invalidate_cache(Some(flag))` drops every context's entry (both
+  re-evaluated).
+- `src/cache.rs` unit tests (the per-flag bound is a field, set small by a crate-private
+  constructor in tests): `context_key` is order-independent and distinguishes different
   values; `invalidate(Some(flag))` removes all contexts of that flag only; a full flag map is
   swept/cleared and still accepts the new entry.
 
@@ -141,5 +144,8 @@ against an `origin/main` baseline.
 
 - Hit rate drops for callers that put per-request values (`user_agent`, `ip_address`) in the
   context. Accepted: correctness first; those fields can change targeting.
-- `examples/rust-server` (#16, in flight) depends on this crate by path; the API is unchanged, so
-  its port stays valid.
+- `examples/rust-server` (ported in #90) depends on this crate by path; the API is unchanged, so
+  it still builds and its tests pass.
+- The `context_key` `None` path is untested by design: serializing a `Context` cannot fail.
+- `attributes: None` and `attributes: Some(empty)` get different keys; correct, since the request
+  bodies differ.

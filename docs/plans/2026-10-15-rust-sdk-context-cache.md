@@ -20,9 +20,8 @@ same context for the key and the request.
 
 - Gates, run in `packages/rust-server` with `CARGO_BUILD_JOBS=3` and
   `TMPDIR=$PWD/target/tmp` (mkdir first): `cargo fmt --check`;
-  `cargo clippy --locked --all-targets -- -D warnings`; `cargo test --locked`. Known red (#16):
-  `examples/rust-server` `cargo fmt --check` and `cargo clippy --locked --all-targets -- -D
-  warnings`, compared against an `origin/main` baseline.
+  `cargo clippy --locked --all-targets -- -D warnings`; `cargo test --locked`; the same three in
+  `examples/rust-server` (path dependent of this crate).
 - Evidence: pass counts per test binary; a test that did not run is not a pass.
 - Invariants: SDK REST contract unchanged; client keys never see targeting rules (no local
   evaluation); MIT package, no server code; public API unchanged.
