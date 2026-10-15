@@ -5,10 +5,12 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import okhttp3.*
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -108,7 +110,9 @@ class OttoFlagsClient(
         }
         .build()
 
-    private val flagCache = ConcurrentHashMap<String, CacheEntry>()
+    // flag key -> (context key -> entry): a result is only reused for the context that
+    // produced it. In memory only; bounded per flag by MAX_CONTEXTS_PER_FLAG.
+    private val flagCache = ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>>()
     private val configOverrides = ConcurrentHashMap<String, ConfigOverrideEntry>()
     private val variationOverrides = ConcurrentHashMap<String, VariationOverrideEntry>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -137,8 +141,12 @@ class OttoFlagsClient(
                     return@withContext Result.failure(OttoFlagsException(message))
                 }
 
+                // The context key is computed before the lookup: the cache is per context.
+                val json = evaluationBody(userContext)
+                val ctxKey = contextKey(json)
+
                 // Check cache first
-                flagCache[flagKey]?.let { cached ->
+                flagCache[flagKey]?.get(ctxKey)?.let { cached ->
                     var configuration = cached.configuration
                     var variation = cached.variation
 
@@ -168,7 +176,6 @@ class OttoFlagsClient(
 
                 // Fetch from API
                 val url = evaluateUrl(flagKey)
-                val json = evaluationBody(userContext)
 
                 val request = Request.Builder()
                     .url(url)
@@ -208,8 +215,14 @@ class OttoFlagsClient(
                 var variation = jsonResponse.opt("variation") as? String
 
                 // Update cache
-                flagCache[flagKey] = CacheEntry(enabled, configuration, variation)
-                updateFlagFlow()
+                val perFlag = flagCache.getOrPut(flagKey) { ConcurrentHashMap() }
+                synchronized(perFlag) {
+                    if (perFlag.size >= MAX_CONTEXTS_PER_FLAG && !perFlag.containsKey(ctxKey)) {
+                        perFlag.clear()
+                    }
+                    perFlag[ctxKey] = CacheEntry(enabled, configuration, variation)
+                }
+                _flagUpdates.update { it + (flagKey to enabled) }
 
                 // Apply overrides to evaluated result
                 configOverrides[flagKey]?.let { override ->
@@ -459,14 +472,10 @@ class OttoFlagsClient(
         try {
             val json = JSONObject(message)
             val flagKey = json.getString("flagKey")
-            val enabled = json.getBoolean("enabled")
-            val configuration = if (json.has("configuration")) {
-                json.getJSONObject("configuration").toMap()
-            } else null
-            val variation = if (json.has("variation")) json.getString("variation") else null
 
-            flagCache[flagKey] = CacheEntry(enabled, configuration, variation)
-            updateFlagFlow()
+            // The message carries no context, so it cannot be written to a per-context
+            // entry: drop the flag's entries and let the next evaluation fetch.
+            flagCache.remove(flagKey)
         } catch (e: Exception) {
             logError("Error handling WebSocket message", e)
         }
@@ -501,23 +510,13 @@ class OttoFlagsClient(
                 for (i in 0 until flags.length()) {
                     val flag = flags.getJSONObject(i)
                     val key = flag.getString("key")
-                    val enabled = flag.getBoolean("enabled")
-                    val configuration = if (flag.has("configuration")) {
-                        flag.getJSONObject("configuration").toMap()
-                    } else null
-                    val variation = if (flag.has("variation")) flag.getString("variation") else null
-                    flagCache[key] = CacheEntry(enabled, configuration, variation)
+                    // The list carries no context; invalidate instead of writing.
+                    flagCache.remove(key)
                 }
-
-                updateFlagFlow()
             }
         } catch (e: Exception) {
             logError("Error refreshing flags", e)
         }
-    }
-
-    private fun updateFlagFlow() {
-        _flagUpdates.value = flagCache.mapValues { it.value.value }
     }
 
     private fun logError(message: String, throwable: Throwable? = null) {
@@ -579,12 +578,33 @@ class OttoFlagsClient(
             })
         }
 
+    /**
+     * Cache key for the `context` object of an evaluate body: the same context renders
+     * the same string whatever order its attributes were inserted in.
+     */
+    internal fun contextKey(body: JSONObject): String = canonicalJson(body.get("context"))
+
+    private fun canonicalJson(value: Any?): String = when (value) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(",", "{", "}") { k ->
+            JSONObject.quote(k) + ":" + canonicalJson(value.opt(k))
+        }
+        is JSONArray -> (0 until value.length()).joinToString(",", "[", "]") { i ->
+            canonicalJson(value.opt(i))
+        }
+        is String -> JSONObject.quote(value)
+        else -> value.toString()
+    }
+
     private fun invalidKeyMessage(flagKey: String): String =
         "Invalid flag key ${escapeForMessage(flagKey.take(64))} (${flagKey.length} characters); not evaluated"
 
     companion object {
         private const val TAG = "OttoFlagsClient"
         private const val MAX_FLAG_KEY_LENGTH = 128
+
+        /** Most distinct contexts cached per flag; a full flag map is cleared first. */
+        internal const val MAX_CONTEXTS_PER_FLAG = 10_000
 
         /**
          * Whether [key] is a flag key this SDK will put in a request URL: 1 to 128

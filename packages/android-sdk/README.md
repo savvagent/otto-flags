@@ -274,7 +274,10 @@ val config = OttoFlagsConfig(
 
 ### Caching
 
-The SDK automatically caches flag evaluations to improve performance. Configure polling interval:
+The SDK automatically caches flag evaluations to improve performance. The cache is kept per
+flag and per user context (user id, environment and attributes), so one user's result is never
+returned for another. `flagUpdates` holds the value of each flag's most recent evaluation.
+Configure polling interval:
 
 ```kotlin
 val config = OttoFlagsConfig(
