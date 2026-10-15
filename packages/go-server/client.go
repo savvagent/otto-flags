@@ -119,7 +119,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		return c.getDefaultResult(flagKey, err), err
 	}
 
-	endpoint := fmt.Sprintf("%s/api/evaluate/%s", c.config.BaseURL, url.PathEscape(flagKey))
+	endpoint := fmt.Sprintf("%s/api/flags/%s/evaluate", c.config.BaseURL, url.PathEscape(flagKey))
 	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return c.getDefaultResult(flagKey, err), err
@@ -149,8 +149,11 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		return c.getDefaultResult(flagKey, err), err
 	}
 
+	// The result is "enabled" (docs/SDK-DEVELOPER-GUIDE.md). A pointer tells a missing or
+	// null field from false: a body without a boolean "enabled" is a failed lookup, not a
+	// false to cache for the TTL (#112). A non-boolean value fails Unmarshal.
 	var response struct {
-		Value         bool                   `json:"value"`
+		Enabled       *bool                  `json:"enabled"`
 		Configuration map[string]interface{} `json:"configuration"`
 		Variation     string                 `json:"variation"`
 		FlagID        string                 `json:"flag_id"`
@@ -162,9 +165,15 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		c.config.OnError(err)
 		return c.getDefaultResult(flagKey, err), err
 	}
+	if response.Enabled == nil {
+		err := fmt.Errorf("evaluate response for %q has no boolean \"enabled\"", flagKey)
+		c.config.OnError(err)
+		return c.getDefaultResult(flagKey, err), err
+	}
+	enabled := *response.Enabled
 
 	// Cache the result (including configuration and variation)
-	c.cache.Set(flagKey, response.Value, response.Configuration, response.Variation)
+	c.cache.Set(flagKey, enabled, response.Configuration, response.Variation)
 
 	// Apply overrides to evaluated result
 	finalConfiguration := response.Configuration
@@ -185,7 +194,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 
 	return &EvaluationResult{
 		Key:           flagKey,
-		Value:         response.Value,
+		Value:         enabled,
 		Configuration: finalConfiguration,
 		Variation:     finalVariation,
 		Reason:        "evaluated",
