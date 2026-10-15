@@ -46,7 +46,7 @@ impl FromRequestParts<AppState> for Sdk {
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
         let key = presented_key(parts).ok_or_else(ApiError::unauthorized)?;
-        match keys::resolve_cached(&state.db, &state.unknown_keys, key).await? {
+        match keys::resolve_cached(&state.db, &state.unknown_keys, &state.key_lookups, key).await? {
             Some(owner) => Ok(Sdk(owner, keys::hash(key))),
             None => Err(ApiError::unauthorized()),
         }

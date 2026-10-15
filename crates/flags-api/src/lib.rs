@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use axum::routing::{get, post};
 use axum::Router;
-use flags_core::keys::UnknownKeys;
+use flags_core::keys::{KeyLookups, UnknownKeys};
 use flags_core::notify::Listener;
 use flags_core::rollback::Hints;
 use http::{header, HeaderName, Method};
@@ -51,6 +51,10 @@ pub struct AppState {
     /// SDK keys that recently did not resolve, shared by every request, so a
     /// client repeating one stops costing a database lookup (#104).
     pub unknown_keys: Arc<UnknownKeys>,
+    /// Caps how many SDK key lookups hold a pool connection at once, sized
+    /// from the pool, so a flood of distinct unknown keys leaves connections
+    /// for everything else (#120).
+    pub key_lookups: Arc<KeyLookups>,
 }
 
 impl AppState {
@@ -61,6 +65,7 @@ impl AppState {
         platform_webhook_secret: impl Into<String>,
     ) -> Self {
         Self {
+            key_lookups: Arc::new(KeyLookups::for_db(&db)),
             db,
             listener,
             hints,

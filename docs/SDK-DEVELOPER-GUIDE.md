@@ -530,6 +530,7 @@ For mobile/desktop apps:
 | `404` | Flag not found | Return default value |
 | `429` | Rate limited | Back off and retry |
 | `500` | Server error | Return cached/default value |
+| `503` | Temporarily unavailable or busy (with `Retry-After`) | Return cached/default value; retry after the delay |
 
 ### Default Values
 
