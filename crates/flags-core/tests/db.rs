@@ -1190,12 +1190,12 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
     telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events)
         .await
         .unwrap();
-    let h = telemetry::health(&mut tx, flag.id, Some("production\0"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production\0"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 2);
     assert!(!h.environment.unwrap().contains('\0'));
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 3);
@@ -1266,7 +1266,7 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!((h.evaluations.enabled, h.evaluations.disabled), (300, 300));
@@ -1333,7 +1333,7 @@ async fn health_shows_variation_names_cleaned(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 10);
@@ -1388,7 +1388,7 @@ async fn health_shows_at_most_twenty_variations(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!((h.evaluations.enabled, h.evaluations.disabled), (467, 3));
@@ -1441,13 +1441,69 @@ async fn health_reads_a_bounded_number_of_variation_names(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 230);
     let expected: BTreeMap<String, i64> = (0..20).map(|i| (format!("a{i:03}"), 2)).collect();
     assert_eq!(h.variations, expected);
     assert_eq!(h.other_variations, 230 - 40);
+    tx.commit().await.unwrap();
+}
+
+// A flag's declared variations are always shown, even when a public client
+// key reports more evaluations under made-up names, and even at zero (#70).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_always_shows_declared_variations(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                variations: Some(json!({"control": {}, "treatment": {}, "unused": {}})),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let event = |variation: String| EvalEvent {
+        flag_key: "f".into(),
+        enabled: true,
+        variation: Some(variation),
+        environment: "production".into(),
+        at: now,
+    };
+    // control 2, treatment 3; junk00..junk24 evaluated 10..=34 times.
+    let mut events: Vec<EvalEvent> = (0..2).map(|_| event("control".into())).collect();
+    events.extend((0..3).map(|_| event("treatment".into())));
+    for i in 0..25 {
+        events.extend((0..(10 + i)).map(|_| event(format!("junk{i:02}"))));
+    }
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, events)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.variations.len(), 20);
+    assert_eq!(h.variations.get("control"), Some(&2));
+    assert_eq!(h.variations.get("treatment"), Some(&3));
+    assert_eq!(h.variations.get("unused"), Some(&0));
+    // The 17 most evaluated junk names (junk08..junk24) take the other slots.
+    assert!(h.variations.contains_key("junk08"));
+    assert!(!h.variations.contains_key("junk07"));
+    // junk00..junk07: 10 + 11 + ... + 17.
+    assert_eq!(h.other_variations, (10..=17).sum::<i64>());
     tx.commit().await.unwrap();
 }
 
@@ -1498,7 +1554,7 @@ async fn health_merges_error_types_that_read_alike(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.errors.enabled, 39);
@@ -1588,7 +1644,7 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
         .unwrap();
     }
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     let shown: Vec<(&str, i64, &str)> = h
@@ -1610,7 +1666,7 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
     );
 
     // Across every environment, the staging report is the newest.
-    let h = telemetry::health(&mut tx, flag.id, None, 24).await.unwrap();
+    let h = telemetry::health(&mut tx, &flag, None, 24).await.unwrap();
     assert_eq!(h.top_errors[0].count, 6);
     assert_eq!(h.top_errors[0].last_message, "other environment");
     tx.commit().await.unwrap();

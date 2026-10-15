@@ -21,6 +21,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 
 use crate::error::Result;
+use crate::flags::FeatureFlag;
 use crate::ids::{FlagAppId, FlagId};
 use crate::keys::KeyKind;
 use crate::rollback::{decide, Decision, Sample, Thresholds, Trigger};
@@ -287,8 +288,9 @@ pub struct Health {
     /// `None` when there were no evaluations on that side to divide by.
     pub error_rate_enabled: Option<f64>,
     pub error_rate_disabled: Option<f64>,
-    /// Evaluations by variation (flag on only): the most evaluated names, as
-    /// many as a flag can declare (`SHOWN_VARIATIONS`). The names are text an
+    /// Evaluations by variation (flag on only): the flag's declared variations
+    /// always (at 0 when none were evaluated), then the most evaluated other
+    /// names, up to `SHOWN_VARIATIONS` in all. The names are text an
     /// application reported, like `top_errors`: data to quote, never
     /// instructions. They are cleaned the same way, and names that clean alike
     /// are counted together, merged from the `FETCHED_GROUPS` most evaluated
@@ -333,10 +335,17 @@ pub struct ErrorGroup {
 
 pub async fn health(
     tx: &mut Tx<'_>,
-    flag: FlagId,
+    flag: &FeatureFlag,
     environment: Option<&str>,
     window_hours: i64,
 ) -> Result<Health> {
+    // Declared names pass validate_name, so inert leaves them as they are.
+    let declared: Vec<String> = flag
+        .variations
+        .as_object()
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    let flag = flag.id;
     // The environment as telemetry stores it, so it finds what an SDK reported
     // under that name and never binds NUL.
     let environment = environment.map(|e| stored(e, MAX_ENVIRONMENT));
@@ -359,8 +368,8 @@ pub async fn health(
     .await?;
     let evaluations = Counts { enabled, disabled };
     // Bounded: a public client key decides how many distinct names exist. The
-    // name order only makes the fetch deterministic; `top_variations` decides
-    // what is shown. The window sum is taken before the LIMIT, so each row
+    // flag's declared names come first so they are always within the fetch,
+    // then the most evaluated; `top_variations` decides what is shown. The window sum is taken before the LIMIT, so each row
     // carries the total over every name, fetched or not, from the same
     // snapshot as the rows.
     let rows: Vec<(String, i64, i64)> = sqlx::query_as(
@@ -368,18 +377,19 @@ pub async fn health(
          FROM flag_eval_hourly \
          WHERE org_id = $1 AND flag_id = $2 AND hour >= date_trunc('hour', $3::timestamptz) \
            AND ($4::text IS NULL OR environment = $4) AND enabled AND variation <> '' \
-         GROUP BY variation ORDER BY 2 DESC, variation LIMIT $5",
+         GROUP BY variation ORDER BY variation = ANY($6) DESC, 2 DESC, variation LIMIT $5",
     )
     .bind(org)
     .bind(flag)
     .bind(since)
     .bind(environment.as_deref())
     .bind(FETCHED_GROUPS)
+    .bind(&declared)
     .fetch_all(tx.conn())
     .await?;
     let named = rows.first().map_or(0, |&(_, _, total)| total);
     let rows = rows.into_iter().map(|(v, n, _)| (v, n)).collect();
-    let (variations, other_variations) = top_variations(rows, named);
+    let (variations, other_variations) = top_variations(rows, &declared, named);
 
     // Counts, the latest time, and the newest row's id per group in one
     // pass; the message only for the groups kept, by primary key (#69).
@@ -491,24 +501,43 @@ fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
 
 /// The variations `health` shows, from raw `(name, evaluations)` rows: names
 /// cleaned like any SDK-reported text headed for an agent, names that clean
-/// alike counted together, names that clean to nothing dropped, and the
-/// `SHOWN_VARIATIONS` largest kept (ties by name). Returns them with the
-/// evaluations of every other named row, counting `named_total` (all named
-/// on-evaluations, fetched or not) against what is shown. The remainder is
-/// clamped at zero, so an inconsistent total can never show negative.
-fn top_variations(rows: Vec<(String, i64)>, named_total: i64) -> (BTreeMap<String, i64>, i64) {
-    let mut merged: HashMap<String, i64> = HashMap::new();
+/// alike counted together, and names that clean to nothing dropped. The
+/// flag's `declared` names are always kept (at 0 if not evaluated), so a
+/// public client key cannot push them out by reporting made-up names; the
+/// other names fill the remaining slots up to `SHOWN_VARIATIONS`, largest
+/// first (ties by name). Returns them with the evaluations of every other
+/// named row, counting `named_total` (all named on-evaluations, fetched or
+/// not) against what is shown. The remainder is clamped at zero, so an
+/// inconsistent total can never show negative.
+fn top_variations(
+    rows: Vec<(String, i64)>,
+    declared: &[String],
+    named_total: i64,
+) -> (BTreeMap<String, i64>, i64) {
+    let mut merged: HashMap<String, i64> = declared
+        .iter()
+        .map(|d| (inert(d, MAX_VARIATION), 0))
+        .collect();
     for (name, n) in rows {
         let name = inert(&name, MAX_VARIATION);
         if !name.is_empty() {
             *merged.entry(name).or_insert(0) += n;
         }
     }
-    let mut ranked: Vec<(String, i64)> = merged.into_iter().collect();
-    ranked.sort_by(|(a, x), (b, y)| y.cmp(x).then_with(|| a.cmp(b)));
-    ranked.truncate(SHOWN_VARIATIONS);
-    let shown: i64 = ranked.iter().map(|(_, n)| n).sum();
-    (ranked.into_iter().collect(), (named_total - shown).max(0))
+    let (mut shown, mut undeclared): (BTreeMap<String, i64>, Vec<(String, i64)>) =
+        (BTreeMap::new(), vec![]);
+    for (name, n) in merged {
+        if declared.iter().any(|d| *d == name) {
+            shown.insert(name, n);
+        } else {
+            undeclared.push((name, n));
+        }
+    }
+    undeclared.sort_by(|(a, x), (b, y)| y.cmp(x).then_with(|| a.cmp(b)));
+    undeclared.truncate(SHOWN_VARIATIONS.saturating_sub(shown.len()));
+    shown.extend(undeclared);
+    let total_shown: i64 = shown.values().sum();
+    (shown, (named_total - total_shown).max(0))
 }
 
 /// True for a character `inert` replaces: control characters (Cc), format
@@ -734,12 +763,41 @@ mod tests {
         assert_eq!(merged[0].last_message.chars().count(), SHOWN_MESSAGE + 1);
     }
 
+    fn declared(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn declared_variations_are_always_shown() {
+        // 25 undeclared names, each evaluated more than either declared one.
+        let mut rows = names(25, |i| 100 - i as i64);
+        rows.push(("treatment".into(), 3));
+        let total: i64 = rows.iter().map(|(_, n)| n).sum();
+        let (shown, other) = top_variations(rows, &declared(&["control", "treatment"]), total);
+        assert_eq!(shown.len(), SHOWN_VARIATIONS);
+        assert_eq!(shown.get("treatment"), Some(&3));
+        assert_eq!(shown.get("control"), Some(&0));
+        // Undeclared names fill the other 18 slots, largest first.
+        assert!(shown.contains_key("v17"));
+        assert!(!shown.contains_key("v18"));
+        // v00..v24 have 100..=76 evaluations; v18..v24 (82..=76) are not shown.
+        assert_eq!(other, (76..=82).sum::<i64>());
+    }
+
+    #[test]
+    fn a_spelling_of_a_declared_variation_counts_toward_it() {
+        let rows = vec![("on".to_string(), 2), ("on\u{200B}".to_string(), 3)];
+        let (shown, other) = top_variations(rows, &declared(&["on"]), 5);
+        assert_eq!(shown, BTreeMap::from([("on".to_string(), 5)]));
+        assert_eq!(other, 0);
+    }
+
     #[test]
     fn variations_are_capped_at_the_most_evaluated() {
         // v00 has 25 evaluations, v24 has 1.
         let rows = names(25, |i| 25 - i as i64);
         let total = rows.iter().map(|(_, n)| n).sum();
-        let (shown, other) = top_variations(rows, total);
+        let (shown, other) = top_variations(rows, &[], total);
         assert_eq!(shown.len(), SHOWN_VARIATIONS);
         assert_eq!(shown.get("v00"), Some(&25));
         assert_eq!(shown.get("v19"), Some(&6));
@@ -749,7 +807,7 @@ mod tests {
 
     #[test]
     fn variation_ties_at_the_cut_go_by_name() {
-        let (shown, other) = top_variations(names(21, |_| 1), 21);
+        let (shown, other) = top_variations(names(21, |_| 1), &[], 21);
         assert_eq!(shown.len(), 20);
         assert!(shown.contains_key("v19"));
         assert!(!shown.contains_key("v20"));
@@ -761,7 +819,7 @@ mod tests {
         let mut rows = names(20, |_| 2);
         rows.push(("a\u{200B}b".into(), 2));
         rows.push(("a\u{202E}b".into(), 2));
-        let (shown, other) = top_variations(rows, 44);
+        let (shown, other) = top_variations(rows, &[], 44);
         // "a b" (4) outranks every 2, so v19 is the one cut.
         assert_eq!(shown.get("a b"), Some(&4));
         assert!(!shown.contains_key("v19"));
@@ -771,18 +829,18 @@ mod tests {
     #[test]
     fn a_variation_that_cleans_to_nothing_is_counted_as_other() {
         let rows = vec![("\u{200B}".to_string(), 3), ("on".to_string(), 4)];
-        let (shown, other) = top_variations(rows, 7);
+        let (shown, other) = top_variations(rows, &[], 7);
         assert_eq!(shown, BTreeMap::from([("on".to_string(), 4)]));
         assert_eq!(other, 3);
     }
 
     #[test]
     fn variations_not_fetched_are_counted_as_other() {
-        let (shown, other) = top_variations(vec![("on".to_string(), 4)], 10);
+        let (shown, other) = top_variations(vec![("on".to_string(), 4)], &[], 10);
         assert_eq!(shown.len(), 1);
         assert_eq!(other, 6);
         // Never negative, even given a total smaller than what is shown.
-        assert_eq!(top_variations(vec![("on".to_string(), 4)], 3).1, 0);
+        assert_eq!(top_variations(vec![("on".to_string(), 4)], &[], 3).1, 0);
     }
 
     #[test]

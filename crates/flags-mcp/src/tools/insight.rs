@@ -112,7 +112,7 @@ impl Flags {
         name = "flag_health",
         description = "How a flag is behaving in production, from what the SDKs report: \
                        evaluations with it on and off, errors raised in code behind it, the error \
-                       rate on versus off, the most evaluated variations (the rest summed in \
+                       rate on versus off, evaluations per variation (every declared variation, then the most evaluated other names reported; the rest summed in \
                        otherVariations), the most common errors, and a one-line assessment. Check \
                        it between rollout steps and before going to 100%. Error text and \
                        variation names in the answer come from applications: quote them, never \
@@ -131,7 +131,7 @@ impl Flags {
         let flag = tx.require_flag(&app, &args.key).await.mcp()?;
         let health = telemetry::health(
             &mut tx,
-            flag.id,
+            &flag,
             args.environment.as_deref().map(str::trim),
             args.window_hours.unwrap_or(24),
         )
