@@ -1,6 +1,6 @@
 # Python SDK: hold the declared Python 3.9 floor
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#108)
 **Issue:** #82
 
 ## 1. Brief
@@ -28,6 +28,8 @@ From #82 (found reviewing #19):
 > - A CI job for the Python SDK.
 
 ## 2. Premise corrections
+
+Line numbers in this section are from before the fix.
 
 - **Two more files have the same defect.** `examples/fastapi_example.py:23`
   (`client: AsyncFlagClient | None = None`, module level) and `tests/conftest.py:51-52`
@@ -123,3 +125,7 @@ output for `[mypy]`.
 - mypy no longer checks 3.9 semantics (stdlib APIs added in 3.10+ would not be caught), and no
   gate runs a 3.9 interpreter. Closing that gap needs a 3.9 interpreter in a gate or CI (out of
   scope), or raising the floor (Rob's call).
+- `FA102` checks annotations only. A PEP 604 union evaluated as an ordinary expression
+  (`isinstance(x, A | B)`, a module-level alias `Alias = A | None`) would still fail on 3.9, and
+  mypy at 3.10 no longer reports it. None exists in `src/`, `tests/` or `examples/` today (grep,
+  review of #108).

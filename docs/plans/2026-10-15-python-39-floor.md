@@ -52,15 +52,15 @@ One task: the config change is the failing test for the import fix.
 - Modify: `packages/python-server/pyproject.toml`, `packages/python-server/examples/django_example.py`,
   `packages/python-server/examples/fastapi_example.py`, `packages/python-server/tests/conftest.py`
 
-- [ ] **Step 1: Write the failing check.** In `pyproject.toml`, append `"FA102"` to
+- [x] **Step 1: Write the failing check.** In `pyproject.toml`, append `"FA102"` to
   `[tool.ruff.lint] select` and change `[tool.mypy] python_version = "3.9"` to `"3.10"`.
-- [ ] **Step 2: See it fail.** In `packages/python-server`: `"$v/bin/ruff" check --no-cache .`
+- [x] **Step 2: See it fail.** In `packages/python-server`: `"$v/bin/ruff" check --no-cache .`
   reports 4 `FA102` findings (django_example.py, fastapi_example.py, conftest.py x2);
   `"$v/bin/mypy" --cache-dir=/dev/null src` prints no `[mypy]` config warning.
-- [ ] **Step 3: Implement.** Add `from __future__ import annotations` as the first statement after
+- [x] **Step 3: Implement.** Add `from __future__ import annotations` as the first statement after
   the module docstring in the three files, followed by one blank line (isort order).
-- [ ] **Step 4: See it pass.** Run the full gate command from Global Constraints; all three tools
+- [x] **Step 4: See it pass.** Run the full gate command from Global Constraints; all three tools
   pass, pytest count equals `origin/main`'s.
-- [ ] **Step 5: Commit.** `fix(sdk): hold the python sdk examples and mypy config to the 3.9 floor`,
+- [x] **Step 5: Commit.** `fix(sdk): hold the python sdk examples and mypy config to the 3.9 floor`,
   body explaining why (3.9 evaluates these annotations at import; mypy rejects 3.9), ending
   `Fixes #82`.
