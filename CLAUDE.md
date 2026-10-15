@@ -62,7 +62,7 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - when Dockerfile, .dockerignore, Cargo.toml, Cargo.lock, rust-toolchain.toml, crates/**: podman build -t otto-flags:check .
 - when package.json, pnpm-lock.yaml, pnpm-workspace.yaml, packages/angular/**, packages/astro/**, packages/mcp-datadog/**, packages/mcp-dynatrace/**, packages/mcp-newrelic/**, packages/mcp-pagerduty/**, packages/mcp-sdk/**, packages/mcp-sentry/**, packages/mcp-splunk/**, packages/nextjs/**, packages/node-server/**, packages/react/**, packages/remix/**, packages/solid/**, packages/svelte/**, packages/sveltekit/**, packages/typescript/**, packages/vue/**, examples/angular-app/**, examples/astro-app/**, examples/nextjs-app/**, examples/node-backend/**, examples/react-app/**, examples/remix-app/**, examples/solid-app/**, examples/svelte-app/**, examples/sveltekit-app/**, examples/vue-app/**: pnpm install --frozen-lockfile && pnpm lint && pnpm build && pnpm test
 - when packages/rust-server/**: cd packages/rust-server && cargo fmt --check
-- when packages/rust-server/**: cd packages/rust-server && cargo clippy --locked --all-targets -- -D warnings
+- when packages/rust-server/**: cd packages/rust-server && cargo clippy --locked --all-targets --keep-going -- -D warnings
 - when packages/rust-server/**: cd packages/rust-server && cargo test --locked
 - when packages/rust-server/**, examples/rust-server/**: cd examples/rust-server && cargo fmt --check
 - when packages/rust-server/**, examples/rust-server/**: cd examples/rust-server && cargo clippy --locked --all-targets -- -D warnings
@@ -71,8 +71,7 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - when packages/python-server/**: v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src && "$v/bin/ruff" check --no-cache .
 - when packages/java-server/**: cd packages/java-server && mvn -B verify
 - when packages/ios-sdk/**: cd packages/ios-sdk && swift test
-- known red: Rust SDK `cargo fmt --check` and `cargo clippy` — #15
-- known red: Rust SDK `cargo test` (two integration test files do not compile) — #4
+- known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile; every other target must stay clean) — #4
 - known red: examples/rust-server `cargo fmt --check` and `cargo clippy` (does not compile) — #16
 - known red: Go SDK `go vet` and `go test` (no `go.sum`) — #17
 - evidence: report pass counts per test binary; `cargo test` without `DATABASE_URL` panics ("DATABASE_URL must be set") rather than skipping, so a panic there is a missing variable, not a test failure; `DATABASE_URL` points only at the local Postgres on 15434, never at a Fly database

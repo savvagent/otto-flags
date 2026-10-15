@@ -74,7 +74,9 @@ impl FlagClient {
                 if let Some(config_override) = config_overrides.get(flag_key) {
                     if config_override.merge {
                         if let Some(base_config) = configuration {
-                            configuration = Some(self.merge_configurations(&base_config, &config_override.config));
+                            configuration = Some(
+                                self.merge_configurations(&base_config, &config_override.config),
+                            );
                         } else {
                             configuration = Some(config_override.config.clone());
                         }
@@ -90,7 +92,11 @@ impl FlagClient {
                 }
             }
 
-            tracing::debug!("Flag '{}' returned from cache: {}", flag_key, cached_entry.value);
+            tracing::debug!(
+                "Flag '{}' returned from cache: {}",
+                flag_key,
+                cached_entry.value
+            );
             return Ok(EvaluationResult {
                 key: flag_key.to_string(),
                 value: cached_entry.value,
@@ -149,7 +155,8 @@ impl FlagClient {
             if let Some(config_override) = config_overrides.get(flag_key) {
                 if config_override.merge {
                     if let Some(base_config) = configuration {
-                        configuration = Some(self.merge_configurations(&base_config, &config_override.config));
+                        configuration =
+                            Some(self.merge_configurations(&base_config, &config_override.config));
                     } else {
                         configuration = Some(config_override.config.clone());
                     }
@@ -260,12 +267,15 @@ impl FlagClient {
         options: Option<ConfigOverrideOptions>,
     ) -> Result<(), OttoFlagsError> {
         let flag_key = flag_key.into();
-        let opts = options.unwrap_or_else(ConfigOverrideOptions::new);
+        let opts = options.unwrap_or_default();
 
         // Validate JSON structure
         if opts.validate {
             serde_json::to_string(&config).map_err(|e| {
-                OttoFlagsError::ApiError(format!("Invalid configuration for flag '{}': {}", flag_key, e))
+                OttoFlagsError::ApiError(format!(
+                    "Invalid configuration for flag '{}': {}",
+                    flag_key, e
+                ))
             })?;
         }
 
@@ -298,7 +308,11 @@ impl FlagClient {
 
     /// Set a variation override for a multi-variant flag
     /// Forces the flag to return a specific variation
-    pub fn set_variation_override(&self, flag_key: impl Into<String>, variation: impl Into<String>) {
+    pub fn set_variation_override(
+        &self,
+        flag_key: impl Into<String>,
+        variation: impl Into<String>,
+    ) {
         let flag_key = flag_key.into();
         let variation = variation.into();
 

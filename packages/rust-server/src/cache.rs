@@ -26,11 +26,6 @@ impl Cache {
         }
     }
 
-    /// Get a cached value if it exists and hasn't expired
-    pub fn get(&self, key: &str) -> Option<bool> {
-        self.get_entry(key).map(|entry| entry.value)
-    }
-
     /// Get a complete cached entry (includes configuration and variation)
     pub fn get_entry(&self, key: &str) -> Option<CacheEntry> {
         let entries = self.entries.read().ok()?;
