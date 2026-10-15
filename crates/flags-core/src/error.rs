@@ -117,7 +117,8 @@ impl Error {
 
     /// Whether this failure is the kind that passes on its own: contention
     /// (serialization failure, deadlock, a lock or statement timeout), a
-    /// connection or pool problem, or the platform being unreachable. Narrower
+    /// connection or pool problem, the database shutting down, restarting, or
+    /// still starting up, or the platform being unreachable. Narrower
     /// than [`Error::retriable`], which tells an agent any database error is
     /// worth one more try: a background job retrying on a schedule must not
     /// keep retrying a constraint violation or a missing table.
@@ -314,10 +315,31 @@ fn db_reason(e: &sqlx::Error) -> &'static str {
     }
 }
 
-/// SQLSTATEs that a later attempt can avoid: serialization_failure,
-/// deadlock_detected, lock_not_available (`lock_timeout`), and query_canceled
-/// (`statement_timeout`).
-const TRANSIENT_SQLSTATES: &[&str] = &["40001", "40P01", "55P03", "57014"];
+/// SQLSTATEs that a later attempt can avoid (#56):
+///
+/// - contention and cancellation: serialization_failure `40001`,
+///   deadlock_detected `40P01`, lock_not_available `55P03` (`lock_timeout`),
+///   and query_canceled `57014` (`statement_timeout`);
+/// - the server, not the statement, going away and coming back:
+///   admin_shutdown `57P01` (a restart or failover, which is what a Fly
+///   Postgres restart looks like, or a terminated backend), crash_shutdown
+///   `57P02` (another backend crashed and every session was reset), and
+///   cannot_connect_now `57P03` (starting up, in recovery, or shutting
+///   down). Each usually clears in seconds, and a later attempt gets a fresh
+///   connection (the pool tests a connection before handing it out);
+///   classing them permanent would cool a flag's auto-rollback down for an
+///   hour after a routine restart. sqlx's pool already retries `57P03` while
+///   connecting.
+///
+/// Not here, conservatively: database_dropped `57P04`, which retrying cannot
+/// fix; any other class-57 code (operator_intervention `57000`,
+/// idle_session_timeout `57P05`, which this service never sets); and class
+/// `08` (connection exceptions): sqlx usually reports a dropped connection as
+/// [`sqlx::Error::Io`] (transient), and the class also holds codes that are
+/// not self-healing, such as protocol_violation `08P01`.
+const TRANSIENT_SQLSTATES: &[&str] = &[
+    "40001", "40P01", "55P03", "57014", "57P01", "57P02", "57P03",
+];
 
 fn db_is_transient(e: &sqlx::Error) -> bool {
     match e {
@@ -393,6 +415,13 @@ mod tests {
             Error::Db(db("40P01")),
             Error::Db(db("55P03")),
             Error::Db(db("57014")),
+            // admin_shutdown (a restart or terminated backend), crash_shutdown,
+            // cannot_connect_now (starting up or in recovery)
+            Error::Db(db("57P01")),
+            Error::Db(db("57P02")),
+            Error::Db(db("57P03")),
+            Error::Tenant(otto_tenant::Error::Db(db("57P01"))),
+            Error::Tenant(otto_tenant::Error::Db(db("57P03"))),
             Error::Tenant(otto_tenant::Error::Db(sqlx::Error::PoolTimedOut)),
             Error::Tenant(otto_tenant::Error::Db(db("40P01"))),
             Error::EntitlementUnavailable {
@@ -408,6 +437,14 @@ mod tests {
             Error::Db(db("42P01")),
             Error::Db(db("23514")),
             Error::Db(db("42501")),
+            // database_dropped, operator_intervention, idle_session_timeout,
+            // connection_failure, protocol_violation: classes 57 and 08 are
+            // not transient wholesale
+            Error::Db(db("57P04")),
+            Error::Db(db("57000")),
+            Error::Db(db("57P05")),
+            Error::Db(db("08006")),
+            Error::Db(db("08P01")),
             Error::Db(sqlx::Error::RowNotFound),
             Error::Db(sqlx::Error::Protocol("bad".into())),
             Error::Tenant(otto_tenant::Error::Db(db("23505"))),
@@ -625,5 +662,9 @@ mod tests {
         // Any database error is still "retry the call" to an agent.
         assert!(Error::Db(db("23505")).retriable());
         assert!(Error::Db(sqlx::Error::PoolTimedOut).retriable());
+        assert!(Error::Db(db("57P01")).retriable());
+        // ...including ones a scheduled retry must not keep repeating.
+        let dropped = Error::Db(db("57P04"));
+        assert!(dropped.retriable() && !dropped.is_transient());
     }
 }
