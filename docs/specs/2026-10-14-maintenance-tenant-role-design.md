@@ -132,7 +132,7 @@ No public interface changes (no endpoint, tool, config key, scope, wire field, o
   now run under `otto_app` too, so the unpinned policies are what grant them access.
 - **Request paths open transactions with `begin_live`; unpinned cross-org access only through
   `maintenance::begin`**: unchanged rule; the `CLAUDE.md` line gains "as the tenant role".
-- **No SQL outside flags-core; runtime queries only**: holds (`query_scalar`, `query` with a
+- **No SQL outside flags-core; runtime queries only**: holds (`query_as`, `query` with a
   `format!` of a validated identifier, as `otto-tenant` does).
 - **Small shared database**: one extra round trip per maintenance transaction; no new connection
   held, no fan-out.
