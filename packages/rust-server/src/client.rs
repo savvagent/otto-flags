@@ -1,3 +1,4 @@
+use crate::backoff::{parse_retry_after, Backoff, Scope};
 use crate::cache::{context_key, Cache};
 use crate::telemetry::Telemetry;
 use crate::types::{
@@ -8,7 +9,7 @@ use reqwest::Client as HttpClient;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -39,11 +40,24 @@ pub(crate) fn is_valid_flag_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
-/// Why a lookup fell back, for the log.
+/// The most of an evaluate response the SDK reads; a larger body is a failed lookup.
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
+/// The largest evaluate request body the SDK sends, ample for user attributes. A larger one is
+/// refused before sending, as a failure of this request (no cooldown). Host code builds the
+/// context from end-user input, and the server echoes it, so a large one could otherwise fail
+/// mid-upload or time out as a transport error, which pauses every flag for every user.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+/// Why a lookup fell back, for the log and the cooldown.
 struct Failure {
     why: String,
-    /// The server refused the SDK key (401/403).
+    /// The server refused the SDK key (401).
     rejected_key: bool,
+    /// Whom the cooldown after this failure covers.
+    scope: Scope,
+    /// The server's `Retry-After` on a 429 or 503.
+    retry_after: Option<Duration>,
 }
 
 impl Failure {
@@ -51,6 +65,65 @@ impl Failure {
         Self {
             why: why.into(),
             rejected_key: false,
+            scope: Scope::Client,
+            retry_after: None,
+        }
+    }
+
+    /// A failure caused by this request's own content: it opens no cooldown.
+    fn request(why: impl Into<String>) -> Self {
+        Self {
+            scope: Scope::Request,
+            ..Self::new(why)
+        }
+    }
+}
+
+/// Whom the cooldown after a non-2xx answer covers (see `crate::backoff`).
+fn failure_scope(status: reqwest::StatusCode) -> Scope {
+    match status.as_u16() {
+        // The server answers 404 for a key with no active flag: only that flag waits.
+        404 => Scope::Flag,
+        // A rejected key, a timeout, rate limiting: the client as a whole should wait.
+        401 | 408 | 429 => Scope::Client,
+        // Any other 4xx refuses this request's content (a context the host built from end-user
+        // input); it says nothing about the service, so it opens no window. That includes 403:
+        // the server answers 401 for every key problem, so a 403 comes from something in
+        // between, such as a WAF blocking a request for what its context contains.
+        400..=499 => Scope::Request,
+        _ => Scope::Client,
+    }
+}
+
+/// Read a response body of at most `cap` bytes: checked against `Content-Length` before reading,
+/// and against the bytes read so far otherwise, so no more than the cap plus one chunk is held.
+async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, Failure> {
+    // The server echoes the context, so a large one can push the response over the cap: the
+    // failure belongs to this request (`Scope::Request`).
+    let too_large = || Failure::request(format!("the body is larger than {cap} bytes"));
+    if response
+        .content_length()
+        .is_some_and(|len| len > cap as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > cap {
+                    return Err(too_large());
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(body),
+            // A timeout or reset while reading the body.
+            Err(e) => {
+                return Err(Failure::new(format!(
+                    "reading the body failed: {}",
+                    e.without_url()
+                )))
+            }
         }
     }
 }
@@ -61,6 +134,7 @@ pub struct FlagClient {
     config: Arc<Config>,
     http_client: HttpClient,
     cache: Cache,
+    backoff: Backoff,
     telemetry: Telemetry,
     config_overrides: Arc<RwLock<HashMap<String, ConfigOverrideEntry>>>,
     variation_overrides: Arc<RwLock<HashMap<String, VariationOverrideEntry>>>,
@@ -94,6 +168,7 @@ impl FlagClient {
             .map_err(OttoFlagsError::RequestFailed)?;
 
         let cache = Cache::new(config.cache_ttl);
+        let backoff = Backoff::new(config.failure_cooldown);
         let telemetry = Telemetry::new(
             http_client.clone(),
             config.base_url.clone(),
@@ -107,6 +182,7 @@ impl FlagClient {
             config: Arc::new(config),
             http_client,
             cache,
+            backoff,
             telemetry,
             config_overrides: Arc::new(RwLock::new(HashMap::new())),
             variation_overrides: Arc::new(RwLock::new(HashMap::new())),
@@ -125,6 +201,11 @@ impl FlagClient {
     /// `error` when the server refuses the SDK key, else `warn`), and is not cached. Config and
     /// variation overrides are not applied to such a fallback. The `Result` is kept for
     /// compatibility.
+    ///
+    /// After a failed lookup, lookups return the default without a request for
+    /// `Config::failure_cooldown` (see there for which lookups it covers), and a window logs one
+    /// warning (plus one per lookup already in flight when it opened). A cached answer is still
+    /// served. The response body is read up to 1 MiB; a larger one is a failed lookup.
     pub async fn evaluate(
         &self,
         flag_key: &str,
@@ -204,21 +285,43 @@ impl FlagClient {
             });
         }
 
+        if let Some(left) = self.backoff.remaining(flag_key, Instant::now()) {
+            tracing::debug!(
+                "Flag {:?} lookup skipped: backing off for {:?} after a failed lookup; using its default",
+                flag_key,
+                left
+            );
+            return self.get_default_result(flag_key);
+        }
+
         let data = match self.fetch(flag_key, &ctx).await {
             Ok(data) => data,
             Err(failure) => {
+                let window = self.backoff.record(
+                    flag_key,
+                    failure.scope,
+                    failure.retry_after,
+                    Instant::now(),
+                );
+                let next = if window.is_zero() {
+                    String::new()
+                } else {
+                    format!("; next lookup in {window:?}")
+                };
                 // A rejected key is a misconfiguration that will not heal by itself.
                 if failure.rejected_key {
                     tracing::error!(
-                        "Flag {:?} lookup failed ({}): check the SDK key; using its default",
+                        "Flag {:?} lookup failed ({}): check the SDK key; using its default{}",
                         flag_key,
-                        failure.why
+                        failure.why,
+                        next
                     );
                 } else {
                     tracing::warn!(
-                        "Flag {:?} lookup failed ({}); using its default",
+                        "Flag {:?} lookup failed ({}); using its default{}",
                         flag_key,
-                        failure.why
+                        failure.why,
+                        next
                     );
                 }
                 return self.get_default_result(flag_key);
@@ -297,33 +400,46 @@ impl FlagClient {
         let url = self
             .evaluate_url(flag_key)
             .map_err(|e| Failure::new(e.to_string()))?;
+        let body = serde_json::to_vec(&json!({ "context": ctx }))
+            .map_err(|_| Failure::request("the context cannot be serialized"))?;
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err(Failure::request(format!(
+                "the context is larger than {MAX_REQUEST_BYTES} bytes"
+            )));
+        }
         let response = self
             .http_client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&json!({ "context": ctx }))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
             .send()
             .await
             // The URL is already in the log line's context; drop it from the error text.
             .map_err(|e| Failure::new(format!("request failed: {}", e.without_url())))?;
         let status = response.status();
         if !status.is_success() {
+            let retry_after = if matches!(status.as_u16(), 429 | 503) {
+                response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(parse_retry_after)
+            } else {
+                None
+            };
             return Err(Failure {
                 why: format!("status {status}"),
-                rejected_key: matches!(
-                    status,
-                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-                ),
+                // The server answers 401 for every key problem; a 403 comes from something in
+                // between and is logged as an ordinary failure.
+                rejected_key: status == reqwest::StatusCode::UNAUTHORIZED,
+                scope: failure_scope(status),
+                retry_after,
             });
         }
-        let data: serde_json::Value = response.json().await.map_err(|e| {
-            Failure::new(if e.is_decode() {
-                "the body is not JSON".to_string()
-            } else {
-                // A timeout or reset while reading the body, not a malformed one.
-                format!("reading the body failed: {}", e.without_url())
-            })
-        })?;
+        let bytes = read_capped(response, MAX_RESPONSE_BYTES).await?;
+        let data: serde_json::Value =
+            serde_json::from_slice(&bytes).map_err(|_| Failure::new("the body is not JSON"))?;
         if !data["enabled"].is_boolean() {
             return Err(Failure::new("the body has no boolean `enabled`"));
         }

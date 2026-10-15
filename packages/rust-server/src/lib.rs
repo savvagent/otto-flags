@@ -46,6 +46,7 @@
 //! }
 //! ```
 
+mod backoff;
 mod cache;
 mod client;
 mod telemetry;

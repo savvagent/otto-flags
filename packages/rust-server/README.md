@@ -72,6 +72,7 @@ let config = Config::new("srv_your_server_key_here")
     .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
+    .with_failure_cooldown(Duration::from_secs(5)) // the default
     .with_default("feature-a", false)
     .with_default("feature-b", true);
 
@@ -305,6 +306,7 @@ let config = Config::new("srv_key")  // or "sdk_key"
     .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
+    .with_failure_cooldown(Duration::from_secs(5)) // the default
     .with_telemetry(true)             // the default
     .with_default("flag", false);
 ```
@@ -410,10 +412,23 @@ A flag lookup never fails your request. `evaluate`, `is_enabled`, `get_config`, 
 key is invalid, the server is unreachable or slow (`with_timeout`), it answers with an error
 status, or the response is not an evaluate response. The fallback has `reason: "error"`, is logged
 through `tracing` (at `error` when the server refuses the SDK key, else `warn`), and is not cached,
-so the next lookup asks the server again. Config and variation overrides are not applied to a
-fallback; `get_config` gives `None` and `get_variation` gives `"control"`, so use `evaluate` when
-you need to tell a fallback from a real answer. The
-lookup methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
+so a later lookup asks the server again (after the cooldown below). Config and variation
+overrides are not applied to a fallback; `get_config` gives `None` and `get_variation` gives
+`"control"`, so use `evaluate` when you need to tell a fallback from a real answer. The lookup
+methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
+
+After a failed lookup the client backs off for `failure_cooldown` (5 seconds by default;
+`Duration::ZERO` turns it off): lookups in that window return their default with
+`reason: "error"` without a request, so an outage costs one request and one warning per window
+instead of one per lookup. A 404 (no such flag) pauses only that flag. A failure caused by the
+request itself (another 4xx except 401, 408 and 429, a context over 64 KiB, which is not
+sent, or a response body over 1 MiB, the most the SDK reads) pauses nothing, so a context built from one end user's input cannot switch
+flags off for everyone. Any other failure (a timeout, a 5xx, a rejected key, a response that is
+not an evaluate response) pauses every flag. A `Retry-After` in seconds on a 429 or 503
+lengthens the window, up to 60 seconds; it never shortens it. Cached answers are still served
+during a cooldown, and the first lookup after it goes to the server. A `base_url` with a wrong
+path prefix makes every flag answer 404, which pauses each flag separately: one warning per flag
+per window.
 
 ```rust
 let result = client.evaluate("my-flag", None).await?;
