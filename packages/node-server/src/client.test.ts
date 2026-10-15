@@ -551,6 +551,9 @@ describe('FlagClient', () => {
       expect(fetchMock.mock.calls[0][1].method).toBe('POST');
       expect(result.value).toBe(enabled);
       expect(result.reason).toBe('evaluated');
+      // The server's nulls come back as the SDK's undefined.
+      expect(result.variation).toBeUndefined();
+      expect(result.configuration).toBeUndefined();
       expect(onError).not.toHaveBeenCalled();
       client.close();
     });

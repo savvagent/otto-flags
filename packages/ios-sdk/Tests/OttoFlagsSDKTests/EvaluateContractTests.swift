@@ -145,4 +145,31 @@ final class EvaluateContractTests: XCTestCase {
         )
         XCTAssertTrue(value)
     }
+
+    /// A context JSON cannot hold fails the lookup instead of raising an uncatchable
+    /// exception into the host app; no request is made.
+    func testUnencodableAttributesFailTheLookupWithoutARequest() async {
+        let context = UserContext(userId: "u", attributes: ["signedUp": Date()])
+        do {
+            _ = try await client.evaluate(flagKey: "checkout", context: context)
+            XCTFail("expected invalidContext")
+        } catch OttoFlagsError.invalidContext {
+            // expected
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+        let value = await client.getVariation(flagKey: "checkout", context: context, defaultValue: "fallback")
+        XCTAssertEqual(value, "fallback")
+        XCTAssertEqual(recorded().0.count, 0)
+    }
+
+    func testGetVariationWithAnUnsupportedDefaultReturnsTheDefault() async {
+        setResponse(variation: "treatment-a")
+        let value = await client.getVariation(
+            flagKey: "checkout",
+            context: UserContext(userId: "u"),
+            defaultValue: 10
+        )
+        XCTAssertEqual(value, 10)
+    }
 }

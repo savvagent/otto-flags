@@ -179,9 +179,9 @@ class OttoFlagsClient(
                 val response = okHttpClient.newCall(request).execute()
 
                 if (!response.isSuccessful) {
-                    return@withContext Result.failure(
-                        OttoFlagsException("Request failed with code: ${response.code}")
-                    )
+                    val message = "Request failed with code: ${response.code}"
+                    logError("Error checking flag: $flagKey: $message")
+                    return@withContext Result.failure(OttoFlagsException(message))
                 }
 
                 val body = response.body?.string() ?: ""
@@ -203,11 +203,9 @@ class OttoFlagsClient(
                     jsonResponse.getJSONObject("configuration").toMap()
                 }
 
-                var variation = if (jsonResponse.isNull("variation")) {
-                    null
-                } else {
-                    jsonResponse.getString("variation")
-                }
+                // opt returns JSONObject.NULL for JSON null, which is not a String; getString
+                // would also turn a number into a string.
+                var variation = jsonResponse.opt("variation") as? String
 
                 // Update cache
                 flagCache[flagKey] = CacheEntry(enabled, configuration, variation)

@@ -205,7 +205,13 @@ public class OttoFlagsClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = config.timeout
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: evaluationBody(for: context))
+        // JSONSerialization raises an uncatchable exception for a value JSON cannot hold
+        // (a Date, a custom type in the attributes); check first and fail the lookup instead.
+        let evaluateBody = evaluationBody(for: context)
+        guard JSONSerialization.isValidJSONObject(evaluateBody) else {
+            throw OttoFlagsError.invalidContext
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: evaluateBody)
 
         let (data, response) = try await session.data(for: request)
 
@@ -592,4 +598,6 @@ public enum OttoFlagsError: Error {
     case requestFailed
     case invalidResponse
     case networkError(Error)
+    /// The context's attributes hold a value JSON cannot represent; no request was made.
+    case invalidContext
 }

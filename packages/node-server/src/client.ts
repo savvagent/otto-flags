@@ -187,7 +187,7 @@ export class FlagClient {
       const data = await response.json() as {
         enabled?: unknown;
         configuration?: any;
-        variation?: string;
+        variation?: string | null;
         flagId?: string;
         description?: string;
         variant?: string;
@@ -196,16 +196,19 @@ export class FlagClient {
       // `enabled` is a failed lookup: substituting the default here would cache it for the
       // TTL as if the server had said so (#112).
       if (typeof data !== 'object' || data === null || typeof data.enabled !== 'boolean') {
-        throw new Error('The evaluate response has no boolean `enabled`');
+        throw new Error(`The evaluate response for ${JSON.stringify(flagKey)} has no boolean \`enabled\``);
       }
       const value = data.enabled;
+      // The server sends both as null when the flag has none; the SDK's types say undefined.
+      const configuration = data.configuration ?? undefined;
+      const variation = data.variation ?? undefined;
 
       // Cache the result (including configuration and variation)
-      this.cache.set(flagKey, value, data.flagId, data.configuration, data.variation);
+      this.cache.set(flagKey, value, data.flagId, configuration, variation);
 
       // Apply overrides to evaluated result
-      let finalConfiguration = data.configuration;
-      let finalVariation = data.variation;
+      let finalConfiguration = configuration;
+      let finalVariation = variation;
 
       const configOverride = this.configOverrides.get(flagKey);
       if (configOverride) {

@@ -132,6 +132,15 @@ public class FlagClient implements AutoCloseable {
                 JsonElement variationElement = presentOrNull(data.get("variation"));
                 String variation = variationElement == null ? null : variationElement.getAsString();
 
+                // Parse everything before caching, so a failure here caches nothing.
+                FlagEvaluationResult.Metadata metadata = new FlagEvaluationResult.Metadata();
+                JsonElement flagId = presentOrNull(data.get("flagId"));
+                if (flagId != null) metadata.setFlagId(flagId.getAsString());
+                JsonElement description = presentOrNull(data.get("description"));
+                if (description != null) metadata.setDescription(description.getAsString());
+                JsonElement variant = presentOrNull(data.get("variant"));
+                if (variant != null) metadata.setVariant(variant.getAsString());
+
                 // Cache the result (including configuration and variation)
                 setCachedValue(flagKey, value, configuration, variation);
 
@@ -149,11 +158,6 @@ public class FlagClient implements AutoCloseable {
                 if (variationOverride != null) {
                     variation = variationOverride.variation;
                 }
-
-                FlagEvaluationResult.Metadata metadata = new FlagEvaluationResult.Metadata();
-                if (data.has("flagId")) metadata.setFlagId(data.get("flagId").getAsString());
-                if (data.has("description")) metadata.setDescription(data.get("description").getAsString());
-                if (data.has("variant")) metadata.setVariant(data.get("variant").getAsString());
 
                 logger.debug("Flag '{}' evaluated: {}", flagKey, value);
                 return new FlagEvaluationResult(flagKey, value, configuration, variation, "evaluated", metadata);
