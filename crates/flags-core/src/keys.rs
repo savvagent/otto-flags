@@ -11,8 +11,8 @@
 //! not yield a usable server key. The key is high-entropy random, so a plain
 //! hash is enough; there is nothing for a slow KDF to protect.
 //!
-//! Resolution runs on the pool, unpinned, because the org is exactly what the
-//! key is being resolved to. `app_keys` is outside row-level security for that
+//! Resolution runs unpinned, as the tenant role (`crate::unpinned`), because
+//! the org is exactly what the key is being resolved to. `app_keys` is outside row-level security for that
 //! reason, and every statement here names the key hash explicitly.
 
 use otto_tenant::ids::OrgId;

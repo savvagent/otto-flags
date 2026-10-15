@@ -7,7 +7,7 @@
 drops into the tenant role (or refuses an RLS-exempt role it cannot leave) without the
 maintenance marker; a test in `tests/db.rs` refuses any new raw `.pool()` / `begin_unpinned` site.
 
-**Architecture:** `maintenance::begin`'s body moves to `unpinned::begin_with_marker(db, bool)`;
+**Architecture:** `maintenance::begin`'s body moves to `unpinned::begin_as_tenant_role(db, bool)`;
 `maintenance::begin` and the new `unpinned::begin` call it. `keys::resolve_hash`,
 `platform_events::revoked`, and the two tombstone writes switch to `unpinned::begin`. A textual
 check over every workspace crate's non-test `src` pins the allowed sites.
@@ -58,7 +58,7 @@ Model: opus
   `flags-server/src/health.rs: 1`, `flags-server/src/main.rs: 1`.
 - [ ] **Step 2: run, see them fail** (`cargo test -p flags-core` with `DATABASE_URL`): the unit
   tests do not compile; the check reports `keys.rs`, `platform_events.rs`, `maintenance.rs`.
-- [ ] **Step 3: implement.** Move the probe into `unpinned::begin_with_marker`; make
+- [ ] **Step 3: implement.** Move the probe into `unpinned::begin_as_tenant_role`; make
   `maintenance::begin` a call to it; switch the four call sites; keep `revoked_on`'s SQL.
 - [ ] **Step 4: run, see them pass**, plus the full gates.
 - [ ] **Step 5: docs.** `CLAUDE.md` invariant bullet: one clause naming `unpinned::begin` and the

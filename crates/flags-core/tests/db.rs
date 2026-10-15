@@ -5489,11 +5489,21 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
 /// it with its reason if it touches no table a tenant role is constrained on.
 ///
 /// Textual, over each workspace crate's non-test `src`: comment lines and the
-/// trailing `#[cfg(test)] mod tests` are skipped. It catches `.pool()` and
-/// `begin_unpinned`, the ways `otto_tenant::Db` hands out an unconstrained
-/// connection.
+/// trailing `#[cfg(test)] mod tests` are skipped (it must be the file's last
+/// item). It counts the ways to an unconstrained connection: `otto_tenant::Db`'s
+/// `.pool()` and `begin_unpinned`, its `audit_global` / `audit_for_org` (which
+/// write on the pool), and any `PgPool` (`PgPoolOptions` included) held or
+/// built outside a `Db`. It cannot see an alias or a reformatted call such as
+/// `Db::pool(&db)`.
 #[test]
 fn no_raw_pool_queries_outside_the_allowed_sites() {
+    const PATTERNS: [&str; 5] = [
+        ".pool()",
+        "begin_unpinned",
+        "audit_global(",
+        "audit_for_org(",
+        "PgPool",
+    ];
     let allowed: BTreeMap<&str, usize> = BTreeMap::from([
         // The helper itself: opens the transaction it then drops into the
         // tenant role.
@@ -5501,11 +5511,15 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
         // Migrations run as the migrating role: DDL, grants, and the
         // security-definer purge function's owner.
         ("flags-core/src/migrate.rs", 1),
+        // The flag-change listener (`use sqlx::PgPool` and `spawn`'s
+        // parameter): its dedicated connection only `LISTEN`s.
+        ("flags-core/src/notify.rs", 2),
         // `/readyz` runs `SELECT 1`: asks about the connection, touches no
         // table, and must not depend on the tenant role being assumable.
         ("flags-server/src/health.rs", 1),
-        // The notify listener's dedicated `LISTEN` connection: no table query.
-        ("flags-server/src/main.rs", 1),
+        // Builds the pool (`PgPoolOptions`) that becomes the `Db`, and hands
+        // the notify listener its clone.
+        ("flags-server/src/main.rs", 2),
     ]);
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -5516,6 +5530,7 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
         for entry in std::fs::read_dir(&dir).unwrap() {
             let path = entry.unwrap().path();
             let rel = path.strip_prefix(crates).unwrap();
+            let name = rel.to_string_lossy().replace('\\', "/");
             if path.is_dir() {
                 // Every crate's `src`, at any depth below it; never `tests`,
                 // `target`, or `migrations`.
@@ -5531,17 +5546,39 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
             if path.extension().is_none_or(|e| e != "rs") {
                 continue;
             }
-            let text = std::fs::read_to_string(&path).unwrap();
-            let code = text
-                .find("#[cfg(test)]\nmod tests")
-                .map_or(text.as_str(), |end| &text[..end]);
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
+            let code = match text
+                .find("#[cfg(test)]\nmod tests {")
+                .or_else(|| text.find("#[cfg(test)]\npub(crate) mod tests {"))
+            {
+                Some(start) => {
+                    // The test module must be the file's last item, so
+                    // nothing after it escapes the scan. rustfmt (a gate)
+                    // indents its body, so the only line at column 0 after
+                    // its header is its closing brace, at the end.
+                    let tail: Vec<&str> = text[start..]
+                        .lines()
+                        .skip(2)
+                        .filter(|l| !l.is_empty() && !l.starts_with(char::is_whitespace))
+                        .collect();
+                    assert_eq!(
+                        tail,
+                        ["}"],
+                        "{name}: code after the test module would escape this check"
+                    );
+                    &text[..start]
+                }
+                None => text.as_str(),
+            };
             let n: usize = code
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))
-                .map(|l| l.matches(".pool()").count() + l.matches("begin_unpinned").count())
+                .map(|l| PATTERNS.iter().map(|p| l.matches(p).count()).sum::<usize>())
                 .sum();
             if n > 0 {
-                found.insert(rel.to_string_lossy().replace('\\', "/"), n);
+                found.insert(name, n);
             }
         }
     }

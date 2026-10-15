@@ -29,10 +29,10 @@ use sqlx::{Postgres, Transaction};
 /// Open an unpinned transaction on `db`'s pool, as the tenant role
 /// (`db.tenant_role()`) when the pool's role can assume it, with the
 /// maintenance marker set. The role rules, and the refusal to run exempt from
-/// row-level security, are [`crate::unpinned::begin_with_marker`]'s, shared
+/// row-level security, are [`crate::unpinned::begin_as_tenant_role`]'s, shared
 /// with the unpinned lookups that set no marker.
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>> {
-    crate::unpinned::begin_with_marker(db, true).await
+    crate::unpinned::begin_as_tenant_role(db, true).await
 }
 
 #[cfg(test)]
@@ -74,30 +74,12 @@ mod tests {
         assert_eq!(code.as_deref(), Some("42501"), "{err}");
     }
 
-    /// A pool whose sessions already run as `otto_app`: a role row-level
-    /// security applies to, like a managed Postgres role with no CREATEROLE.
-    /// Close `.pool()` before the test returns so sqlx can drop the database.
-    async fn non_exempt_db(pool: &PgPool) -> Db {
-        let app_pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .after_connect(|conn, _meta| {
-                Box::pin(async move {
-                    sqlx::query("SET ROLE otto_app").execute(conn).await?;
-                    Ok(())
-                })
-            })
-            .connect_with(pool.connect_options().as_ref().clone())
-            .await
-            .unwrap();
-        Db::from_pool(app_pool)
-    }
-
     /// Where the tenant role cannot be assumed but the pool's role is subject
     /// to row-level security, `begin` keeps that role, as `Db::begin` does,
     /// instead of failing every maintenance transaction.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn begin_keeps_a_non_exempt_role_that_cannot_assume_the_tenant_role(pool: PgPool) {
-        let db = non_exempt_db(&pool)
+        let db = crate::unpinned::tests::non_exempt_db(&pool)
             .await
             .with_tenant_role("flags_no_such_role")
             .unwrap();

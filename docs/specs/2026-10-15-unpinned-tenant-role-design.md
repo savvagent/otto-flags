@@ -81,14 +81,20 @@ code; performance tuning of the extra round trips (see Risks).
 
 ```rust
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>>  // no marker
-pub(crate) async fn begin_with_marker(db: &Db, maintenance: bool) -> sqlx::Result<…>  // shared
+pub(crate) async fn begin_as_tenant_role(db: &Db, maintenance: bool) -> sqlx::Result<…>  // shared
 ```
 
-`begin_with_marker` is today's `maintenance::begin` body (`maintenance.rs:48-91`) with the
-marker made conditional: `CASE WHEN $2 THEN set_config('app.maintenance', 'on', true) END` as the
-first select-list column (a volatile function inside a CASE arm is evaluated only when the arm is
-taken), so the decoded column becomes `Option<String>` (NULL without the marker). The error text names the kind ("maintenance" or "unpinned"). `maintenance::begin` becomes
-`crate::unpinned::begin_with_marker(db, true)`; its tests stay where they are.
+`begin_as_tenant_role` is today's `maintenance::begin` body (`maintenance.rs:48-91`) with two
+changes. The marker is conditional: `CASE WHEN $2 THEN set_config('app.maintenance', 'on', true)
+END` (a volatile function inside a CASE arm is evaluated only when the arm is taken), decoded as
+`Option<String>`. And the role switch is folded into the same statement, after review flagged the
+round trips on the unauthenticated SDK path: the probes are a `MATERIALIZED` CTE, so they read
+`current_user` before the outer select list runs `CASE WHEN assumable THEN set_config('role', $1,
+true) END`, which is `SET LOCAL ROLE` with a bind parameter instead of interpolated SQL. A refused
+result returns `Err` and the dropped transaction rolls the switch back. The error text names the
+kind ("maintenance" or "unpinned"). `maintenance::begin` becomes
+`crate::unpinned::begin_as_tenant_role(db, true)`; only it passes `true`. Its tests stay where
+they are.
 
 Call sites:
 
@@ -101,13 +107,19 @@ Call sites:
 | `migrate::migrate` (`migrate.rs:48`) | schema | **exempt**: migrations must run as the migrating role (DDL, `GRANT`, the `SECURITY DEFINER` purge function owner) |
 | `maintenance` / `unpinned` helper | — | **the helper itself** (one `.pool().begin()`) |
 | `flags-server` `readyz` (`health.rs:51`) | none (`SELECT 1`) | **exempt**: asks about the connection, touches no table, must not fail on role config so `/readyz` reports DB reachability |
-| `flags-server` `main.rs:77` notify `Listener` | none (`LISTEN`) | **exempt**: a dedicated `LISTEN` connection; runs no query on a table |
+| `flags-server` `main.rs` (`PgPoolOptions`, the listener's pool clone) and `notify.rs` (`PgPool`) | none (`LISTEN`) | **exempt**: builds the pool that becomes the `Db`; the listener's dedicated connection only `LISTEN`s |
+
+`flags-api` `stream.rs` `still_valid`: a `Configuration` error from the key re-check now ends the
+stream, like a gone key. It is persistent, not an outage, and while it lasts a rotated key could
+not be re-checked at all.
 
 Check: a plain `#[test]` in `tests/db.rs` walks `crates/*/src/**/*.rs` from
-`CARGO_MANIFEST_DIR/..`, drops each file's text from its first `#[cfg(test)]` + `mod tests` on
-(the unit-test module sits at the end of each file in this repo), drops comment lines, and counts `.pool()` and
-`begin_unpinned` per file. The result must equal the allowlist exactly (path → count, each with
-its reason in a comment), so a new site fails and a removed one prompts trimming the list.
+`CARGO_MANIFEST_DIR/..`, normalizes line endings, drops each file's trailing `#[cfg(test)] mod
+tests` (asserting it is the last item: after its header only its closing brace sits at column 0),
+drops comment lines, and counts `.pool()`, `begin_unpinned`, `audit_global(`, `audit_for_org(`
+(otto-tenant helpers that write on the pool), and `PgPool` per file. The result must equal the
+allowlist exactly (path to count, each with its reason in a comment), so a new site fails and a
+removed one prompts trimming the list.
 
 No public interface changes: the helper is `pub(crate)`; `resolve_hash`/`revoked` keep their
 signatures and errors (`Error::Db`).
@@ -122,7 +134,7 @@ signatures and errors (`Error::Db`).
   `unpinned::begin` grants no cross-org access to tenant tables; it is for the pre-org tables.
   `CLAUDE.md` gets one clause naming it.
 - **Small shared database:** no new connection or fan-out; each lookup holds its pooled connection
-  for a few more round trips (BEGIN, probe, `SET LOCAL ROLE`, query, COMMIT).
+  for a few more round trips (BEGIN, probe with role switch, query, COMMIT).
 - **SDK path never calls the platform:** unchanged (database only).
 - **Migrations:** none.
 
@@ -158,8 +170,12 @@ None: no secret, config key, scope, or migration. Rollback-compatible trivially 
 
 ## 12. Risks and open questions
 
-- Latency: an SDK key resolution goes from one round trip to five. On Fly's private network to a
-  co-located Postgres that is low single-digit milliseconds. Accepted for isolation; folding the
-  probe and role switch into fewer statements waits for #79 (otto-tenant's cached probe).
-- The grep check is textual: a query reaching the pool another way (a cloned `PgPool`, a new
-  `PgPoolOptions`) is not caught. It guards the common mistake the issue names.
+- Latency and pool hold time: an SDK key resolution goes from one round trip to four (BEGIN,
+  probe with role switch, query, COMMIT), before any key is proven valid. Accepted: the public
+  `sdk_` client key already lets anyone drive the full `begin_live` evaluate path, which costs
+  more; on Fly's private network to a co-located Postgres the added time is low single-digit
+  milliseconds. Rate limiting or a negative key cache is a separate concern, not taken here;
+  caching the probe waits for #79 (otto-tenant's own probe).
+- The check is textual: an alias (`let p = db.pool()` is caught, but a pool passed on from an
+  allowed site is not) or a reformatted call (`Db::pool(&db)`) escapes it. It guards the common
+  mistake the issue names.

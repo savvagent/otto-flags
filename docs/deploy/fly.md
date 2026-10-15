@@ -350,8 +350,9 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   from the shipper, sweeps, or checker backstop after a role change points here. Queries
   that cannot pin an org (SDK key resolution, the revocation check, the lifecycle tombstones) run
   in `unpinned::begin`, which drops into `otto_app` the same way but sets no marker, so they see
-  no tenant row (#80); request paths pin through `begin_live`. Only migrations, `/readyz`'s
-  `SELECT 1`, and the notify listener's `LISTEN` connection still run as the attach role. A release from before #73 runs
+  no tenant row (#80); request paths pin through `begin_live`. Still run as the attach role:
+  migrations, the startup isolation check and the role probes (catalog reads), `/readyz`'s
+  `SELECT 1`, and the notify listener's `LISTEN` connection. A release from before #73 runs
   its background work as the attach role, so it keeps working during the rollout overlap and
   after a rollback. Under a pool role subject to RLS, a release from before `0005` ships no usage
   while it runs against that schema, and the rows wait in the outbox until a newer release ships
