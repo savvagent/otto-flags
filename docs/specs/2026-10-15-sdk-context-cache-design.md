@@ -181,7 +181,8 @@ Per SDK:
   body is sent as today. The cache write moves from `queue.async` to `queue.sync`, so an
   evaluate that returns has stored its result and the next identical one hits (with `async` the
   write could land after the next lookup, which also made a cache-hit test racy). Override
-  setters remove the flag's inner map. `handleWebSocketMessage`
+  setters and `clearAllOverrides` remove the flag's inner map (or all), likewise with
+  `queue.sync`, so an evaluate after a setter returns cannot see the old entry. `handleWebSocketMessage`
   and `refreshFlags` remove the flag's inner map instead of writing an entry. Bound: a full flag
   map is cleared before inserting a new key.
 - **Android.** `flagCache: ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>>`. A

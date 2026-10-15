@@ -26,7 +26,9 @@ caps memory. Context-free writers (list fetch, mobile poll and stream) stop writ
 - Gates:
   - Python (from the worktree root; `/tmp` is a nearly full tmpfs):
     `mkdir -p .tmp && export TMPDIR=$PWD/.tmp && v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src`
-    (`.tmp/` is never committed; reuse one venv across runs within a task.)
+    (`.tmp/` is gitignored. To reuse a venv within a task, create it once at
+    `v=$PWD/.tmp/venv` with the first two commands, then run `"$v/bin/pytest" -p no:cacheprovider`
+    and `"$v/bin/mypy" --cache-dir=/dev/null src` from `packages/python-server`.)
   - pnpm (worktree root): `pnpm install --frozen-lockfile && pnpm lint && pnpm build && pnpm test`.
     For a quick loop inside one package: `cd packages/<pkg> && pnpm test` (jest).
   - Go (`go vet ./...`, `go test ./...`), Java (`mvn -B verify`), Swift (`swift test`): no
@@ -44,7 +46,8 @@ caps memory. Context-free writers (list fetch, mobile poll and stream) stop writ
 - Do not fix #113, #119, #124 (metadata fields) or #125 (mobile endpoint paths); do not make them
   worse (Go's `cache_test.go` already does not compile; leave it alone).
 - Commit format: `fix(sdk): <imperative, lower-case>`; body explains why and ends `Refs #127`
-  (the PR carries `Fixes #127`). No attribution of any kind (no Co-Authored-By, no "Generated
+  on intermediate commits; the last commit of the PR ends `Fixes #127` (the PR body carries
+  `Fixes #127` too). No attribution of any kind (no Co-Authored-By, no "Generated
   with", no credit markers), in commits, code, comments or docs.
 - Out-of-band: none. No version bumps. Changesets only for `@otto-flags/node-server` and
   `@otto-flags/sdk` (Tasks 2 and 3).
@@ -88,7 +91,8 @@ body's `user_id` or attribute):
   and get their own answer.
 - **Order:** the same attributes inserted in two orders → second call is `cached`, 1 request
   (where the map type preserves insertion order: Python dict, JS object, Java `LinkedHashMap`,
-  Kotlin `linkedMapOf`; Go and Swift maps: use two distinct literals).
+  Kotlin `linkedMapOf`; not for Go and Swift, whose maps have no insertion order and whose
+  encoders sort keys).
 - **Invalidate:** after A/B, invalidating `checkout` makes both users re-request (4 requests).
 - **Bound** (server SDKs, unit test on the cache with the bound lowered): inserting more distinct
   context keys than the bound never holds more than the bound for that flag, and the newest entry
@@ -179,7 +183,9 @@ create `/.changeset/node-server-context-cache.md` (worktree root `.changeset/`).
     returning `{ flags: [{ key: 'checkout', enabled: true, scope: 'application', environments:
     {}, version: 1 }], count: 1 }`, then `evaluate('checkout', { user_id: 'b' })` → false,
     `evaluated`), `trackError` reports the value cached for its own context (spy on the private
-    telemetry's `trackError` via `jest.spyOn((client as any).telemetry, 'trackError')`).
+    telemetry's `trackError` via `jest.spyOn((client as any).telemetry, 'trackError')`). Build
+    every test client with `enableTelemetry: false, enableRealtime: false`, so request counts
+    include only evaluate calls.
   - `src/context-key.test.ts`: key order independence at depth (nested attribute objects),
     `undefined` fields dropped (equal to omitted), different values differ, a cyclic object
     returns `null`.
@@ -249,8 +255,8 @@ root.
 two-argument `Set`), so updating it is #113's job.
 
 - [ ] **Step 1: tests (cannot be run: no Go toolchain).** `context_cache_test.go` in package
-  `ottoflags`, modeled on `evaluate_contract_test.go` (reuse its `newFlagKeyTestClient` helper and
-  `serverBody` format): an `httptest.Server` that decodes `{"context": {...}}` and answers by
+  `ottoflags`, modeled on `evaluate_contract_test.go` (reuse `newFlagKeyTestClient` from
+  `flagkey_test.go` and the `serverBody` format from `evaluate_contract_test.go`): an `httptest.Server` that decodes `{"context": {...}}` and answers by
   `user_id` / `attributes.plan`, counting requests with `atomic.Int32`/`int32`. Cover A/B,
   Attribute, Invalidate (`client.InvalidateCache("checkout")`), and that the caller's `*Context`
   is not modified (ApplicationID stays empty when the client config sets one: construct that
@@ -322,7 +328,8 @@ two-argument `Set`), so updating it is #113's job.
   try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }.flatMap { String(data:
   $0, encoding: .utf8) }` — all before the cache lookup. Lookup `flagCache[flagKey]?[contextKey]`
   only when non-nil. Cache write, now `queue.sync` (spec §6: an evaluate that returns has stored
-  its result): if the flag's map has
+  its result); the override setters' and `clearAllOverrides`' cache removals also become
+  `queue.sync` (an evaluate after a setter returns must not see the old entry): if the flag's map has
   `>= maxContextsPerFlag` entries and the key is new, clear it; then insert. Override setters and
   `clearAllOverrides` keep their removal (now of the inner map / all). `handleWebSocketMessage`
   and `refreshFlags`: remove `flagCache[flagKey]` (all contexts) instead of writing an entry; keep
@@ -342,11 +349,13 @@ two-argument `Set`), so updating it is #113's job.
 `packages/android-sdk/src/test/kotlin/com/savvagent/ottoflags/sdk/OttoFlagsClientContextCacheTest.kt`.
 
 - [ ] **Step 1: tests (cannot be run).** Modeled on `OttoFlagsClientNetworkTest.kt` (its
-  MockWebServer setup, client construction with polling/WebSocket off, `runBlocking`). A
+  MockWebServer setup, client construction with polling/WebSocket off, `runTest`). A
   `Dispatcher` answering by the body's `context.user_id`/attribute. Cover A/B (`requestCount ==
   2`), Attribute, Order (`linkedMapOf` in two orders), Invalidate via
   `setVariationOverride`/`clearVariationOverride`, and `flagUpdates.value["checkout"]` equals
   the last evaluation's value. Also a pure test of `contextKey` (internal) for order independence.
+  These depend on `org.json` working in local JVM unit tests, the existing setup gap (#113): do
+  not add a test dependency for it.
 - [ ] **Step 2: implement.** `flagCache = ConcurrentHashMap<String,
   ConcurrentHashMap<String, CacheEntry>>()`; `MAX_CONTEXTS_PER_FLAG = 10_000` in the companion.
   `internal fun contextKey(body: JSONObject): String` = `canonicalJson(body.get("context"))`
@@ -373,4 +382,5 @@ two-argument `Set`), so updating it is #113's job.
   alone (attributes and other fields change the answer); bound entries per flag; invalidate all of
   a flag's entries on an SSE event for it. Mention that the list endpoint's `enabled` is the
   environment switch, not a context's result, so it must not fill the evaluation cache.
-- [ ] **Step 2:** commit `docs(sdk): describe the per-context evaluation cache key` (`Refs #127`).
+- [ ] **Step 2:** commit `docs(sdk): describe the per-context evaluation cache key`, body ending
+  `Fixes #127` (last commit of the implementation).
