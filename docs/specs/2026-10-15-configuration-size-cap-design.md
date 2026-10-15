@@ -40,8 +40,8 @@ From #115 (found while working #111):
 ## 3. Assumptions
 
 - **Limit: 32 KiB (32 768 bytes) per configuration, inclusive**, measured as the length in bytes
-  of its compact `serde_json` serialization: exactly the bytes the server puts in a response for
-  it. It applies separately to the flag's configuration and to each variation's configuration.
+  of its compact `serde_json` serialization, the form the server emits it in (jsonb may
+  normalize some numbers between request and storage; the difference is negligible). It applies separately to the flag's configuration and to each variation's configuration.
   An evaluate response carries one configuration (the variation's, else the flag's), so its
   configuration part is at most 32 KiB, far below the Rust SDK's 1 MiB read cap.
 - **Per configuration, not per flag.** The AC names "a configuration". The list endpoint and the
@@ -89,7 +89,8 @@ tool argument docs in `crates/flags-mcp/src/tools/flags.rs`, `docs/SDK-DEVELOPER
   into a byte-counting `io::Write` (no allocation of the serialized text). A serialization error
   (not possible for a `Value`) yields `usize::MAX`, so it fails closed.
   `pub(crate) fn check_configuration_size(what: &str, c: &Value) -> Result<(), String>` returns
-  `"{what} is {n} bytes as JSON; the limit is 32768 bytes (32 KiB)"` when over.
+  `"{what} is {n} bytes as JSON; the limit is {MAX_CONFIGURATION_BYTES} bytes"` when over (built
+  from the constant, so raising it is one line).
 - `validate_variations` (`eval.rs:458`): after parsing, for each variation with a configuration,
   `check_configuration_size(&format!("variation {name:?} configuration"), c)?`.
 - `validate_configuration` (`flags.rs:192`): after the NUL check,

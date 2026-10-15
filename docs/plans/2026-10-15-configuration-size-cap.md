@@ -55,15 +55,17 @@ Files:
 - [ ] **Step 2: Failing DB tests** in `tests/db.rs` (helper `sized(n)` = JSON string of `n` total
   serialized bytes):
   - `configuration_size_is_capped_on_write`: `create_flag` with `configuration: sized(32768)`
-    succeeds; `sized(32769)` fails `invalid_argument`; `update_flag` with
+    succeeds; `sized(32769)` fails `invalid_argument` with a message containing `32768`; `update_flag` with
     `configuration: sized(32769)` fails, `sized(32768)` succeeds; `update_flag` with
     `variations: {"on": {"configuration": sized(32769)}}` fails, and `create_flag` with the same
-    variations fails.
-  - `stored_oversized_configuration_still_evaluates`: create a flag, then on the pool
+    variations fails with a message naming the variation.
+  - `stored_oversized_configuration_still_evaluates`: create a flag and enable `production`
+    with `set_environment`, commit, then on the pool
     `UPDATE feature_flags SET configuration = $1 WHERE id = $2` with `sized(40_000)`;
-    `find_flag` + `eval::evaluate` in an enabled environment returns that configuration;
-    `update_flag` with only `name` succeeds and keeps it.
-- [ ] **Step 3: Run** `cargo test -p flags-core size` (with `DATABASE_URL`) and see them fail
+    in a new transaction `find_flag` + `eval::evaluate` in `production` returns that configuration;
+    `update_flag` with only `name` succeeds and keeps it; resubmitting it via
+    `update_flag { configuration }` is refused.
+- [ ] **Step 3: Run** `cargo test -p flags-core` (with `DATABASE_URL`) and see the new tests fail
   (compile failure counts for the unit tests).
 - [ ] **Step 4: Implement** per spec section 6 (`MAX_CONFIGURATION_BYTES`, `json_len` via a
   counting writer, failing closed to `usize::MAX`, `check_configuration_size`, the loop in
