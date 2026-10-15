@@ -1,6 +1,6 @@
 # Serve a connector install page at `/` for browsers
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#75)
 **Issue:** #71
 
 ## 1. Brief

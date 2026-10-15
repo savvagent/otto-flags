@@ -1,7 +1,7 @@
 # Connector Install Page Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** Serve a static install page at `GET`/`HEAD /` to browsers without `Authorization`.
 Every other request keeps the JSON 404.
@@ -16,6 +16,10 @@ with a hash-based CSP. `router()` adds a `/` route through `any(...)`, and its `
 **Ticket:** savvagent/otto-flags#71
 
 **Spec:** `docs/specs/2026-10-14-connector-install-page-design.md`
+
+**Shipped in #75.** The code embedded below is the plan as approved. Review commits on #75 changed
+the template's aria attributes, the `q` range, the link-origin fallback, and the test-only
+dependencies, so the code in `crates/flags-server/src/install_page.*` is the source of truth.
 
 ## Global Constraints
 
@@ -81,7 +85,7 @@ base64 are dev-only).
 
 **Model:** sonnet. The code is fully specified below.
 
-- [ ] **Step 1: Write the template and the module with its tests.** Create the two files below
+- [x] **Step 1: Write the template and the module with its tests.** Create the two files below
   verbatim. The module holds `wants_html`/`accepts_html` (the Accept rule: exactly `text/html`,
   case-insensitive, q>0, a missing q means 1, an unparseable q means 0, any `Authorization`
   means false), `InstallPage::new` (replaces every placeholder with HTML-escaped values, origin
@@ -574,21 +578,21 @@ mod tests {
   `<script>` (for example `"Copied."` to `"Copied!"`). Add the module and dependency lines listed
   under Files.
 
-- [ ] **Step 2: Run the tests and see the hash test fail.**
+- [x] **Step 2: Run the tests and see the hash test fail.**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --lib install_page`
   Expected: `the_csp_hashes_match_the_inline_style_and_script` FAILS with "update CSP: the
   template's <script> now hashes to …". The other tests pass.
 
-- [ ] **Step 3: Revert the temporary change.** Change the script text back to `"Copied."` so the
+- [x] **Step 3: Revert the temporary change.** Change the script text back to `"Copied."` so the
   template matches the `CSP` constant.
 
-- [ ] **Step 4: Run the tests and see them pass.**
+- [x] **Step 4: Run the tests and see them pass.**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --lib install_page`
   Expected: 8 passed, 0 failed, 0 ignored. Then run
   `cargo clippy -p flags-server --all-targets -- -D warnings` and `cargo fmt --all`, and fix any
   findings without suppressions.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
   ```bash
   git add Cargo.toml Cargo.lock crates/flags-server/Cargo.toml crates/flags-server/src/install_page.rs crates/flags-server/src/install_page.html crates/flags-server/src/lib.rs
   git commit -m "feat(server): add the connector install page" -m "Browsers that open the otto-flags origin get a JSON 404 that tells a person nothing. This adds the static page and the Accept rule that decides who gets it; the next commit routes it. The CSP allows the one inline style and script by hash, and a test recomputes both from the template so an edit cannot silently break the page.
@@ -610,7 +614,7 @@ route other than `/` changes. `POST /` must stay a 404, not a 405, with no `Allo
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Write the failing router tests.** In `lib.rs` `mod tests`, add a helper and these
+- [x] **Step 1: Write the failing router tests.** In `lib.rs` `mod tests`, add a helper and these
   tests:
 
 ```rust
@@ -711,14 +715,14 @@ route other than `/` changes. `POST /` must stay a 404, not a 405, with no `Allo
   `.header("accept", "text/html")` to its request. It must still get 401 with the
   `resource_metadata` challenge.
 
-- [ ] **Step 2: Run the tests and see them fail.**
+- [x] **Step 2: Run the tests and see them fail.**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --lib`
   Expected: `a_browser_at_the_root_gets_the_install_page` and
   `head_at_the_root_gets_the_page_headers_and_no_body` FAIL (404).
   `everything_else_at_the_root_keeps_the_json_404` FAILS on the missing `vary`. The `/nope` and
   `/mcp` tests pass.
 
-- [ ] **Step 3: Implement the route.** In `lib.rs`:
+- [x] **Step 3: Implement the route.** In `lib.rs`:
   - imports: add `use axum::routing::any;`, and replace the existing `use http::{StatusCode, Uri};`
     with `use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};`
   - in `router()`, before `health::router(db)`:
@@ -767,14 +771,14 @@ route other than `/` changes. `POST /` must stay a 404, not a 405, with no `Allo
     `//!   /                                 install page  browsers (Accept: text/html, no Authorization); else JSON 404`
     before the `everything else` line.
 
-- [ ] **Step 4: Run the tests and see them pass.**
+- [x] **Step 4: Run the tests and see them pass.**
   Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --lib`
   Expected: every lib test passes, including the four new ones and the extended `/mcp` test, with
   0 ignored. Run `cargo fmt --all`, then run the full gates from Global Constraints (test, clippy, fmt check, the
   migrations diff, and `podman build -t otto-flags:check .`) and record the counts per test
   binary.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
   ```bash
   git add crates/flags-server/src/lib.rs
   git commit -m "feat(server): serve the install page at / to browsers" -m "\"Open console\" on the platform sends people to this origin. GET and HEAD / now serve the install page when Accept names text/html and there is no Authorization; every other request to / keeps the JSON 404 (now with Vary, so a cache cannot swap the two), and POST / stays a 404 rather than becoming a 405.
