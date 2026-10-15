@@ -331,3 +331,162 @@ fn context_builder_sets_its_fields() {
     assert_eq!(attributes["plan"], "pro");
     assert_eq!(attributes["age"], 30);
 }
+
+#[tokio::test]
+async fn different_users_each_get_their_own_cached_answer() {
+    let server = MockServer::start().await;
+    for (user, enabled) in [("user-a", true), ("user-b", false)] {
+        Mock::given(method("POST"))
+            .and(path("/api/flags/targeted/evaluate"))
+            .and(body_partial_json(json!({ "context": { "user_id": user } })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": enabled })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let client = client(&server);
+    let a = || Some(Context::new().with_user_id("user-a"));
+    let b = || Some(Context::new().with_user_id("user-b"));
+
+    let first_a = client.evaluate("targeted", a()).await.unwrap();
+    let first_b = client.evaluate("targeted", b()).await.unwrap();
+    assert!(first_a.value);
+    assert!(!first_b.value);
+    assert_eq!(first_b.reason, "evaluated");
+
+    // Within the TTL each context is served its own cached answer.
+    let again_a = client.evaluate("targeted", a()).await.unwrap();
+    let again_b = client.evaluate("targeted", b()).await.unwrap();
+    assert!(again_a.value);
+    assert!(!again_b.value);
+    assert_eq!(again_a.reason, "cached");
+    assert_eq!(again_b.reason, "cached");
+}
+
+#[tokio::test]
+async fn contexts_differing_in_an_attribute_each_get_their_own_answer() {
+    let server = MockServer::start().await;
+    for (plan, enabled) in [("pro", true), ("free", false)] {
+        Mock::given(method("POST"))
+            .and(path("/api/flags/targeted/evaluate"))
+            .and(body_partial_json(
+                json!({ "context": { "attributes": { "plan": plan } } }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": enabled })))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let client = client(&server);
+    let ctx = |plan: &str| {
+        Some(
+            Context::new()
+                .with_user_id("user-1")
+                .with_attribute("plan", json!(plan)),
+        )
+    };
+    assert!(client.evaluate("targeted", ctx("pro")).await.unwrap().value);
+    assert!(
+        !client
+            .evaluate("targeted", ctx("free"))
+            .await
+            .unwrap()
+            .value
+    );
+}
+
+#[tokio::test]
+async fn an_identical_context_hits_the_cache_whatever_the_attribute_order() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/test-flag/evaluate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server);
+    let first = Context::new()
+        .with_user_id("user-1")
+        .with_attribute("a", json!(1))
+        .with_attribute("b", json!({ "x": 1, "y": 2 }));
+    let second = Context::new()
+        .with_attribute("b", json!({ "y": 2, "x": 1 }))
+        .with_attribute("a", json!(1))
+        .with_user_id("user-1");
+    client.evaluate("test-flag", Some(first)).await.unwrap();
+    let cached = client.evaluate("test-flag", Some(second)).await.unwrap();
+    assert_eq!(cached.reason, "cached");
+}
+
+#[tokio::test]
+async fn invalidating_a_flag_drops_its_cached_answer_for_every_context() {
+    let server = MockServer::start().await;
+    for user in ["user-a", "user-b"] {
+        Mock::given(method("POST"))
+            .and(path("/api/flags/targeted/evaluate"))
+            .and(body_partial_json(json!({ "context": { "user_id": user } })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+            .expect(2)
+            .mount(&server)
+            .await;
+    }
+
+    let client = client(&server);
+    for user in ["user-a", "user-b"] {
+        let ctx = Some(Context::new().with_user_id(user));
+        client.evaluate("targeted", ctx).await.unwrap();
+    }
+    client.invalidate_cache(Some("targeted"));
+    for user in ["user-a", "user-b"] {
+        let ctx = Some(Context::new().with_user_id(user));
+        let result = client.evaluate("targeted", ctx).await.unwrap();
+        assert_eq!(result.reason, "evaluated");
+    }
+}
+
+#[tokio::test]
+async fn the_configured_application_id_is_part_of_the_cached_context() {
+    let server = MockServer::start().await;
+    for app in ["app-1", "app-2"] {
+        Mock::given(method("POST"))
+            .and(path("/api/flags/test-flag/evaluate"))
+            .and(body_partial_json(
+                json!({ "context": { "application_id": app } }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "enabled": app == "app-1" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_application_id("app-1"),
+    )
+    .unwrap();
+
+    // `None`, an empty context, and one naming the configured app are the same request.
+    assert!(client.evaluate("test-flag", None).await.unwrap().value);
+    let empty = client
+        .evaluate("test-flag", Some(Context::new()))
+        .await
+        .unwrap();
+    assert_eq!(empty.reason, "cached");
+    let mut same_app = Context::new();
+    same_app.application_id = Some("app-1".into());
+    let same = client.evaluate("test-flag", Some(same_app)).await.unwrap();
+    assert_eq!(same.reason, "cached");
+
+    // Another app is another context.
+    let mut other_app = Context::new();
+    other_app.application_id = Some("app-2".into());
+    let other = client.evaluate("test-flag", Some(other_app)).await.unwrap();
+    assert_eq!(other.reason, "evaluated");
+    assert!(!other.value);
+}

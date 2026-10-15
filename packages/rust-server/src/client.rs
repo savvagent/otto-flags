@@ -1,4 +1,4 @@
-use crate::cache::Cache;
+use crate::cache::{context_key, Cache};
 use crate::types::{
     Config, ConfigOverrideEntry, ConfigOverrideOptions, Context, EvaluationResult, Metadata,
     VariationOverrideEntry, VariationResult,
@@ -59,13 +59,27 @@ impl FlagClient {
     }
 
     /// Evaluate a feature flag
+    ///
+    /// Results are cached for `Config::cache_ttl` per flag key and evaluation context (the
+    /// context as sent, after `application_id` is filled in): a different context, such as
+    /// another user or other attributes, is evaluated by the server.
     pub async fn evaluate(
         &self,
         flag_key: &str,
         context: Option<Context>,
     ) -> Result<EvaluationResult, OttoFlagsError> {
+        // Prepare context: the cache key and the request body use the same one.
+        let mut ctx = context.unwrap_or_default();
+        if ctx.application_id.is_none() {
+            ctx.application_id = self.config.application_id.clone();
+        }
+        let ctx_key = context_key(&ctx);
+
         // Check cache first
-        if let Some(cached_entry) = self.cache.get_entry(flag_key) {
+        if let Some(cached_entry) = ctx_key
+            .as_deref()
+            .and_then(|key| self.cache.get_entry(flag_key, key))
+        {
             let mut configuration = cached_entry.configuration.clone();
             let mut variation = cached_entry.variation.clone();
 
@@ -107,12 +121,6 @@ impl FlagClient {
             });
         }
 
-        // Prepare context
-        let mut ctx = context.unwrap_or_default();
-        if ctx.application_id.is_none() {
-            ctx.application_id = self.config.application_id.clone();
-        }
-
         // Make API request
         let url = format!("{}/api/flags/{}/evaluate", self.config.base_url, flag_key);
         let body = json!({ "context": ctx });
@@ -144,13 +152,16 @@ impl FlagClient {
         let mut configuration = data.get("configuration").filter(|v| !v.is_null()).cloned();
         let mut variation = data["variation"].as_str().map(String::from);
 
-        // Cache the result (including configuration and variation)
-        self.cache.set(
-            flag_key.to_string(),
-            value,
-            configuration.clone(),
-            variation.clone(),
-        );
+        // Cache the result (including configuration and variation) for this context
+        if let Some(key) = ctx_key {
+            self.cache.set(
+                flag_key,
+                key,
+                value,
+                configuration.clone(),
+                variation.clone(),
+            );
+        }
 
         // Apply overrides to evaluated result
         if let Ok(config_overrides) = self.config_overrides.read() {
@@ -237,7 +248,7 @@ impl FlagClient {
         })
     }
 
-    /// Invalidate cache for a specific flag or all flags
+    /// Invalidate cache for a specific flag (for every context) or all flags
     pub fn invalidate_cache(&self, flag_key: Option<&str>) {
         self.cache.invalidate(flag_key);
     }

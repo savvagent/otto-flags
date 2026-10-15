@@ -254,10 +254,9 @@ let config = Config::new("sdk_key")
     .with_default("flag", false);
 ```
 
-> **Caching caveat:** results are cached per flag key, not per context, for `cache_ttl`. Until
-> this is fixed (#91), a flag that targets users or rolls out by percentage can return one
-> context's result to another within the TTL; use a short `cache_ttl` or call
-> `invalidate_cache` for such flags.
+Results are cached for `cache_ttl` per flag key and evaluation context: a different context
+(another user, other attributes) is evaluated by the server, and `invalidate_cache(Some(key))`
+drops a flag's cached results for every context.
 
 #### Context
 
@@ -315,7 +314,7 @@ let enabled = client.is_enabled("my-flag", Some(context)).await;
 Invalidates the cache.
 
 ```rust
-client.invalidate_cache(Some("my-flag")); // Specific flag
+client.invalidate_cache(Some("my-flag")); // Specific flag, every context
 client.invalidate_cache(None);            // All flags
 ```
 
