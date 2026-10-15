@@ -13,6 +13,7 @@ use flags_core::rollback::{self, Mode, PolicyState, RollbackExt, Thresholds};
 use flags_core::telemetry::{
     self, ErrorEvent, EvalEvent, ERROR_RETENTION_DAYS, EVAL_RETENTION_DAYS,
 };
+use flags_core::usage;
 use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -2991,6 +2992,44 @@ async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
         let mut expected: Vec<uuid::Uuid> = orgs.iter().map(|o| o.as_uuid()).collect();
         expected.sort();
         assert_eq!(orgs_left, expected, "{table}: each org keeps its fresh row");
+    }
+}
+
+/// Rejected usage events are kept for operators for
+/// `usage::REJECTED_RETENTION_DAYS`, then swept across every org (#74), as
+/// `otto_app` in a maintenance transaction (#73) even on this superuser pool.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rejected_usage_is_swept_after_its_retention(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let orgs = [OrgId::new(), OrgId::new()];
+    for org in orgs {
+        for days in [usage::REJECTED_RETENTION_DAYS + 1, 1] {
+            sqlx::query(
+                "INSERT INTO usage_outbox_rejected \
+                 (event_id, org_id, user_id, tool, billable, occurred_at, reason, rejected_at) \
+                 VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'create_flag', true, now(), 'x', \
+                         now() - make_interval(days => $2))",
+            )
+            .bind(org)
+            .bind(days)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    assert_eq!(usage::sweep_rejected(&db).await.unwrap(), 2);
+    for org in orgs {
+        let (total, expired): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(*) FILTER (WHERE rejected_at < now() - make_interval(days => $2)) \
+             FROM usage_outbox_rejected WHERE org_id = $1",
+        )
+        .bind(org)
+        .bind(usage::REJECTED_RETENTION_DAYS)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((total, expired), (1, 0), "each org keeps its fresh row");
     }
 }
 
