@@ -51,12 +51,12 @@
 //! constraint violation) leaves the flag alone for [`FAILURE_COOLDOWN`]; a
 //! successful check clears that. A transient failure ([`Error::is_transient`]:
 //! a pool timeout, a serialization failure or deadlock, a lock or statement
-//! timeout, the platform unreachable) counts as a check, so the next hint or
-//! backstop pass retries it after the usual debounce: a telemetry burst, the
-//! likeliest time for a pool timeout, is also when a misbehaving flag most
-//! needs checking. If at least `backstop_limit` policies fail persistently
-//! they can still fill the backstop's slots; that is accepted, since hints
-//! still reach every other flag.
+//! timeout, a database restart, the platform unreachable) counts as a check,
+//! so the next hint or backstop pass retries it after the usual debounce: a
+//! telemetry burst, the likeliest time for a pool timeout, is also when a
+//! misbehaving flag most needs checking. If at least `backstop_limit`
+//! policies fail persistently they can still fill the backstop's slots; that
+//! is accepted, since hints still reach every other flag.
 //!
 //! Every check is bounded: its transactions wait at most 2 s for a row lock,
 //! run no statement longer than 10 s, and the whole check at most [`CheckerConfig::check_timeout`] (15 s), after
