@@ -370,7 +370,8 @@ impl Flags {
         name = "rollback_flag",
         description = "Restore a flag to an earlier version (default: the previous one), as a new \
                        version. Use when a change caused trouble; flag_health shows whether it \
-                       did, flag_history shows the versions it can restore.",
+                       did, flag_history shows the versions it can restore (versions older \
+                       than 90 days are removed once the flag has 100 newer ones).",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

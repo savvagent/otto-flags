@@ -4,7 +4,8 @@
 //! Flag changes are not here: every one of them is already recorded, with a
 //! full snapshot, actor, and reason, in `flag_versions` (see [`crate::flags`]),
 //! for at least [`crate::flags::VERSION_RETENTION_DAYS`] days, and the newest
-//! [`crate::flags::MIN_RETAINED_VERSIONS`] of each flag for good. This trail is for what has no history table of its own: apps, keys, and the
+//! [`crate::flags::MIN_RETAINED_VERSIONS`] of each flag for good. This trail
+//! is for what has no history table of its own: apps, keys, and the
 //! platform's lifecycle events.
 //!
 //! Actions are dotted and stable because they are queried by prefix and end up
