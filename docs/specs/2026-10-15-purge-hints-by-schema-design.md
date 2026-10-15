@@ -1,6 +1,6 @@
 # Name the purge function by schema in the startup check's hints
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#101)
 **Issue:** #98
 
 ## 1. Brief
@@ -75,8 +75,14 @@ inspected, and the missing-function message is correct whether or not 0004 has r
 ## 5. Scope
 
 In: `PurgeReport::problems` and `summary` text, the private name macros in `audit_purge.rs`, new
-unit tests beside the code, one DB test in `crates/flags-core/tests/db.rs`, and the two quoted
-lines in `docs/deploy/fly.md`.
+unit tests beside the code, one DB test in `crates/flags-core/tests/db.rs`, the two quoted
+lines in `docs/deploy/fly.md`, and a short note there on the applied-but-elsewhere case (both
+remedies marked human-only).
+
+Review changes (#101): the catalog query returns the quoted schema, the identity arguments, and
+`prosecdef`, and the message says to move only 0004's own function (a name-only match could find
+an unrelated one); re-running 0004's file is advised with `SET search_path = public` first, since
+the file is unqualified and would otherwise repeat the fault.
 
 Out: what `inspect` reads or how `check` decides; `PurgeReport`'s fields; the `PURGE` call; the
 unqualified statements inside existing tests; historical specs and plans.

@@ -102,12 +102,15 @@ impl PurgeReport {
                  0004 has not run, run migrations against this database before serving \
                  (with FLAGS_RUN_MIGRATIONS=false, migrate separately first). If 0004 is \
                  recorded as applied (version 4 in _sqlx_migrations), migrations will not \
-                 re-run it: find the function (SELECT n.nspname FROM pg_catalog.pg_proc p \
-                 JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = \
-                 '{NAME}') and, as a superuser, move it into public (ALTER FUNCTION \
-                 <schema>.{NAME}(uuid) SET SCHEMA public, with <schema> quoted if it needs \
-                 it), or, if it is gone, recreate it from \
-                 crates/flags-core/migrations/0004_audit_purge.sql; see docs/deploy/fly.md"
+                 re-run it. Find the function (SELECT quote_ident(n.nspname), \
+                 pg_get_function_identity_arguments(p.oid), p.prosecdef FROM \
+                 pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = \
+                 p.pronamespace WHERE p.proname = '{NAME}'). If a row is 0004's (arguments \
+                 purge_org uuid, SECURITY DEFINER, pg_get_functiondef matching \
+                 crates/flags-core/migrations/0004_audit_purge.sql), move it into public as \
+                 a superuser (ALTER FUNCTION <schema>.{NAME}(uuid) SET SCHEMA public); \
+                 otherwise run that file as a superuser with SET search_path = public \
+                 first, so it does not land elsewhere again; see docs/deploy/fly.md"
             )];
         };
         let mut problems = Vec::new();
@@ -312,6 +315,7 @@ mod tests {
             "proname = 'purge_deleted_org_audit'",
             "_sqlx_migrations",
             "0004_audit_purge.sql",
+            "SET search_path = public",
         ] {
             assert!(problems[0].contains(needle), "{needle}: {problems:?}");
         }
