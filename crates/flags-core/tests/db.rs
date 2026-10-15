@@ -2858,6 +2858,118 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
     app_db.pool().close().await;
 }
 
+/// The retention sweeps on the default test pool, whose superuser role RLS
+/// does not apply to. Maintenance transactions run there as `otto_app` (#73;
+/// `maintenance`'s own tests prove the role), so this guards that the marker
+/// policies and grants still let them reach every org's expired rows, and only
+/// those. It would pass before #73 too: it guards, it does not reproduce.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let actor = UserId::new();
+    let keep_days = 30;
+    let orgs = [OrgId::new(), OrgId::new()];
+    for org in orgs {
+        let (app, flag) = policy_fixture(&db, org, actor).await;
+        let mut tx = db.begin(org).await.unwrap();
+        let policy = tx
+            .set_policy(
+                &app,
+                &flag,
+                "production",
+                Mode::Enforce,
+                Thresholds::default(),
+                actor,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        for hours in [(ERROR_RETENTION_DAYS + 1) * 24, 1] {
+            sqlx::query(
+                "INSERT INTO flag_errors (org_id, flag_id, flag_enabled, error_type, error_message, \
+                 occurred_at, received_at) \
+                 VALUES ($1, $2, true, 'e', 'm', now(), now() - make_interval(hours => $3))",
+            )
+            .bind(org)
+            .bind(flag.id)
+            .bind(hours)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for days in [EVAL_RETENTION_DAYS + 1, 0] {
+            sqlx::query(
+                "INSERT INTO flag_eval_hourly (org_id, flag_id, environment, hour, enabled, count, server_count) \
+                 VALUES ($1, $2, 'production', date_trunc('hour', now()) - make_interval(days => $3), true, 1, 1)",
+            )
+            .bind(org)
+            .bind(flag.id)
+            .bind(days)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for days in [EVAL_RETENTION_DAYS + 1, 1] {
+            sqlx::query(
+                "INSERT INTO rollback_events (org_id, policy_id, flag_id, environment, outcome, observed, created_at) \
+                 VALUES ($1, $2, $3, 'production', 'rolled_back', '{}'::jsonb, now() - make_interval(days => $4))",
+            )
+            .bind(org)
+            .bind(policy.policy.id)
+            .bind(flag.id)
+            .bind(days)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        for days in [keep_days + 1, 1] {
+            sqlx::query(
+                "INSERT INTO platform_events (event_id, org_id, kind, received_at) \
+                 VALUES ($1, $2, 'member.removed', now() - make_interval(days => $3))",
+            )
+            .bind(uuid::Uuid::new_v4())
+            .bind(org)
+            .bind(days)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // Removed-member tombstones: no RLS, but otto_app needs the DELETE grant.
+        for hours in [1, 0] {
+            sqlx::query(
+                "INSERT INTO removed_members (org_id, user_id, removed_at) \
+                 VALUES ($1, $2, now() - make_interval(hours => $3))",
+            )
+            .bind(org)
+            .bind(uuid::Uuid::new_v4())
+            .bind(hours)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    assert_eq!(telemetry::sweep(&db).await.unwrap(), 6);
+    assert_eq!(platform_events::sweep(&db, keep_days).await.unwrap(), 4);
+    for table in [
+        "flag_errors",
+        "flag_eval_hourly",
+        "rollback_events",
+        "platform_events",
+        "removed_members",
+    ] {
+        // Uuid orders bytewise, as Postgres orders uuid; OrgId has no Ord.
+        let orgs_left: Vec<uuid::Uuid> =
+            sqlx::query_scalar(&format!("SELECT org_id FROM {table} ORDER BY org_id"))
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let mut expected: Vec<uuid::Uuid> = orgs.iter().map(|o| o.as_uuid()).collect();
+        expected.sort();
+        assert_eq!(orgs_left, expected, "{table}: each org keeps its fresh row");
+    }
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
     let db = db(pool.clone()).await;

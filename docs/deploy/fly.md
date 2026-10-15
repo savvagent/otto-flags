@@ -332,17 +332,24 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   are kept). An image from before #31 still refuses to boot once `0002` and `0003` are applied,
   so going back that far means rolling forward instead. `0002` and `0003` are additive, so the
   older release's writes still satisfy them.
-- Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
-  non-exempt pool role. Every unpinned policy added by `0002` and `0003` also requires the
+- Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a role
+  subject to RLS. Every unpinned policy added by `0002` and `0003` also requires the
   transaction-local marker `app.maintenance = 'on'` (#27), which only the background sweeps, the
-  checker's backstop, and the usage shipper set, so a request path that forgot to pin an org reads
-  nothing. Migration `0005` (#68) does the same for `usage_outbox` and `usage_outbox_rejected`,
-  for every command, and the usage shipper runs in a maintenance transaction. Under the superuser
-  attach role RLS does not apply, so this changes nothing in production today; under a non-exempt
-  pool role, a release from before `0005` ships no usage while it runs against that schema
-  (rollout overlap, rollback), and the rows wait in the outbox until a newer release ships them.
-  Ad-hoc diagnostics as a non-exempt role need `SET LOCAL app.maintenance = 'on'` in their
-  transaction to see across orgs.
+  checker's backstop, and the usage shipper set. Migration `0005` (#68) does the same for
+  `usage_outbox` and `usage_outbox_rejected`, for every command. Those background transactions
+  (`maintenance::begin`) drop into `otto_app` with `SET LOCAL ROLE`, as tenant transactions do
+  (#73), so in production too the marker policies are what let them see across orgs; if the pool's
+  role were exempt from RLS and could not assume `otto_app` (or `otto_app` itself were exempt),
+  they fail rather than run unconstrained, logged with `reason="configuration"`, so that reason
+  from the shipper, sweeps, or checker backstop after a role change points here. A query
+  run directly on the pool without pinning an org still runs as the superuser attach role, which
+  RLS does not apply to; request paths pin through `begin_live`. A release from before #73 runs
+  its background work as the attach role, so it keeps working during the rollout overlap and
+  after a rollback. Under a pool role subject to RLS, a release from before `0005` ships no usage
+  while it runs against that schema, and the rows wait in the outbox until a newer release ships
+  them. Ad-hoc SELECT diagnostics as the superuser attach role bypass RLS and need neither the
+  marker nor the role; as a role subject to RLS they need `SET LOCAL app.maintenance = 'on'` in
+  their transaction to see across orgs.
 
 Diagnostics (SELECT-only):
 
