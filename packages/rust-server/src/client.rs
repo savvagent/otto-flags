@@ -64,19 +64,35 @@ impl Failure {
         }
     }
 
-    /// A failure that says nothing about the other flags.
-    fn flag(why: impl Into<String>) -> Self {
+    /// A failure caused by this request's own content: it opens no cooldown.
+    fn request(why: impl Into<String>) -> Self {
         Self {
-            scope: Scope::Flag,
+            scope: Scope::Request,
             ..Self::new(why)
         }
+    }
+}
+
+/// Whom the cooldown after a non-2xx answer covers (see `crate::backoff`).
+fn failure_scope(status: reqwest::StatusCode) -> Scope {
+    match status.as_u16() {
+        // The server answers 404 for a key with no active flag: only that flag waits.
+        404 => Scope::Flag,
+        // A rejected key, a timeout, rate limiting: the client as a whole should wait.
+        401 | 403 | 408 | 429 => Scope::Client,
+        // Any other 4xx refuses this request's content (a context the host built from end-user
+        // input); it says nothing about the service, so it opens no window.
+        400..=499 => Scope::Request,
+        _ => Scope::Client,
     }
 }
 
 /// Read a response body of at most `cap` bytes: checked against `Content-Length` before reading,
 /// and against the bytes read so far otherwise, so no more than the cap plus one chunk is held.
 async fn read_capped(mut response: reqwest::Response, cap: usize) -> Result<Vec<u8>, Failure> {
-    let too_large = || Failure::flag(format!("the body is larger than {} KiB", cap / 1024));
+    // The server echoes the context, so a large one can push the response over the cap: the
+    // failure belongs to this request (`Scope::Request`).
+    let too_large = || Failure::request(format!("the body is larger than {cap} bytes"));
     if response
         .content_length()
         .is_some_and(|len| len > cap as u64)
@@ -402,12 +418,7 @@ impl FlagClient {
                     status,
                     reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
                 ),
-                // The server answers 404 for a key with no active flag: only that flag waits.
-                scope: if status == reqwest::StatusCode::NOT_FOUND {
-                    Scope::Flag
-                } else {
-                    Scope::Client
-                },
+                scope: failure_scope(status),
                 retry_after,
             });
         }

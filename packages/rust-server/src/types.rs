@@ -30,9 +30,10 @@ pub struct Config {
     pub timeout: Duration,
 
     /// How long lookups return their default without a request after a failed one. A
-    /// `Retry-After` on a 429 or 503 can lengthen the window (up to 60 s). A failure of one
-    /// flag (a 404, an oversized body) pauses only that flag; any other failure pauses every
-    /// flag. `Duration::ZERO` turns the cooldown off. A few seconds is sensible.
+    /// `Retry-After` on a 429 or 503 can lengthen the window (up to 60 s). A 404 pauses only
+    /// that flag; a failure caused by the request itself (another 4xx except 401, 403, 408 and
+    /// 429, or a response over 1 MiB) pauses nothing; any other failure pauses every flag.
+    /// `Duration::ZERO` turns the cooldown off. A few seconds is sensible.
     pub failure_cooldown: Duration,
 }
 

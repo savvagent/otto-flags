@@ -420,12 +420,13 @@ methods keep their `Result` for compatibility but do not return `Err`, so `?` is
 After a failed lookup the client backs off for `failure_cooldown` (5 seconds by default;
 `Duration::ZERO` turns it off): lookups in that window return their default with
 `reason: "error"` without a request, so an outage costs one request and one warning per window
-instead of one per lookup. A failure that belongs to one flag (a 404, or a body over the cap
-below) pauses only that flag; any other failure (a timeout, a 5xx, a rejected key, a response
-that is not an evaluate response) pauses every flag. A `Retry-After` in seconds on a 429 or 503
+instead of one per lookup. A 404 (no such flag) pauses only that flag. A failure caused by the
+request itself (another 4xx except 401, 403, 408 and 429, or a response body over 1 MiB, the
+most the SDK reads) pauses nothing, so a context built from one end user's input cannot switch
+flags off for everyone. Any other failure (a timeout, a 5xx, a rejected key, a response that is
+not an evaluate response) pauses every flag. A `Retry-After` in seconds on a 429 or 503
 lengthens the window, up to 60 seconds; it never shortens it. Cached answers are still served
-during a cooldown, and the first lookup after it goes to the server. The SDK reads at most
-1 MiB of a response body; a larger one is a failed lookup for that flag. A `base_url` with a wrong
+during a cooldown, and the first lookup after it goes to the server. A `base_url` with a wrong
 path prefix makes every flag answer 404, which pauses each flag separately: one warning per flag
 per window.
 

@@ -1,11 +1,15 @@
 //! A cooldown after a failed flag lookup, so an outage costs one request and one warning per
 //! window instead of one per lookup (#111).
 //!
-//! A failure has one of two scopes. `Scope::Client` says the service, or the path to it, is
+//! A failure has one of three scopes. `Scope::Client` says the service, or the path to it, is
 //! unhealthy (a transport error, a 5xx, a rejected key, a body that is not an evaluate
 //! response): every lookup waits. `Scope::Flag` says only this flag's lookup failed (the server
-//! answers 404 for a key with no active flag, or its body is over the size cap): only that flag
-//! waits. A single stale key in a hot path must not black out every other flag.
+//! answers 404 for a key with no active flag): only that flag waits, so a single stale key in a
+//! hot path cannot black out every other flag. `Scope::Request` says this request itself was
+//! refused (a 400, 413 or 422 for its body, or a response over the size cap, which can be the
+//! server echoing a large context): nothing waits. Host code builds the context from end-user
+//! input, so letting such a failure open a window would let one end user switch flags to their
+//! defaults for every other user of the client, and keep them there by repeating it.
 //!
 //! Host code can build flag keys from input, so the per-flag map is bounded at
 //! `MAX_FLAG_ENTRIES`: expired entries are pruned before an insert, and when it is still full
@@ -29,6 +33,8 @@ pub(crate) enum Scope {
     Client,
     /// Only this flag's lookup failed: only this flag waits.
     Flag,
+    /// This request was refused for its own content: no cooldown.
+    Request,
 }
 
 #[derive(Default)]
@@ -86,12 +92,13 @@ impl Backoff {
             .cooldown
             .max(retry_after.unwrap_or(Duration::ZERO).min(MAX_RETRY_AFTER));
         let Some(until) = now.checked_add(window) else {
-            return window;
+            return Duration::ZERO;
         };
         let Ok(mut state) = self.state.lock() else {
-            return window;
+            return Duration::ZERO;
         };
         match scope {
+            Scope::Request => return Duration::ZERO,
             Scope::Client => {
                 state.client_until = Some(state.client_until.map_or(until, |old| old.max(until)));
             }
@@ -99,7 +106,7 @@ impl Backoff {
                 if state.flags.len() >= MAX_FLAG_ENTRIES && !state.flags.contains_key(flag) {
                     state.flags.retain(|_, end| *end > now);
                     if state.flags.len() >= MAX_FLAG_ENTRIES {
-                        return window;
+                        return Duration::ZERO;
                     }
                 }
                 state.flags.insert(flag.to_string(), until);
@@ -196,14 +203,35 @@ mod tests {
     }
 
     #[test]
+    fn a_request_scoped_failure_opens_no_window() {
+        let t0 = Instant::now();
+        let b = Backoff::new(ms(1000));
+        let ra = Some(Duration::from_secs(30));
+        assert_eq!(b.record("a", Scope::Request, ra, t0), Duration::ZERO);
+        assert_eq!(b.remaining("a", t0 + ms(1)), None);
+        assert_eq!(b.remaining("b", t0 + ms(1)), None);
+    }
+
+    #[test]
+    fn an_unrepresentable_window_records_nothing_and_says_so() {
+        let t0 = Instant::now();
+        let b = Backoff::new(Duration::MAX);
+        assert_eq!(b.record("a", Scope::Client, None, t0), Duration::ZERO);
+        assert_eq!(b.remaining("a", t0), None);
+    }
+
+    #[test]
     fn the_flag_map_is_bounded_and_pruned() {
         let t0 = Instant::now();
         let b = Backoff::new(ms(1000));
         for i in 0..MAX_FLAG_ENTRIES {
             b.record(&format!("f{i}"), Scope::Flag, None, t0);
         }
-        // Full of live windows: a new flag is not recorded.
-        b.record("one-more", Scope::Flag, None, t0 + ms(10));
+        // Full of live windows: a new flag is not recorded, and `record` says so.
+        assert_eq!(
+            b.record("one-more", Scope::Flag, None, t0 + ms(10)),
+            Duration::ZERO
+        );
         assert_eq!(b.remaining("one-more", t0 + ms(20)), None);
         // An existing flag can still be overwritten while full.
         b.record("f0", Scope::Flag, None, t0 + ms(10));

@@ -45,12 +45,17 @@ Out of scope (ticket): server changes; other SDKs.
   `Config` has a builder and `Default`, the crate is unpublished (0.1.0), and nothing in the repo
   (including `examples/rust-server`) builds one by literal, so this is accepted as additive in
   practice, as #109 did for `Metadata`.
-- **Scope of a cooldown:**
-  - per flag: `404`, and a body over the size cap;
-  - per client: everything else that follows a request (transport error or timeout, any other
-    non-2xx including 401/403/429/5xx, a body that is not JSON or has no boolean `enabled`, a read
-    error mid-body), plus an unparseable `base_url` (a configuration error that never heals and
-    would otherwise log on every lookup).
+- **Scope of a cooldown** (revised in review: the security audit showed that a failure the
+  request itself causes must open no window, or one end user's context could switch every
+  user's flags to their defaults, repeatably):
+  - per flag: `404`;
+  - none (`Scope::Request`): any other 4xx except 401, 403, 408 and 429 (the server answers
+    400/413/422 for a request body it refuses), and a body over the size cap (the server echoes
+    the context, so a large context can push the response over it);
+  - per client: everything else that follows a request (transport error or timeout, 401, 403,
+    408, 429, 5xx, a body that is not JSON or has no boolean `enabled`, a read error mid-body),
+    plus an unparseable `base_url` (a configuration error that never heals and would otherwise
+    log on every lookup).
   An invalid flag key starts no cooldown: it sends no request and is already refused cheaply.
 - **`Retry-After`:** honoured on 429 and 503 only, in its delta-seconds form. The window is
   `max(failure_cooldown, min(Retry-After, 60 s))`: never shorter than the configured cooldown and
@@ -87,8 +92,9 @@ one warning per cooldown window, and never reads more than about 1 MiB of a resp
 - After a client-wide failure, lookups for any flag within the window send no request and return
   the default; the first lookup after the window reaches the server (wiremock test).
 - A 503 or 429 with `Retry-After: N` holds the window for `N` seconds (bounded); test.
-- A 404 for one flag does not stop lookups of another flag; test.
-- A body over 1 MiB (with and without `Content-Length`) is a failed lookup; test.
+- A 404 for one flag does not stop lookups of another flag; a 400 or 413 opens no window; test.
+- A body over 1 MiB (with and without `Content-Length`) is a failed lookup that opens no window;
+  test.
 - `Duration::ZERO` restores the #109 behavior (every lookup asks); existing tests pin it.
 
 ## 5. Scope
@@ -103,12 +109,13 @@ cooldown; telemetry backoff (`telemetry.rs` already batches on a timer).
 
 - **`src/backoff.rs` (new, crate-private).** `Backoff { cooldown: Duration, state:
   Arc<Mutex<State>> }`, `State { client_until: Option<Instant>, flags: HashMap<String, Instant> }`,
-  `enum Scope { Client, Flag }`.
+  `enum Scope { Client, Flag, Request }`.
   - `fn remaining(&self, flag: &str, now: Instant) -> Option<Duration>`: the time left in the
     client window, else in the flag's window; `None` when lookups may go out (always `None` when
     `cooldown` is zero).
   - `fn record(&self, flag: &str, scope: Scope, retry_after: Option<Duration>, now: Instant) ->
-    Duration`: starts the window (length per §3), returns it for the log line. A later
+    Duration`: starts the window (length per §3), returns it for the log line, or zero when
+    nothing was recorded (`Scope::Request`, a full flag map, an overflow). A later
     `client_until` is never shortened.
   - `fn parse_retry_after(value: &str) -> Option<Duration>`: delta-seconds only.
   - A poisoned mutex is treated as "no cooldown" (lookups go out; never panic in the host).
@@ -118,8 +125,8 @@ cooldown; telemetry backoff (`telemetry.rs` already batches on a timer).
     during a cooldown), before `fetch`: if `backoff.remaining(flag_key, now)` is `Some`, log at
     `debug` and return `get_default_result`. On `fetch` error: `backoff.record(...)`, then the
     existing `warn`/`error` line, extended with the window length.
-  - `Failure` gains `scope: Scope` and `retry_after: Option<Duration>`; `fetch` sets them (404 and
-    oversized → `Flag`; 429/503 read `Retry-After`).
+  - `Failure` gains `scope: Scope` and `retry_after: Option<Duration>`; `fetch` sets them (404 → `Flag`;
+    other 4xx except 401/403/408/429, and oversized → `Request`; 429/503 read `Retry-After`).
   - `fetch` reads the body through a new private `read_capped(response, MAX_RESPONSE_BYTES)` using
     `Response::content_length` and `Response::chunk`, then `serde_json::from_slice`.
 - **`src/types.rs`.** `Config.failure_cooldown` (doc comment), default 5 s,

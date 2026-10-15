@@ -82,7 +82,7 @@ async fn retry_after_holds_the_window(status: u16) {
     let server = MockServer::start().await;
     mock_status(
         &server,
-        ResponseTemplate::new(status).insert_header("Retry-After", "1"),
+        ResponseTemplate::new(status).insert_header("Retry-After", "2"),
     )
     .await;
     let client = client(server.uri(), Duration::from_millis(100), &["a"]);
@@ -94,7 +94,7 @@ async fn retry_after_holds_the_window(status: u16) {
     client.evaluate("a", None).await.unwrap();
     assert_eq!(requests(&server).await, 1, "still inside Retry-After");
 
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    tokio::time::sleep(Duration::from_millis(1800)).await;
     client.evaluate("a", None).await.unwrap();
     assert_eq!(requests(&server).await, 2, "Retry-After has passed");
 }
@@ -155,7 +155,7 @@ fn body_of_len(len: usize) -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn an_oversized_body_falls_back_for_that_flag_only() {
+async fn an_oversized_body_falls_back_and_opens_no_window() {
     let server = MockServer::start().await;
     let big = String::from_utf8(body_of_len(MAX + 1))
         .unwrap()
@@ -180,15 +180,12 @@ async fn an_oversized_body_falls_back_for_that_flag_only() {
     assert_eq!(r.reason, "error");
     assert!(r.value, "the default, not the body's false");
 
-    // Per-flag scope: another flag still reaches the server, and `big` itself is skipped.
+    // The server echoes the context, so an oversized answer can be one end user's doing: it
+    // pauses nothing. Another flag, and `big` itself, still reach the server.
     let other = client.evaluate("other", None).await.unwrap();
     assert_eq!(other.reason, "evaluated");
     assert_eq!(client.evaluate("big", None).await.unwrap().reason, "error");
-    assert_eq!(
-        requests_to(&server, "big").await,
-        1,
-        "skipped the second time"
-    );
+    assert_eq!(requests_to(&server, "big").await, 2, "not skipped");
 }
 
 #[tokio::test]
@@ -285,4 +282,47 @@ async fn a_cached_answer_is_still_served_during_a_cooldown() {
     let r = client.evaluate("cached", None).await.unwrap();
     assert_eq!(r.reason, "cached");
     assert!(!r.value);
+}
+
+/// A 4xx that refuses this request's own content (a context built from one end user's input)
+/// must not switch every user's flags to their defaults.
+async fn a_request_refusal_opens_no_window(status: u16) {
+    let server = MockServer::start().await;
+    mock_flag(&server, "a", ResponseTemplate::new(status)).await;
+    mock_flag(
+        &server,
+        "b",
+        ResponseTemplate::new(200).set_body_json(json!({ "enabled": false })),
+    )
+    .await;
+    let client = client(server.uri(), Duration::from_secs(30), &["a", "b"]);
+
+    assert_eq!(client.evaluate("a", None).await.unwrap().reason, "error");
+    assert_eq!(
+        client.evaluate("b", None).await.unwrap().reason,
+        "evaluated"
+    );
+    assert_eq!(client.evaluate("a", None).await.unwrap().reason, "error");
+    assert_eq!(requests_to(&server, "a").await, 2, "not skipped");
+}
+
+#[tokio::test]
+async fn a_400_opens_no_window() {
+    a_request_refusal_opens_no_window(400).await;
+}
+
+#[tokio::test]
+async fn a_413_opens_no_window() {
+    a_request_refusal_opens_no_window(413).await;
+}
+
+#[tokio::test]
+async fn a_rejected_key_pauses_every_flag() {
+    let server = MockServer::start().await;
+    mock_status(&server, ResponseTemplate::new(401)).await;
+    let client = client(server.uri(), Duration::from_secs(30), &["a", "b"]);
+
+    client.evaluate("a", None).await.unwrap();
+    assert_eq!(client.evaluate("b", None).await.unwrap().reason, "error");
+    assert_eq!(requests(&server).await, 1, "b was skipped");
 }
