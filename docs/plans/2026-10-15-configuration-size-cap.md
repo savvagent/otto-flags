@@ -46,13 +46,13 @@ Files:
 - Modify: `crates/flags-core/src/flags.rs` (`validate_configuration`)
 - Modify: `crates/flags-core/tests/db.rs` (new tests at the end)
 
-- [ ] **Step 1: Failing unit tests** in `eval.rs` `mod tests`:
+- [x] **Step 1: Failing unit tests** in `eval.rs` `mod tests`:
   `json_len_matches_serialized_length` (for `null`, `"é\n\u{1}"`, nested object/array, numbers:
   `json_len(&v) == serde_json::to_vec(&v).unwrap().len()`);
   `variation_configuration_size_is_capped`: a string value `"x".repeat(MAX_CONFIGURATION_BYTES - 2)`
   (serializes to exactly the limit) as `{"on": {"configuration": s}}` is accepted; one more
   character is refused with a message containing `"on"` and `32768`.
-- [ ] **Step 2: Failing DB tests** in `tests/db.rs` (helper `sized(n)` = JSON string of `n` total
+- [x] **Step 2: Failing DB tests** in `tests/db.rs` (helper `sized(n)` = JSON string of `n` total
   serialized bytes):
   - `configuration_size_is_capped_on_write`: `create_flag` with `configuration: sized(32768)`
     succeeds; `sized(32769)` fails `invalid_argument` with a message containing `32768`; `update_flag` with
@@ -65,14 +65,14 @@ Files:
     in a new transaction `find_flag` + `eval::evaluate` in `production` returns that configuration;
     `update_flag` with only `name` succeeds and keeps it; resubmitting it via
     `update_flag { configuration }` is refused.
-- [ ] **Step 3: Run** `cargo test -p flags-core` (with `DATABASE_URL`) and see the new tests fail
+- [x] **Step 3: Run** `cargo test -p flags-core` (with `DATABASE_URL`) and see the new tests fail
   (compile failure counts for the unit tests).
-- [ ] **Step 4: Implement** per spec section 6 (`MAX_CONFIGURATION_BYTES`, `json_len` via a
+- [x] **Step 4: Implement** per spec section 6 (`MAX_CONFIGURATION_BYTES`, `json_len` via a
   counting writer, failing closed to `usize::MAX`, `check_configuration_size`, the loop in
   `validate_variations` after `MAX_VARIATIONS`, the call in `validate_configuration` after the NUL
   check). Doc comments give the reason (#115: every evaluate response carries it; SDKs cap reads).
-- [ ] **Step 5: Run** the targeted tests (pass), then lint and format.
-- [ ] **Step 6: Commit** `feat(core): cap a flag configuration at 32 KiB on write` with a
+- [x] **Step 5: Run** the targeted tests (pass), then lint and format.
+- [x] **Step 6: Commit** `feat(core): cap a flag configuration at 32 KiB on write` with a
   why-body ending `Fixes #115`.
 
 ## Task 2: Document the limit
@@ -84,10 +84,10 @@ Files:
   `variations` and `configuration` doc comments)
 - Modify: `docs/SDK-DEVELOPER-GUIDE.md` (Flag Evaluation, after the key paragraph)
 
-- [ ] **Step 1: Docs**: each configuration doc says "At most 32 KiB as JSON."; each variations doc
+- [x] **Step 1: Docs**: each configuration doc says "At most 32 KiB as JSON."; each variations doc
   says "Each variation's configuration is at most 32 KiB as JSON." The guide gains: a flag's or
   variation's `configuration` is at most 32 KiB (32 768 bytes) of JSON when written; flags
   stored before the limit may carry more; size the response read cap well above it (the Rust SDK
   reads up to 1 MiB).
-- [ ] **Step 2: Run** all gates above.
-- [ ] **Step 3: Commit** `docs: document the 32 KiB configuration limit` ending `Fixes #115`.
+- [x] **Step 2: Run** all gates above.
+- [x] **Step 3: Commit** `docs: document the 32 KiB configuration limit` ending `Fixes #115`.

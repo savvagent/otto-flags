@@ -1,6 +1,6 @@
 # Cap the size of a flag configuration on write
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#122)
 **Issue:** #115
 
 ## 1. Brief
