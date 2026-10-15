@@ -7,7 +7,10 @@
 //!   is down.
 //! - **Shipping is a background task** ([`run`]) that posts rows to the
 //!   platform and deletes what it answered for. The platform dedupes on the
-//!   row's `event_id`, so retries are free.
+//!   row's `event_id`, so retries are free. Every statement the shipper issues
+//!   runs in a maintenance transaction, and the writes after a claim are fenced
+//!   on the `(id, attempts)` it set, so a lapsed claim cannot touch a newer
+//!   one's rows.
 //! - **Enforcing** reads the platform's cached usage status (and counts this
 //!   org's unshipped rows on top). Off by default. If the platform cannot
 //!   answer, the call is allowed and still recorded.
@@ -257,6 +260,7 @@ struct Row {
     tool: String,
     billable: bool,
     occurred_at: chrono::DateTime<chrono::Utc>,
+    attempts: i32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -281,29 +285,36 @@ impl ShipError {
 
 /// Claim a batch of due rows, ship them, delete what the platform answered
 /// for. Returns how many rows were claimed. Never loses a row: on any failure
-/// nothing is deleted and the rows are rescheduled with backoff.
+/// nothing is deleted and the rows are rescheduled with backoff. Every
+/// statement runs in a maintenance transaction ([`crate::maintenance::begin`]),
+/// the claim commits before the platform call, and the writes after it are
+/// fenced on the `(id, attempts)` the claim set, so a shipper whose claim
+/// lapsed leaves the rows to their newer holder.
 pub async fn ship_once(
     db: &Db,
     platform: &PlatformClient,
     cfg: &ShipperConfig,
 ) -> std::result::Result<usize, ShipError> {
+    let mut tx = crate::maintenance::begin(db).await?;
     let mut rows: Vec<Row> = sqlx::query_as(
         "UPDATE usage_outbox SET attempts = attempts + 1, \
                 next_attempt_at = now() + make_interval(secs => $2) \
          WHERE id IN ( \
              SELECT id FROM usage_outbox WHERE next_attempt_at <= now() \
              ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED) \
-         RETURNING id, event_id, org_id, user_id, tool, billable, occurred_at",
+         RETURNING id, event_id, org_id, user_id, tool, billable, occurred_at, attempts",
     )
     .bind(cfg.batch as i64)
     .bind(cfg.claim_lease.as_secs_f64())
-    .fetch_all(db.pool())
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     if rows.is_empty() {
         return Ok(0);
     }
     rows.sort_by_key(|r| r.id);
     let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let attempts: Vec<i32> = rows.iter().map(|r| r.attempts).collect();
     let events: Vec<UsageEvent> = rows
         .iter()
         .map(|r| UsageEvent {
@@ -319,7 +330,7 @@ pub async fn ship_once(
     let receipt = match platform.ship_usage(&events).await {
         Ok(r) => r,
         Err(e) => {
-            reschedule(db, &ids, &stored_reason(&e), cfg).await;
+            reschedule(db, &ids, &attempts, &stored_reason(&e), cfg).await;
             return Err(e.into());
         }
     };
@@ -329,7 +340,7 @@ pub async fn ship_once(
             "the platform accounted for {answered} of {} usage events",
             ids.len()
         );
-        return Err(refuse_receipt(db, &ids, msg, cfg).await);
+        return Err(refuse_receipt(db, &ids, &attempts, msg, cfg).await);
     }
     // A rejected id outside this batch would be recorded as rejected while its
     // row still ships later, and a repeated id would insert two rejected rows.
@@ -347,71 +358,110 @@ pub async fn ship_once(
             "the platform rejected {} usage events, {stray} of them not in this batch or repeated",
             receipt.rejected.len()
         );
-        return Err(refuse_receipt(db, &ids, msg, cfg).await);
+        return Err(refuse_receipt(db, &ids, &attempts, msg, cfg).await);
     }
 
-    let mut tx = db.pool().begin().await?;
+    let mut rejected_ids: Vec<Uuid> = Vec::with_capacity(receipt.rejected.len());
+    let mut reasons: Vec<String> = Vec::with_capacity(receipt.rejected.len());
     for r in &receipt.rejected {
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
-        // replaced so it is bounded and cannot fail the batch (#51). Scoping
-        // the insert to this batch's rows is a second guard on the batch
-        // boundary, so a later change to the check above still cannot move a
-        // row outside the batch (#63).
+        // replaced so it is bounded and cannot fail the batch (#51).
         let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
-            "the platform refused a usage event; moving it to usage_outbox_rejected");
+            "the platform refused a usage event; recording it in usage_outbox_rejected if this claim still holds it");
         tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?reason,
-            "the platform refused a usage event; moving it to usage_outbox_rejected");
-        let copied = sqlx::query(
-            "INSERT INTO usage_outbox_rejected \
-               (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
-             SELECT event_id, org_id, user_id, tool, billable, occurred_at, $2 \
-             FROM usage_outbox WHERE event_id = $1 AND id = ANY($3)",
-        )
-        .bind(r.event_id)
-        .bind(&reason)
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
-        if copied.rows_affected() != 1 {
-            // Only reachable if the row left this batch after it was claimed
-            // (its claim lease ran out and another shipper took it), or if the
-            // check above stops holding: either way, say so rather than
-            // deleting the batch as if the event had been recorded.
-            tracing::warn!(event_id = %r.event_id, copied = copied.rows_affected(),
-                "a rejected usage event was not in this batch's rows; nothing recorded for it");
-        }
+            "the platform refused a usage event; recording it in usage_outbox_rejected if this claim still holds it");
+        rejected_ids.push(r.event_id);
+        reasons.push(reason);
     }
-    sqlx::query("DELETE FROM usage_outbox WHERE id = ANY($1)")
-        .bind(&ids)
-        .execute(&mut *tx)
-        .await?;
+
+    let mut tx = crate::maintenance::begin(db).await?;
+    // Fenced on the attempts value this claim set: a row whose claim lapsed and
+    // was taken by another shipper has a newer value, so it is neither deleted
+    // nor recorded here; the newer holder does both (#67). A row is recorded as
+    // rejected only if this statement deleted it, and a row can be deleted
+    // once, so a rejection is recorded at most once even when two shippers
+    // finish together: the later DELETE waits on the row lock, then re-checks
+    // the fence against the row as the newer claim left it. That re-check is
+    // how read committed, Postgres's default isolation and the one these
+    // transactions use, handles a row changed under it. The join on this
+    // batch's deleted rows is also a second guard on the batch boundary (#63).
+    let (deleted, moved): (i64, i64) = sqlx::query_as(
+        "WITH gone AS ( \
+           DELETE FROM usage_outbox o \
+            USING unnest($1::int8[], $2::int4[]) AS c(id, attempts) \
+            WHERE o.id = c.id AND o.attempts = c.attempts \
+           RETURNING o.event_id, o.org_id, o.user_id, o.tool, o.billable, o.occurred_at), \
+         moved AS ( \
+           INSERT INTO usage_outbox_rejected \
+             (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
+           SELECT g.event_id, g.org_id, g.user_id, g.tool, g.billable, g.occurred_at, r.reason \
+             FROM gone g JOIN unnest($3::uuid[], $4::text[]) AS r(event_id, reason) \
+               ON r.event_id = g.event_id \
+           RETURNING 1) \
+         SELECT (SELECT count(*) FROM gone), (SELECT count(*) FROM moved)",
+    )
+    .bind(&ids)
+    .bind(&attempts)
+    .bind(&rejected_ids)
+    .bind(&reasons)
+    .fetch_one(&mut *tx)
+    .await?;
     tx.commit().await?;
+    // Counts from count(*), never negative.
+    let deleted = usize::try_from(deleted).unwrap_or(0);
+    let moved = usize::try_from(moved).unwrap_or(0);
+    if deleted < ids.len() {
+        tracing::warn!(claimed = ids.len(), lost = ids.len() - deleted,
+            "usage rows this shipper claimed are no longer held by its claim (reclaimed after it lapsed, or purged); left as they are");
+    }
+    if moved < rejected_ids.len() {
+        tracing::warn!(
+            rejected = rejected_ids.len(),
+            recorded = moved,
+            "rejected usage events are no longer held by this claim; left as they are"
+        );
+    }
     Ok(ids.len())
 }
 
 /// Keep every row of a batch whose receipt cannot be trusted and retry it
 /// with backoff; the error carries counts only, never platform text.
-async fn refuse_receipt(db: &Db, ids: &[i64], msg: String, cfg: &ShipperConfig) -> ShipError {
+async fn refuse_receipt(
+    db: &Db,
+    ids: &[i64],
+    attempts: &[i32],
+    msg: String,
+    cfg: &ShipperConfig,
+) -> ShipError {
     tracing::error!("{msg}; keeping every row and retrying");
     let err = otto_resource::Error::Decode(msg);
-    reschedule(db, ids, &stored_reason(&err), cfg).await;
+    reschedule(db, ids, attempts, &stored_reason(&err), cfg).await;
     err.into()
 }
 
-async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {
-    let r = sqlx::query(
-        "UPDATE usage_outbox SET last_error = $2, \
-                next_attempt_at = now() + make_interval(secs => \
-                    LEAST($3::float8 * power(2, LEAST(attempts - 1, 20)), $4::float8)) \
-         WHERE id = ANY($1)",
-    )
-    .bind(ids)
-    .bind(reason)
-    .bind(cfg.base_backoff.as_secs_f64())
-    .bind(cfg.max_backoff.as_secs_f64())
-    .execute(db.pool())
+async fn reschedule(db: &Db, ids: &[i64], attempts: &[i32], reason: &str, cfg: &ShipperConfig) {
+    let r = async {
+        let mut tx = crate::maintenance::begin(db).await?;
+        // Fenced like the finish step: a lapsed claim must not overwrite the
+        // schedule or last_error of a newer one (#67).
+        sqlx::query(
+            "UPDATE usage_outbox o SET last_error = $3, \
+                    next_attempt_at = now() + make_interval(secs => \
+                        LEAST($4::float8 * power(2, LEAST(o.attempts - 1, 20)), $5::float8)) \
+               FROM unnest($1::int8[], $2::int4[]) AS c(id, attempts) \
+              WHERE o.id = c.id AND o.attempts = c.attempts",
+        )
+        .bind(ids)
+        .bind(attempts)
+        .bind(reason)
+        .bind(cfg.base_backoff.as_secs_f64())
+        .bind(cfg.max_backoff.as_secs_f64())
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
     .await;
     if let Err(e) = r {
         // The claim lease still holds the rows back; this only delays a retry.
@@ -419,9 +469,10 @@ async fn reschedule(db: &Db, ids: &[i64], reason: &str, cfg: &ShipperConfig) {
         tracing::warn!(
             reason = f.reason,
             sqlstate = f.sqlstate(),
+            rows = ids.len(),
             "could not record a usage shipping failure"
         );
-        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e, "could not record a usage shipping failure");
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), rows = ids.len(), error = %e, "could not record a usage shipping failure");
     }
 }
 
