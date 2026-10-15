@@ -68,7 +68,7 @@ against one cluster; serialize them, or give a worktree its own container on ano
 - when packages/rust-server/**, examples/rust-server/**: cd examples/rust-server && cargo clippy --locked --all-targets -- -D warnings
 - when packages/go-server/**: cd packages/go-server && go vet ./...
 - when packages/go-server/**: cd packages/go-server && go test ./...
-- when packages/python-server/**: v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src
+- when packages/python-server/**: v=$(mktemp -d)/venv && python3 -m venv "$v" && "$v/bin/pip" install -q -e 'packages/python-server[dev]' && cd packages/python-server && "$v/bin/pytest" -p no:cacheprovider && "$v/bin/mypy" --cache-dir=/dev/null src && "$v/bin/ruff" check --no-cache .
 - when packages/java-server/**: cd packages/java-server && mvn -B verify
 - when packages/ios-sdk/**: cd packages/ios-sdk && swift test
 - known red: Rust SDK `cargo fmt --check` and `cargo clippy` — #15
@@ -80,10 +80,9 @@ against one cluster; serialize them, or give a worktree its own container on ano
 The pnpm gate lists exactly the pnpm workspace members (the `packages/*` and `examples/*` dirs with
 a `package.json`); root `pnpm lint/build/test` cover `packages/*` only. Known-red gates pass on no
 new failures against an `origin/main` baseline; the PR that fixes one removes its entry.
-`ruff check` reports 23 existing errors in `packages/python-server` and is not part of its gate
-until #19. The Go, Java, and Swift gates are unverified here (no toolchain on the dev host). When a
-gate's toolchain is missing, do not install one: report the gate as not run, with the reason, in the
-PR body. `packages/android-sdk` has no gate (no Gradle wrapper; needs Gradle 8+ and an Android SDK),
+The Go, Java, and Swift gates are unverified here (no toolchain on the dev host). When a gate's
+toolchain is missing, do not install one: report the gate as not run, with the reason, in the PR
+body. `packages/android-sdk` has no gate (no Gradle wrapper; needs Gradle 8+ and an Android SDK),
 nor do `examples/go-server`, `examples/java-server`, `examples/python-server`, `examples/ios-app`,
 and `examples/android-app`: verify those with their native tooling and record the gap in the PR
 body. The Playwright suite (`examples/e2e`, root `examples/package.json`) targets a retired API and
