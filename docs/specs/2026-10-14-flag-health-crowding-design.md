@@ -57,12 +57,16 @@ Both change the same function (`telemetry::health`) and its MCP output, so they 
   an arbitrary row among several with the same `occurred_at` (a batch from one SDK often shares a
   timestamp). The new lookup breaks that tie by the highest `id` (the row stored last), so the
   answer is deterministic. Where `occurred_at` differs, the choice is the same as before.
-- **The lookup can seek one timestamp, not walk the flag's history.** The issue suggests a
-  `LATERAL` lookup through `flag_errors_flag_time_idx (flag_id, occurred_at DESC)`. Ordered by
-  `occurred_at DESC` and filtered by type, that lookup walks every newer row of other groups before
-  reaching a rare group's newest row. The group's `max(occurred_at)` is already known, so the
-  lookup matches `occurred_at = last_seen` exactly: an index equality seek to the rows at that
-  instant, then filtered by type, state, reporter, and environment.
+- **A `LATERAL` lookup through `flag_errors_flag_time_idx` is not bounded by the groups kept.**
+  The issue suggests one. That index is `(flag_id, occurred_at DESC)` and has no `error_type`, so
+  a seek per group (even an equality seek on the group's own `max(occurred_at)`) reads every row
+  of the flag at that position, whatever its type. A client key chooses `occurred_at` (clamped
+  only to the last day), so it can store many rows at one instant across 100 junk types, and each
+  of up to 200 seeks then walks all of them: work grows with groups x rows, up to 200 times the
+  aggregate's own scan (spec review). Instead, the aggregate itself carries the newest row's id
+  in fixed space, `(max(ARRAY[extract(epoch FROM occurred_at), id::numeric]))[2]::bigint`, and
+  the message is read by primary key for the kept groups only. One pass over the window, at most
+  200 primary-key lookups, no migration.
 
 ## 3. Assumptions
 
@@ -81,7 +85,8 @@ Both change the same function (`telemetry::health`) and its MCP output, so they 
   of `flag.variations`. Declared names pass `validate_name` (ASCII letters, digits, `-_.`, 1-64),
   so `inert` leaves them unchanged and they never collide with each other. A reported undeclared
   raw name that cleans to a declared name is counted in that declared entry (it reads alike; the
-  map cannot hold two equal keys anyway).
+  map cannot hold two equal keys anyway). Such a spelling is not ordered ahead in the fetch: it is
+  counted when it falls within the 100 rows fetched, and in `otherVariations` otherwise.
 - **Error groups are split by reporter, and server groups keep half the slots.** Grouping becomes
   `(error_type, flag_enabled, reporter)`, with `reporter` NULL (rows from before 0002) counted as
   client, as auto-rollback does. Each shown group carries `reporter: "server" | "client"`. Of the
@@ -93,7 +98,13 @@ Both change the same function (`telemetry::health`) and its MCP output, so they 
   rejected: an app with 10 server error types would never show a client error.
 - **The fetch is bounded per reporter.** The raw-group fetch keeps `FETCHED_GROUPS = 100` per
   reporter (`row_number() OVER (PARTITION BY reporter ...)`), so client spellings cannot fill the
-  fetch and keep server groups out of it. At most 200 rows and 200 index seeks per call.
+  fetch and keep server groups out of it. At most 200 rows and 200 primary-key lookups per call.
+- **The newest row is found inside the aggregate.** `max` over a two-element `numeric[]` of
+  `(epoch of occurred_at, id)` compares element by element, so it picks the latest
+  `occurred_at` and, among rows at that instant, the highest `id`, holding one array per group
+  however many rows the group has. `extract(epoch FROM timestamptz)` returns `numeric` (exact to
+  the microsecond) on Postgres 14 and later; this database is 16. `last_seen` stays
+  `max(occurred_at)` (the same instant, as `timestamptz`).
 - **Merging after cleaning stays in Rust** (the #65 decision), keyed by
   `(cleaned type, flag_enabled, reporter)`; a server group and a client group of the same cleaned
   type stay separate rows.
@@ -107,8 +118,8 @@ Both change the same function (`telemetry::health`) and its MCP output, so they 
 `flag_health` reads each error group's newest message without aggregating the group's messages,
 always shows a flag's declared variations, and always shows the server key's errors.
 
-- The error query has no `array_agg`; each fetched group's message comes from one index seek on
-  `(flag_id, occurred_at)`.
+- The error query has no `array_agg` and no per-group scan; each kept group's message comes from
+  one primary-key lookup of the row the aggregate picked.
 - Within a group, `last_message` is the message of the row with the latest `occurred_at`, ties
   to the highest `id`, honouring the environment filter.
 - With 20 undeclared names each evaluated more than a flag's two declared variations, both declared
@@ -148,7 +159,8 @@ declared names are the protection there).
   ```sql
   WITH g AS (
     SELECT error_type, flag_enabled, reporter IS NOT DISTINCT FROM 'server' AS server,
-           count(*)::bigint AS count, max(occurred_at) AS last_seen
+           count(*)::bigint AS count, max(occurred_at) AS last_seen,
+           (max(ARRAY[extract(epoch FROM occurred_at), id::numeric]))[2]::bigint AS last_id
     FROM flag_errors
     WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3
       AND ($4::text IS NULL OR environment = $4 OR environment IS NULL)
@@ -157,22 +169,18 @@ declared names are the protection there).
     SELECT *, row_number() OVER (PARTITION BY server
                                  ORDER BY count DESC, error_type, flag_enabled) AS rn
     FROM g
+  ), kept AS (
+    SELECT * FROM r WHERE rn <= $5
   )
-  SELECT r.error_type, r.flag_enabled, r.server, r.count, m.error_message, r.last_seen
-  FROM r CROSS JOIN LATERAL (
-    SELECT e.error_message FROM flag_errors e
-    WHERE e.org_id = $1 AND e.flag_id = $2 AND e.occurred_at = r.last_seen
-      AND e.error_type = r.error_type AND e.flag_enabled = r.flag_enabled
-      AND (e.reporter IS NOT DISTINCT FROM 'server') = r.server
-      AND ($4::text IS NULL OR e.environment = $4 OR e.environment IS NULL)
-    ORDER BY e.id DESC LIMIT 1
-  ) m
-  WHERE r.rn <= $5
-  ORDER BY r.server DESC, r.rn
+  SELECT k.error_type, k.flag_enabled, k.server, k.count, e.error_message, k.last_seen
+  FROM kept k JOIN flag_errors e ON e.org_id = $1 AND e.id = k.last_id
+  ORDER BY k.server DESC, k.rn
   ```
 
-  Every row the lateral seeks exists (the group's `max(occurred_at)` came from a matching row in
-  the same snapshot), so `CROSS JOIN` drops nothing.
+  `last_id` names a row the aggregate read in the same statement snapshot, so the join drops
+  nothing. Task order: #69's rewrite lands first without the `server` column and partition
+  (`GROUP BY error_type, flag_enabled ... ORDER BY count DESC, error_type, flag_enabled LIMIT $5`),
+  then #70 adds them.
 - `ErrorGroup` gains `pub reporter: KeyKind` (serialized `"server"` / `"client"`), after
   `flag_enabled`; drops `FromRow`.
 - `merge_error_groups`: key `(type, enabled, reporter)`; rank as today (count desc, `last_seen`
@@ -193,20 +201,22 @@ callers only: the tool and tests). The SDK REST contract is untouched.
 
 ## 7. Invariants impact
 
-- **The database is small and shared:** strengthened. No per-group message array; the extra work
-  is at most 200 index equality seeks, inside one statement (no per-row round trips).
+- **The database is small and shared:** strengthened. No per-group message array; one pass over
+  the window holding one small array per group, then at most 200 primary-key lookups, inside one
+  statement (no per-row round trips, no per-group scans).
 - **SDK-reported text is untrusted:** unchanged; all text still passes `inert`. The new `reporter`
   value comes from the stored key kind, not from reported text.
 - **Client keys are public:** strengthened; a client key can no longer hide declared variations or
   server errors from the agent.
 - **No SQL outside flags-core; runtime queries only:** held.
-- **Tenant isolation:** every new `flag_errors` reference (CTE and lateral) carries
+- **Tenant isolation:** every `flag_errors` reference (the aggregate and the message lookup) carries
   `org_id = $1` under RLS as before.
 - **Reads not metered, SDK REST contract stable, no migration:** held.
 
 ## 8. Migration
 
-None. `flag_errors_flag_time_idx (flag_id, occurred_at DESC)` serves the lateral seek.
+None. The aggregate uses the existing access path (`flag_errors_flag_time_idx`); the message
+lookup uses the primary key.
 
 ## 9. Out-of-band
 
@@ -218,8 +228,8 @@ None: server code only, deployed by the merge. No new config, secret, or scope; 
 - `flag.variations` not an object (never stored so; `validate_variations` canonicalises): treated
   as no declared names.
 - Two rows of a group at the same `occurred_at`: the higher `id` wins.
-- Environment filter: the lateral applies the same filter, so a newer message in another
-  environment is never chosen.
+- Environment filter: the aggregate only reads rows inside the filter, so a newer message in
+  another environment is never chosen.
 - Legacy rows with `reporter` NULL: client.
 - Fewer than 5 server groups: the rest of the 10 go by count to anyone.
 - No errors at all: empty list, as today.
@@ -256,8 +266,7 @@ Gates: test (`DATABASE_URL=… cargo test --workspace`), lint, format, extra (no
 
 ## 12. Risks and open questions
 
-- A shared `occurred_at` across a very large number of rows (a client can send many events with
-  one timestamp) makes the lateral seek walk those rows. That costs no more than the group
-  aggregate already scanning them, and holds no memory beyond one row.
+- The per-row `ARRAY[extract(...), id::numeric]` costs some CPU in the aggregate; it replaces
+  building an array of messages, and the window scan was already linear in the rows.
 - Splitting by reporter shows a type reported by both keys as two rows, which uses two of the ten
   slots; accepted for the provenance it gives agents.
