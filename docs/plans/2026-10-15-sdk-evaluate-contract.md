@@ -34,8 +34,10 @@ MockWebServer, JUnit 4).
   `packages/` is MIT, no server code copied.
 - Worktree only (`.claude/worktrees/fix-112-sdk-evaluate-contract`); trunk changes only through
   the PR.
-- Commit format: `fix(sdk): <imperative, lower-case>`, body explains why and ends `Refs #112`
-  (the last commit before the PR: `Fixes #112` goes in the PR body); no attribution of any kind.
+- Commit format: `fix(sdk): <imperative, lower-case>`, body explains why and ends `Fixes #112`;
+  no attribution of any kind.
+- Python gate env: `export TMPDIR=$PWD/.tmp` (created in the worktree, never committed) before
+  `mktemp -d`.
 
 ## File Structure
 
@@ -43,9 +45,9 @@ MockWebServer, JUnit 4).
 |---|---|
 | **Modify.** `packages/python-server/src/otto_flags/client.py`, `async_client.py` | read `enabled`, fail without it |
 | **Modify.** `packages/python-server/tests/conftest.py`, `test_client.py`, `test_async_client.py` | server-shaped mocks, contract tests |
-| **Modify.** `packages/node-server/src/client.ts`, `client.test.ts` | read `enabled`, fail without it; tests |
+| **Modify.** `packages/node-server/src/client.ts`, `client.test.ts`, `dynamic-config.test.ts`, `config-overrides.test.ts` | read `enabled`, fail without it; tests and mocks |
 | **Create.** `.changeset/node-server-evaluate-enabled.md` | patch changeset |
-| **Modify.** `packages/go-server/client.go`, `flagkey_test.go`; **Create.** `evaluate_contract_test.go` | path, `enabled`; tests |
+| **Modify.** `packages/go-server/client.go`, `flagkey_test.go`, `dynamic_config_test.go`, `override_test.go`; **Create.** `evaluate_contract_test.go` | path, `enabled`; tests and mocks |
 | **Modify.** `packages/java-server/.../FlagClient.java`, `FlagKeyTest.java`; **Create.** `EvaluateContractTest.java` | path, `enabled`, nulls; tests |
 | **Modify.** `packages/ios-sdk/Sources/OttoFlagsSDK/OttoFlagsClient.swift`, `Tests/.../FlagKeyValidationTests.swift`, `OttoFlagsClientNetworkTests.swift`; **Create.** `Tests/.../EvaluateContractTests.swift` | path, body, `getVariation`; tests |
 | **Modify.** `packages/android-sdk/.../OttoFlagsClient.kt`, `OttoFlagsClientFlagKeyTest.kt`, `OttoFlagsClientNetworkTest.kt` | path, body, nulls, `getVariation`; tests |
@@ -77,7 +79,8 @@ Model: sonnet
 
 Model: sonnet
 
-- [ ] In `client.test.ts`, drop `value` from evaluate mocks; add tests: `{enabled: true}` → true
+- [ ] In `client.test.ts`, `dynamic-config.test.ts` and `config-overrides.test.ts`, evaluate
+  mocks answer `enabled` instead of `value`. In `client.test.ts` add tests: `{enabled: true}` → true
   and the fetch URL ends `/api/flags/test-flag/evaluate`; `{value: true}` → default, reason
   `error`, `onError` called, not cached (second call fetches again).
 - [ ] Run the pnpm gate: the new tests fail.
@@ -91,6 +94,9 @@ Model: sonnet
 Model: sonnet
 
 - [ ] `flagkey_test.go`: the valid-key path pin becomes `/api/flags/<key>/evaluate`.
+- [ ] `dynamic_config_test.go`, `override_test.go`: evaluate mocks answer `enabled` instead of
+  `value` (they do not compile until #113; this keeps them from failing on the contract once
+  they do). `client_test.go` is left to #113: its whole API surface is stale.
 - [ ] Create `evaluate_contract_test.go`: an `httptest` server answering the server's shape
   (`"variation": null`, `"configuration": null`) → `Value` true, reason `evaluated`, path pinned;
   a body without `enabled` → default + non-nil error, reason `error`, `OnError` called, a second
@@ -104,6 +110,8 @@ Model: sonnet
 
 Model: sonnet
 
+- [ ] `FlagClientTest.java` is left to #113 (it does not compile; its whole API surface is
+  stale).
 - [ ] `FlagKeyTest.java`: mocks answer `{"enabled":true}`; the path pin becomes
   `/api/flags/new-checkout.v2_b/evaluate`.
 - [ ] Create `EvaluateContractTest.java` (MockWebServer, JUnit 5): server-shaped body with null
@@ -128,7 +136,9 @@ Model: sonnet
   enabled state for a `Bool` default.
 - [ ] `OttoFlagsClientNetworkTests.swift`: path and mock bodies follow the server shape.
 - [ ] `OttoFlagsClient.swift`: path `/api/flags/{key}/evaluate`; body from a new internal
-  `evaluationBody(for:)`; `getVariation<T>` delegates to `evaluate`.
+  `evaluationBody(for:)`; `getVariation<T>` delegates to `evaluate`; its doc comment states the semantics (variation
+  name for a `String` default, enabled state for a `Bool` default, else the default; cache and
+  overrides apply). Update the stale `/v1/flags/a` comment in `FlagKeyValidationTests.swift`.
 - [ ] Gate not run (no Swift toolchain; #119).
 - [ ] Commit `fix(sdk): call the documented evaluate endpoint from the ios sdk`.
 
@@ -143,6 +153,18 @@ Model: sonnet
   the numeric case returns its default; a null `configuration`/`variation` is not an error.
 - [ ] `OttoFlagsClient.kt`: `flagUrl(key, action)` → `evaluateUrl(key)`; body
   `{"context": {...}}`; `enabled` via `opt("enabled") as? Boolean`; `isNull` checks;
-  `getVariation<T>` delegates to `evaluate`.
-- [ ] Gate: none (no Gradle wrapper); recorded.
+  `getVariation<T>` delegates to `evaluate`, with the same doc comment as iOS.
+- [ ] Gate: none (no Gradle wrapper); recorded. The network tests reach `org.json`, a stub on a
+  plain JVM (#113), so only the URL-builder test is meaningful without Robolectric; recorded in
+  the PR body.
 - [ ] Commit `fix(sdk): call the documented evaluate endpoint from the android sdk`.
+
+### Task 7: Follow-ups and PR body
+
+Model: haiku
+
+- [ ] File two issues (type `bug`, no attribution): non-Rust SDKs fill metadata from fields the
+  server never sends; iOS and Android call `/v1/events`, `/v1/stream` and `/v1/flags`, which the
+  server does not serve.
+- [ ] The PR body names both, and records the gates not run (Go, Java, Swift) and Android's lack
+  of a gate.

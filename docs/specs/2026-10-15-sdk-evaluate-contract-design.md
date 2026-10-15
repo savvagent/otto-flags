@@ -109,9 +109,11 @@ is on reads as on.
 **In:**
 - `packages/python-server/src/otto_flags/{client,async_client}.py` and their tests
   (`tests/conftest.py`, `tests/test_client.py`, `tests/test_async_client.py`)
-- `packages/node-server/src/client.ts` and `client.test.ts`
+- `packages/node-server/src/client.ts`, `client.test.ts`, and the evaluate mocks in
+  `dynamic-config.test.ts` and `config-overrides.test.ts`
 - `packages/go-server/client.go` and `flagkey_test.go` (path pin) plus a new
-  `evaluate_contract_test.go`
+  `evaluate_contract_test.go`; the evaluate mocks in `dynamic_config_test.go` and
+  `override_test.go` (`client_test.go` and Java's `FlagClientTest.java` are left to #113)
 - `packages/java-server/.../FlagClient.java`, `FlagKeyTest.java` (path pin) plus a new
   `EvaluateContractTest.java`
 - `packages/ios-sdk/Sources/OttoFlagsSDK/OttoFlagsClient.swift`, `FlagKeyValidationTests.swift`,
