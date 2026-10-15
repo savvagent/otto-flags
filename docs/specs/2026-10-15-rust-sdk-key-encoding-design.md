@@ -29,7 +29,7 @@ Acceptance criteria (#95):
 - The server's key rule (`crates/flags-core/src/flags.rs`, `validate_key`) is 1-128 characters of
   ASCII letters, digits, `-`, `_`, `.`, after trimming. It accepts `.` and `..` as keys, which no
   REST SDK can evaluate; that is a server-side issue, out of scope here (#95: no server changes),
-  and filed as a follow-up.
+  and filed as #105.
 
 ## 3. Assumptions
 
@@ -71,7 +71,7 @@ The flag key can never change which endpoint the SDK calls or where its `sdk_` k
 In: `src/client.rs` (`is_valid_flag_key`, `evaluate_url`, the refusal at the top of `evaluate`),
 `tests/integration_test.rs`, `README.md` (one line on the key rule).
 
-Out: server key validation (follow-up issue); transport-error fallback and `Metadata` (#96);
+Out: server key validation (#105); transport-error fallback and `Metadata` (#96);
 other SDKs.
 
 ## 6. Architecture
@@ -111,6 +111,8 @@ None. SDK-only: post-merge verification is server health only; the SDK is not pu
 - Multi-byte characters are refused (non-ASCII), length is in bytes, which equals characters for
   the allowed set.
 - A key refused here is not cached, so fixing the key in host code takes effect immediately.
+- A config or variation override set on a refused key is not applied: the fallback carries no
+  overrides, exactly like the existing non-2xx fallback. No server flag can have such a key.
 
 ## 11. Testing approach
 

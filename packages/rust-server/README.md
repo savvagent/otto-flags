@@ -295,7 +295,9 @@ let client = FlagClient::new(config)?;
 
 #### evaluate(&self, flag_key: &str, context: Option<Context>) -> Result<EvaluationResult, OttoFlagsError>
 
-Evaluates a feature flag.
+Evaluates a feature flag. Flag keys are 1-128 ASCII letters, digits, `-`, `_` and `.` (but not
+`.` or `..`), as the server requires; any other key returns its default with `reason: "error"`
+and makes no request.
 
 ```rust
 let result = client.evaluate("my-flag", Some(context)).await?;
