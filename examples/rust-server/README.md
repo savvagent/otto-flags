@@ -57,6 +57,9 @@ The server listens on [http://localhost:8083](http://localhost:8083).
 
 ## API Endpoints
 
+The sample responses show flags as configured on the server; until #92 is fixed, every flag
+comes back off (see Known limitations).
+
 ### Health check
 
 ```bash
