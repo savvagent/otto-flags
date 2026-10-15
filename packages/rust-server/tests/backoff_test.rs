@@ -316,6 +316,35 @@ async fn a_413_opens_no_window() {
     a_request_refusal_opens_no_window(413).await;
 }
 
+/// The server answers 401 for every key problem; a 403 comes from a WAF or proxy in between,
+/// which may be blocking this request for what its context contains.
+#[tokio::test]
+async fn a_403_opens_no_window() {
+    a_request_refusal_opens_no_window(403).await;
+}
+
+#[tokio::test]
+async fn an_oversized_context_is_refused_without_a_request_or_a_window() {
+    let server = MockServer::start().await;
+    mock_status(
+        &server,
+        ResponseTemplate::new(200).set_body_json(json!({ "enabled": false })),
+    )
+    .await;
+    let client = client(server.uri(), Duration::from_secs(30), &["a"]);
+
+    let big = otto_flags::Context::new().with_attribute("note", json!("x".repeat(600 * 1024)));
+    let r = client.evaluate("a", Some(big)).await.unwrap();
+    assert_eq!(r.reason, "error");
+    assert!(r.value, "the default");
+    assert_eq!(requests(&server).await, 0, "not sent");
+
+    // No window: an ordinary lookup still reaches the server.
+    let r = client.evaluate("a", None).await.unwrap();
+    assert_eq!(r.reason, "evaluated");
+    assert_eq!(requests(&server).await, 1);
+}
+
 #[tokio::test]
 async fn a_rejected_key_pauses_every_flag() {
     let server = MockServer::start().await;

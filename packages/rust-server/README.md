@@ -421,10 +421,11 @@ After a failed lookup the client backs off for `failure_cooldown` (5 seconds by 
 `Duration::ZERO` turns it off): lookups in that window return their default with
 `reason: "error"` without a request, so an outage costs one request and one warning per window
 instead of one per lookup. A 404 (no such flag) pauses only that flag. A failure caused by the
-request itself (another 4xx except 401, 403, 408 and 429, or a response body over 1 MiB, the
-most the SDK reads) pauses nothing, so a context built from one end user's input cannot switch
+request itself (another 4xx except 401, 408 and 429, a context over 512 KiB, which is not
+sent, or a response body over 1 MiB, the most the SDK reads) pauses nothing, so a context built from one end user's input cannot switch
 flags off for everyone. Any other failure (a timeout, a 5xx, a rejected key, a response that is
-not an evaluate response) pauses every flag. A `Retry-After` in seconds on a 429 or 503
+not an evaluate response) pauses every flag. A 403 still logs at `error`, as a rejected key
+may. A `Retry-After` in seconds on a 429 or 503
 lengthens the window, up to 60 seconds; it never shortens it. Cached answers are still served
 during a cooldown, and the first lookup after it goes to the server. A `base_url` with a wrong
 path prefix makes every flag answer 404, which pauses each flag separately: one warning per flag

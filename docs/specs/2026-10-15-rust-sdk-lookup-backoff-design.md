@@ -49,11 +49,14 @@ Out of scope (ticket): server changes; other SDKs.
   request itself causes must open no window, or one end user's context could switch every
   user's flags to their defaults, repeatably):
   - per flag: `404`;
-  - none (`Scope::Request`): any other 4xx except 401, 403, 408 and 429 (the server answers
-    400/413/422 for a request body it refuses), and a body over the size cap (the server echoes
-    the context, so a large context can push the response over it);
-  - per client: everything else that follows a request (transport error or timeout, 401, 403,
-    408, 429, 5xx, a body that is not JSON or has no boolean `enabled`, a read error mid-body),
+  - none (`Scope::Request`): any other 4xx except 401, 408 and 429 (the server answers
+    400/413/422 for a request body it refuses, and 401 for every key problem, so a 403 comes from
+    a WAF or proxy that may be blocking this request for its content; a 403 still logs at
+    `error`), a body over the size cap (the server echoes the context, so a large context can
+    push the response over it), and a request body over 512 KiB (`MAX_REQUEST_BYTES`), which is
+    refused before sending rather than left to fail mid-upload as a transport error;
+  - per client: everything else that follows a request (transport error or timeout, 401, 408,
+    429, 5xx, a body that is not JSON or has no boolean `enabled`, a read error mid-body),
     plus an unparseable `base_url` (a configuration error that never heals and would otherwise
     log on every lookup).
   An invalid flag key starts no cooldown: it sends no request and is already refused cheaply.
@@ -126,7 +129,7 @@ cooldown; telemetry backoff (`telemetry.rs` already batches on a timer).
     `debug` and return `get_default_result`. On `fetch` error: `backoff.record(...)`, then the
     existing `warn`/`error` line, extended with the window length.
   - `Failure` gains `scope: Scope` and `retry_after: Option<Duration>`; `fetch` sets them (404 → `Flag`;
-    other 4xx except 401/403/408/429, and oversized → `Request`; 429/503 read `Retry-After`).
+    other 4xx except 401/408/429, oversized response or request → `Request`; 429/503 read `Retry-After`).
   - `fetch` reads the body through a new private `read_capped(response, MAX_RESPONSE_BYTES)` using
     `Response::content_length` and `Response::chunk`, then `serde_json::from_slice`.
 - **`src/types.rs`.** `Config.failure_cooldown` (doc comment), default 5 s,

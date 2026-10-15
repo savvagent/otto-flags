@@ -43,6 +43,12 @@ pub(crate) fn is_valid_flag_key(key: &str) -> bool {
 /// The most of an evaluate response the SDK reads; a larger body is a failed lookup.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
+/// The largest evaluate request body the SDK sends. The server echoes the context, so a larger
+/// one could not fit in a response the SDK reads; it is refused before sending, as a failure of
+/// this request (no cooldown), rather than left to fail as a transport error mid-upload, which
+/// would pause every flag.
+const MAX_REQUEST_BYTES: usize = 512 * 1024;
+
 /// Why a lookup fell back, for the log and the cooldown.
 struct Failure {
     why: String,
@@ -79,9 +85,11 @@ fn failure_scope(status: reqwest::StatusCode) -> Scope {
         // The server answers 404 for a key with no active flag: only that flag waits.
         404 => Scope::Flag,
         // A rejected key, a timeout, rate limiting: the client as a whole should wait.
-        401 | 403 | 408 | 429 => Scope::Client,
+        401 | 408 | 429 => Scope::Client,
         // Any other 4xx refuses this request's content (a context the host built from end-user
-        // input); it says nothing about the service, so it opens no window.
+        // input); it says nothing about the service, so it opens no window. That includes 403:
+        // the server answers 401 for every key problem, so a 403 comes from something in
+        // between, such as a WAF blocking a request for what its context contains.
         400..=499 => Scope::Request,
         _ => Scope::Client,
     }
@@ -392,11 +400,19 @@ impl FlagClient {
         let url = self
             .evaluate_url(flag_key)
             .map_err(|e| Failure::new(e.to_string()))?;
+        let body = serde_json::to_vec(&json!({ "context": ctx }))
+            .map_err(|_| Failure::request("the context cannot be serialized"))?;
+        if body.len() > MAX_REQUEST_BYTES {
+            return Err(Failure::request(format!(
+                "the context is larger than {MAX_REQUEST_BYTES} bytes"
+            )));
+        }
         let response = self
             .http_client
             .post(url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&json!({ "context": ctx }))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(body)
             .send()
             .await
             // The URL is already in the log line's context; drop it from the error text.
