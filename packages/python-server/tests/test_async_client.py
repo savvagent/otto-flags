@@ -1,7 +1,7 @@
 """Tests for the asynchronous AsyncFlagClient."""
 
-import pytest
 import httpx
+import pytest
 import respx
 
 from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
@@ -231,6 +231,16 @@ class TestAsyncOverrides:
 
             result = await client.evaluate("test-flag")
             assert result.configuration == {"overridden": True}
+
+    @pytest.mark.asyncio
+    async def test_config_override_invalid_chains_cause(
+        self, async_config: FlagClientConfig
+    ) -> None:
+        """Test an unserializable override raises ValueError chained to the TypeError."""
+        async with AsyncFlagClient(async_config) as client:
+            with pytest.raises(ValueError, match="Invalid configuration for flag 'flag'") as exc_info:
+                client.set_config_override("flag", {"bad": object()})
+            assert isinstance(exc_info.value.__cause__, TypeError)
 
     @pytest.mark.asyncio
     @respx.mock

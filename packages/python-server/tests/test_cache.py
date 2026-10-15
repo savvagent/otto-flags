@@ -1,9 +1,10 @@
 """Tests for FlagCache and AsyncFlagCache."""
 
 import time
+
 import pytest
 
-from otto_flags import FlagCache, AsyncFlagCache
+from otto_flags import AsyncFlagCache, FlagCache
 
 
 class TestFlagCache:

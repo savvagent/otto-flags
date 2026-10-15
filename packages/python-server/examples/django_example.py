@@ -19,12 +19,14 @@ Setup:
 
 import os
 from functools import wraps
-from typing import Any
+
+from django.apps import AppConfig
+from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.views import View
 
 # =============================================================================
 # otto_flags_client.py - Singleton client pattern
 # =============================================================================
-
 from otto_flags import FlagClient, FlagClientConfig, FlagContext
 
 _client: FlagClient | None = None
@@ -58,7 +60,7 @@ def close_otto_flags_client() -> None:
 # middleware.py - Request context extraction
 # =============================================================================
 
-from django.http import HttpRequest, HttpResponse
+# Uses HttpRequest, HttpResponse (imported at the top of this file)
 
 
 class OttoFlagsMiddleware:
@@ -102,7 +104,7 @@ class OttoFlagsMiddleware:
 # decorators.py - View decorators for feature flags
 # =============================================================================
 
-from django.http import JsonResponse
+# Uses JsonResponse (imported at the top of this file)
 
 
 def require_feature(flag_key: str):
@@ -147,7 +149,7 @@ def with_feature_flag(flag_key: str, attribute_name: str = "feature_enabled"):
 # views.py - Example views
 # =============================================================================
 
-from django.views import View
+# Uses View (imported at the top of this file)
 
 
 def health_check(request: HttpRequest) -> JsonResponse:
@@ -229,7 +231,7 @@ class FeatureGatedView(View):
 # apps.py - Django app configuration with cleanup
 # =============================================================================
 
-from django.apps import AppConfig
+# Uses AppConfig (imported at the top of this file)
 
 
 class OttoFlagsAppConfig(AppConfig):

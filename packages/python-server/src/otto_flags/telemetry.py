@@ -7,6 +7,7 @@ Per SDK Developer Guide: Batch evaluations and send every 5-10 seconds.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
 import threading
 from datetime import datetime, timezone
@@ -430,10 +431,8 @@ class AsyncTelemetryService:
         self._closed = True
         if self._flush_task:
             self._flush_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._flush_task
-            except asyncio.CancelledError:
-                pass
             self._flush_task = None
         await self.flush()
         if self._client:

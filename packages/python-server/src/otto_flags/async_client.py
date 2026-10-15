@@ -96,7 +96,7 @@ class AsyncFlagClient:
                 ),
             )
 
-    async def __aenter__(self) -> "AsyncFlagClient":
+    async def __aenter__(self) -> AsyncFlagClient:
         """Async context manager entry."""
         self._client = httpx.AsyncClient(timeout=self._config.timeout)
         await self._telemetry.start()
@@ -413,7 +413,7 @@ class AsyncFlagClient:
             try:
                 json.dumps(config)
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Invalid configuration for flag '{flag_key}': {e}")
+                raise ValueError(f"Invalid configuration for flag '{flag_key}': {e}") from e
 
         # Store override
         self._config_overrides[flag_key] = ConfigOverrideEntry(

@@ -1,10 +1,10 @@
 """Shared test fixtures for Otto Flags SDK tests."""
 
-import pytest
 import httpx
+import pytest
 import respx
 
-from otto_flags import FlagClient, AsyncFlagClient, FlagClientConfig
+from otto_flags import AsyncFlagClient, FlagClient, FlagClientConfig
 
 
 @pytest.fixture

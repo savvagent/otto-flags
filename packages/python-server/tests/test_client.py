@@ -1,7 +1,7 @@
 """Tests for the synchronous FlagClient."""
 
-import pytest
 import httpx
+import pytest
 import respx
 
 from otto_flags import FlagClient, FlagClientConfig, FlagContext
@@ -234,6 +234,12 @@ class TestOverrides:
 
         result = client.evaluate("test-flag")
         assert result.configuration == {"overridden": True}
+
+    def test_config_override_invalid_chains_cause(self, client: FlagClient) -> None:
+        """Test an unserializable override raises ValueError chained to the TypeError."""
+        with pytest.raises(ValueError, match="Invalid configuration for flag 'flag'") as exc_info:
+            client.set_config_override("flag", {"bad": object()})
+        assert isinstance(exc_info.value.__cause__, TypeError)
 
     @respx.mock
     def test_config_override_merge(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
