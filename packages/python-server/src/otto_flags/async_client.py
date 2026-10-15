@@ -12,11 +12,13 @@ import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
+from urllib.parse import quote
 
 import httpx
 
+from ._flag_key import describe_flag_key, is_valid_flag_key
 from .cache import AsyncFlagCache
-from .exceptions import InvalidAPIKeyError
+from .exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 from .realtime import AsyncRealtimeService
 from .telemetry import AsyncTelemetryService
 from .types import (
@@ -138,6 +140,19 @@ class AsyncFlagClient:
         Returns:
             FlagEvaluationResult with value, configuration, and metadata.
         """
+        if not is_valid_flag_key(flag_key):
+            # Never put an unvalidated key in the URL path (#107): no request,
+            # no telemetry, just the configured default.
+            if self._config.on_error:
+                self._config.on_error(
+                    InvalidFlagKeyError(f"Invalid flag key: {describe_flag_key(flag_key)}")
+                )
+            return FlagEvaluationResult(
+                key=flag_key,
+                value=self._config.defaults.get(flag_key, False),
+                reason="error",
+            )
+
         if not self._client:
             raise RuntimeError("Client not initialized. Use 'async with' context manager.")
 
@@ -185,7 +200,7 @@ class AsyncFlagClient:
 
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = await self._client.post(
-                f"{self._config.base_url}/api/flags/{flag_key}/evaluate",
+                f"{self._config.base_url}/api/flags/{quote(flag_key, safe='')}/evaluate",
                 json={"context": eval_context.to_dict()},
                 headers={
                     "Content-Type": "application/json",
