@@ -30,7 +30,7 @@ pub const SERVER_PREFIX: &str = "srv_";
 /// How many characters of a key are kept in clear, to tell keys apart.
 const SHOWN_PREFIX_LEN: usize = 12;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyKind {
     Client,

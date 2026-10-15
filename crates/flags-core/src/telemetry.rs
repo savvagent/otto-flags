@@ -18,9 +18,9 @@ use std::collections::{hash_map::Entry, BTreeMap, HashMap};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use otto_tenant::{Db, Tx};
 use serde::Serialize;
-use sqlx::FromRow;
 
 use crate::error::Result;
+use crate::flags::FeatureFlag;
 use crate::ids::{FlagAppId, FlagId};
 use crate::keys::KeyKind;
 use crate::rollback::{decide, Decision, Sample, Thresholds, Trigger};
@@ -43,12 +43,20 @@ const MAX_VARIATION: usize = 64;
 /// a flag's own variations fit unless reports under other names outnumber them.
 /// The rest are summed in `Health::other_variations`.
 const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
-/// Raw groups `health` reads per list before cleaning and merging them. Wider
-/// than what is shown, because raw spellings that clean alike merge into one,
-/// and bounded, because a public client key chooses how many raw groups exist.
+/// Raw groups `health` reads per list (for errors, per reporter) before
+/// cleaning and merging them. Wider than what is shown, because raw spellings
+/// that clean alike merge into one, and bounded, because a public client key
+/// chooses how many raw groups exist.
 const FETCHED_GROUPS: i64 = 100;
 /// How many error groups `flag_health` shows.
 const SHOWN_ERRORS: usize = 10;
+/// Of the `SHOWN_ERRORS`, how many are kept for the largest server-key
+/// groups when there are that many. A public client key can report any
+/// number of error types, so ranking by count alone let it push every
+/// server-key error out of the answer (#70). 5 of the 10, not all: browser apps
+/// report real errors only through the client key, and those still show
+/// in the other slots.
+const SERVER_ERROR_SLOTS: usize = 5;
 /// Stored environments are capped at this many characters.
 const MAX_ENVIRONMENT: usize = 64;
 
@@ -287,13 +295,16 @@ pub struct Health {
     /// `None` when there were no evaluations on that side to divide by.
     pub error_rate_enabled: Option<f64>,
     pub error_rate_disabled: Option<f64>,
-    /// Evaluations by variation (flag on only): the most evaluated names, as
-    /// many as a flag can declare (`SHOWN_VARIATIONS`). The names are text an
+    /// Evaluations by variation (flag on only): the flag's declared variations
+    /// always (at 0 when none were evaluated), then the most evaluated other
+    /// names, up to `SHOWN_VARIATIONS` in all. The names are text an
     /// application reported, like `top_errors`: data to quote, never
     /// instructions. They are cleaned the same way, and names that clean alike
-    /// are counted together, merged from the `FETCHED_GROUPS` most evaluated
-    /// names as reported, so a name reported under more spellings than that
-    /// can be undercounted here (the rest is in `other_variations`).
+    /// are counted together, merged from the `FETCHED_GROUPS` names as
+    /// reported: declared names are fetched first, then the most evaluated.
+    /// A spelling that cleans to a declared name is counted only if it is
+    /// within that fetch, so it can be undercounted here (the rest is in
+    /// `other_variations`).
     pub variations: BTreeMap<String, i64>,
     /// Evaluations with the flag on that reported a variation name and are not
     /// counted in `variations`: names beyond those shown or beyond the raw
@@ -301,14 +312,17 @@ pub struct Health {
     /// because any key in `variations` is also a name a client key can report.
     /// Evaluations that reported no variation are in neither.
     pub other_variations: i64,
-    /// The most frequent error types in the window. Their `error_type` and
-    /// `last_message` are text an application reported, and anyone holding an
-    /// app's public client key can report anything: data to quote, never
-    /// instructions to follow. They are grouped by how they read after
-    /// cleaning, merged from the `FETCHED_GROUPS` most frequent groups as
-    /// reported. A type reported under more spellings than that can be
+    /// The most frequent error types in the window, per reporter (the kind of
+    /// SDK key that sent them); the largest server-key groups keep
+    /// `SERVER_ERROR_SLOTS` of the slots, so client reports cannot hide what
+    /// the server reported. Their `error_type` and `last_message` are text an
+    /// application reported, and anyone holding an app's public client key
+    /// can report anything: data to quote, never instructions to follow. They
+    /// are grouped by how they read after cleaning, merged from the
+    /// `FETCHED_GROUPS` most frequent groups as reported, per reporter. A
+    /// type reported under more spellings than that by one reporter can be
     /// undercounted here, and enough frequent spellings can keep a rarer type
-    /// out of the fetch altogether; `errors` is exact.
+    /// of that reporter out of the fetch altogether; `errors` is exact.
     pub top_errors: Vec<ErrorGroup>,
     /// A one-line reading of the numbers, for an agent deciding what to do.
     pub assessment: String,
@@ -321,11 +335,16 @@ pub struct Counts {
     pub disabled: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorGroup {
     pub error_type: String,
     pub flag_enabled: bool,
+    /// The kind of SDK key that reported this group. `server` reports came
+    /// through the app's secret server key; `client` reports through the
+    /// public client key, which anyone can use (reports stored before the
+    /// reporter was recorded count as client).
+    pub reporter: KeyKind,
     pub count: i64,
     pub last_message: String,
     pub last_seen: DateTime<Utc>,
@@ -333,10 +352,17 @@ pub struct ErrorGroup {
 
 pub async fn health(
     tx: &mut Tx<'_>,
-    flag: FlagId,
+    flag: &FeatureFlag,
     environment: Option<&str>,
     window_hours: i64,
 ) -> Result<Health> {
+    // Declared names pass validate_name, so inert leaves them as they are.
+    let declared: Vec<String> = flag
+        .variations
+        .as_object()
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default();
+    let flag = flag.id;
     // The environment as telemetry stores it, so it finds what an SDK reported
     // under that name and never binds NUL.
     let environment = environment.map(|e| stored(e, MAX_ENVIRONMENT));
@@ -359,37 +385,66 @@ pub async fn health(
     .await?;
     let evaluations = Counts { enabled, disabled };
     // Bounded: a public client key decides how many distinct names exist. The
-    // name order only makes the fetch deterministic; `top_variations` decides
-    // what is shown. The window sum is taken before the LIMIT, so each row
-    // carries the total over every name, fetched or not, from the same
-    // snapshot as the rows.
+    // flag's declared names come first so they are always within the fetch,
+    // then the most evaluated; `top_variations` decides what is shown. The
+    // window sum is taken before the LIMIT, so each row carries the total over
+    // every name, fetched or not, from the same snapshot as the rows.
     let rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT variation, sum(count)::bigint, (sum(sum(count)) OVER ())::bigint \
          FROM flag_eval_hourly \
          WHERE org_id = $1 AND flag_id = $2 AND hour >= date_trunc('hour', $3::timestamptz) \
            AND ($4::text IS NULL OR environment = $4) AND enabled AND variation <> '' \
-         GROUP BY variation ORDER BY 2 DESC, variation LIMIT $5",
+         GROUP BY variation ORDER BY variation = ANY($6) DESC, 2 DESC, variation LIMIT $5",
     )
     .bind(org)
     .bind(flag)
     .bind(since)
     .bind(environment.as_deref())
     .bind(FETCHED_GROUPS)
+    .bind(&declared)
     .fetch_all(tx.conn())
     .await?;
     let named = rows.first().map_or(0, |&(_, _, total)| total);
     let rows = rows.into_iter().map(|(v, n, _)| (v, n)).collect();
-    let (variations, other_variations) = top_variations(rows, named);
+    let (variations, other_variations) = top_variations(rows, &declared, named);
 
-    let top_errors: Vec<ErrorGroup> = sqlx::query_as(
-        "SELECT error_type, flag_enabled, count(*)::bigint AS count, \
-                (array_agg(error_message ORDER BY occurred_at DESC))[1] AS last_message, \
-                max(occurred_at) AS last_seen \
-         FROM flag_errors \
-         WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
-           AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
-         GROUP BY error_type, flag_enabled \
-         ORDER BY count DESC, error_type, flag_enabled LIMIT $5",
+    // Counts, the latest time, and the newest row's id per group in one
+    // pass; the message only for the groups kept, by primary key (#69).
+    // Aggregating every message to keep one grew with whatever a public
+    // client key reported, and a per-group seek through
+    // flag_errors_flag_time_idx (which has no error_type) would read every row
+    // at that instant once per group. `max` over [epoch, id] compares element
+    // by element: the latest occurred_at, then the highest id (the row stored
+    // last) on a tie, in fixed space per group. The fetch keeps
+    // `FETCHED_GROUPS` per reporter, so client groups cannot fill it (#70).
+    // The message is a scalar subquery, not a join: the planner cannot see
+    // that `kept` is capped, and with a join it chose merge and hash joins
+    // over the whole of `flag_errors` in custom plans. The subquery is one
+    // primary-key probe per kept group, and the row always exists in this
+    // statement's snapshot. The outer ORDER BY only makes the fetch
+    // deterministic; `merge_error_groups` decides the order shown.
+    let rows: Vec<(String, bool, bool, i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "WITH g AS ( \
+           SELECT error_type, flag_enabled, reporter IS NOT DISTINCT FROM 'server' AS server, \
+                  count(*)::bigint AS count, max(occurred_at) AS last_seen, \
+                  (max(ARRAY[extract(epoch FROM occurred_at), id::numeric]))[2]::bigint AS last_id \
+           FROM flag_errors \
+           WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
+             AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
+           GROUP BY 1, 2, 3 \
+         ), r AS ( \
+           SELECT *, row_number() OVER ( \
+             PARTITION BY server ORDER BY count DESC, error_type, flag_enabled) AS rn \
+           FROM g \
+         ), kept AS ( \
+           SELECT * FROM r WHERE rn <= $5 \
+         ) \
+         SELECT k.error_type, k.flag_enabled, k.server, k.count, \
+                (SELECT e.error_message FROM flag_errors e \
+                 WHERE e.id = k.last_id AND e.org_id = $1 AND e.flag_id = $2) AS last_message, \
+                k.last_seen \
+         FROM kept k \
+         ORDER BY k.server DESC, k.rn",
     )
     .bind(org)
     .bind(flag)
@@ -398,6 +453,23 @@ pub async fn health(
     .bind(FETCHED_GROUPS)
     .fetch_all(tx.conn())
     .await?;
+    let top_errors: Vec<ErrorGroup> = rows
+        .into_iter()
+        .map(
+            |(error_type, flag_enabled, server, count, last_message, last_seen)| ErrorGroup {
+                error_type,
+                flag_enabled,
+                reporter: if server {
+                    KeyKind::Server
+                } else {
+                    KeyKind::Client
+                },
+                count,
+                last_message,
+                last_seen,
+            },
+        )
+        .collect();
     let errors: Counts = sqlx::query_as::<_, (i64, i64)>(
         "SELECT count(*) FILTER (WHERE flag_enabled)::bigint, \
                 count(*) FILTER (WHERE NOT flag_enabled)::bigint \
@@ -440,17 +512,20 @@ pub async fn health(
 
 /// The error groups `health` shows, from groups as reported: type and message
 /// cleaned like any SDK-reported text headed for an agent, groups whose type
-/// reads alike (with the flag in the same state) merged, so one error cannot
-/// fill several slots under spellings that differ only in hidden characters.
+/// reads alike (with the flag in the same state, from the same kind of key)
+/// merged, so one error cannot fill several slots under spellings that differ
+/// only in hidden characters.
 /// A merged group sums the counts and keeps the latest `last_seen` and its
-/// message. The `SHOWN_ERRORS` largest are kept, the more recent first on a
-/// tie, then by type, then on before off, so the answer is stable.
+/// message. Groups are per reporter; the `SERVER_ERROR_SLOTS` largest server
+/// groups are kept first, then the largest others up to `SHOWN_ERRORS`; ties
+/// go to the more recent, then by type, then on before off, then server, so
+/// the answer is stable.
 fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
-    let mut merged: HashMap<(String, bool), ErrorGroup> = HashMap::new();
+    let mut merged: HashMap<(String, bool, KeyKind), ErrorGroup> = HashMap::new();
     for mut g in groups {
         g.error_type = inert(&g.error_type, MAX_ERROR_TYPE);
         g.last_message = inert(&g.last_message, SHOWN_MESSAGE);
-        match merged.entry((g.error_type.clone(), g.flag_enabled)) {
+        match merged.entry((g.error_type.clone(), g.flag_enabled, g.reporter)) {
             Entry::Vacant(e) => {
                 e.insert(g);
             }
@@ -464,38 +539,72 @@ fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
             }
         }
     }
-    let mut ranked: Vec<ErrorGroup> = merged.into_values().collect();
-    ranked.sort_by(|a, b| {
+    let rank = |a: &ErrorGroup, b: &ErrorGroup| {
         b.count
             .cmp(&a.count)
             .then_with(|| b.last_seen.cmp(&a.last_seen))
             .then_with(|| a.error_type.cmp(&b.error_type))
             .then_with(|| b.flag_enabled.cmp(&a.flag_enabled))
-    });
-    ranked.truncate(SHOWN_ERRORS);
-    ranked
+            .then_with(|| (b.reporter == KeyKind::Server).cmp(&(a.reporter == KeyKind::Server)))
+    };
+    let mut ranked: Vec<ErrorGroup> = merged.into_values().collect();
+    ranked.sort_by(rank);
+    // Only server groups are taken here, so `shown.len()` is the number of
+    // server slots used.
+    let mut shown = Vec::with_capacity(SHOWN_ERRORS);
+    let mut rest = vec![];
+    for g in ranked {
+        let server_slots_left = shown.len() < SERVER_ERROR_SLOTS;
+        if g.reporter == KeyKind::Server && server_slots_left {
+            shown.push(g);
+        } else {
+            rest.push(g);
+        }
+    }
+    shown.extend(rest.into_iter().take(SHOWN_ERRORS - shown.len()));
+    shown.sort_by(rank);
+    shown
 }
 
 /// The variations `health` shows, from raw `(name, evaluations)` rows: names
 /// cleaned like any SDK-reported text headed for an agent, names that clean
-/// alike counted together, names that clean to nothing dropped, and the
-/// `SHOWN_VARIATIONS` largest kept (ties by name). Returns them with the
-/// evaluations of every other named row, counting `named_total` (all named
-/// on-evaluations, fetched or not) against what is shown. The remainder is
-/// clamped at zero, so an inconsistent total can never show negative.
-fn top_variations(rows: Vec<(String, i64)>, named_total: i64) -> (BTreeMap<String, i64>, i64) {
-    let mut merged: HashMap<String, i64> = HashMap::new();
+/// alike counted together, and names that clean to nothing dropped. The
+/// flag's `declared` names are always kept (at 0 if not evaluated), so a
+/// public client key cannot push them out by reporting made-up names; the
+/// other names fill the remaining slots up to `SHOWN_VARIATIONS`, largest
+/// first (ties by name). Returns them with the evaluations of every other
+/// named row, counting `named_total` (all named on-evaluations, fetched or
+/// not) against what is shown. The remainder is clamped at zero, so an
+/// inconsistent total can never show negative.
+fn top_variations(
+    rows: Vec<(String, i64)>,
+    declared: &[String],
+    named_total: i64,
+) -> (BTreeMap<String, i64>, i64) {
+    let mut merged: HashMap<String, i64> = declared
+        .iter()
+        .map(|d| (inert(d, MAX_VARIATION), 0))
+        .collect();
     for (name, n) in rows {
         let name = inert(&name, MAX_VARIATION);
         if !name.is_empty() {
             *merged.entry(name).or_insert(0) += n;
         }
     }
-    let mut ranked: Vec<(String, i64)> = merged.into_iter().collect();
-    ranked.sort_by(|(a, x), (b, y)| y.cmp(x).then_with(|| a.cmp(b)));
-    ranked.truncate(SHOWN_VARIATIONS);
-    let shown: i64 = ranked.iter().map(|(_, n)| n).sum();
-    (ranked.into_iter().collect(), (named_total - shown).max(0))
+    let (mut shown, mut undeclared): (BTreeMap<String, i64>, Vec<(String, i64)>) =
+        (BTreeMap::new(), vec![]);
+    for (name, n) in merged {
+        if declared.contains(&name) {
+            shown.insert(name, n);
+        } else {
+            undeclared.push((name, n));
+        }
+    }
+    undeclared.sort_by(|(a, x), (b, y)| y.cmp(x).then_with(|| a.cmp(b)));
+    undeclared.truncate(SHOWN_VARIATIONS.saturating_sub(shown.len()));
+    shown.extend(undeclared);
+    let total_shown: i64 = shown.values().sum();
+    (shown, (named_total - total_shown).max(0))
 }
 
 /// True for a character `inert` replaces: control characters (Cc), format
@@ -653,9 +762,21 @@ mod tests {
     }
 
     fn group(error_type: &str, on: bool, count: i64, secs: i64, msg: &str) -> ErrorGroup {
+        reported(error_type, on, KeyKind::Server, count, secs, msg)
+    }
+
+    fn reported(
+        error_type: &str,
+        on: bool,
+        reporter: KeyKind,
+        count: i64,
+        secs: i64,
+        msg: &str,
+    ) -> ErrorGroup {
         ErrorGroup {
             error_type: error_type.into(),
             flag_enabled: on,
+            reporter,
             count,
             last_message: msg.into(),
             last_seen: DateTime::from_timestamp(secs, 0).unwrap(),
@@ -685,6 +806,100 @@ mod tests {
                 group("TypeError", false, 2, 100, "off"),
             ]
         );
+    }
+
+    #[test]
+    fn error_groups_keep_reporters_apart() {
+        let merged = merge_error_groups(vec![
+            reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+            reported("TypeError", true, KeyKind::Client, 2, 200, "c"),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+                reported("TypeError", true, KeyKind::Client, 2, 200, "c"),
+            ]
+        );
+    }
+
+    fn clients_and_servers(clients: i64, servers: i64) -> Vec<ErrorGroup> {
+        let mut groups: Vec<ErrorGroup> = (0..clients)
+            .map(|i| {
+                reported(
+                    &format!("C{i:02}"),
+                    true,
+                    KeyKind::Client,
+                    100 + i,
+                    100,
+                    "m",
+                )
+            })
+            .collect();
+        groups.extend(
+            (0..servers)
+                .map(|i| reported(&format!("S{i:02}"), true, KeyKind::Server, 1 + i, 100, "m")),
+        );
+        groups
+    }
+
+    #[test]
+    fn client_reports_cannot_crowd_out_server_errors() {
+        // 12 large client groups and 7 small server ones: the 5 largest
+        // server groups keep their slots, the 5 largest client groups the rest.
+        let shown: Vec<String> = merge_error_groups(clients_and_servers(12, 7))
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["C11", "C10", "C09", "C08", "C07", "S06", "S05", "S04", "S03", "S02"]
+        );
+    }
+
+    #[test]
+    fn server_slots_left_unused_go_by_count() {
+        let shown: Vec<String> = merge_error_groups(clients_and_servers(12, 2))
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["C11", "C10", "C09", "C08", "C07", "C06", "C05", "C04", "S01", "S00"]
+        );
+    }
+
+    #[test]
+    fn leftover_server_groups_compete_by_count_for_the_rest() {
+        // 12 server groups and 2 client groups: the 5 largest server groups
+        // take the server slots, and the other 7 compete with the clients by
+        // count for the remaining 5 (C00 first, S06..S03 after it), and the
+        // shown groups are in rank order, C00 ahead of S08 on type at 18.
+        let mut groups: Vec<ErrorGroup> = (0..12)
+            .map(|i| reported(&format!("S{i:02}"), true, KeyKind::Server, 10 + i, 100, "m"))
+            .collect();
+        groups.push(reported("C00", true, KeyKind::Client, 18, 100, "m"));
+        groups.push(reported("C01", true, KeyKind::Client, 3, 100, "m"));
+        let shown: Vec<String> = merge_error_groups(groups)
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["S11", "S10", "S09", "C00", "S08", "S07", "S06", "S05", "S04", "S03"]
+        );
+    }
+
+    #[test]
+    fn a_server_group_outranks_a_client_group_tied_on_everything_else() {
+        let shown: Vec<KeyKind> = merge_error_groups(vec![
+            reported("TypeError", true, KeyKind::Client, 3, 100, "c"),
+            reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+        ])
+        .into_iter()
+        .map(|g| g.reporter)
+        .collect();
+        assert_eq!(shown, [KeyKind::Server, KeyKind::Client]);
     }
 
     #[test]
@@ -721,12 +936,41 @@ mod tests {
         assert_eq!(merged[0].last_message.chars().count(), SHOWN_MESSAGE + 1);
     }
 
+    fn declared(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn declared_variations_are_always_shown() {
+        // 25 undeclared names, each evaluated more than either declared one.
+        let mut rows = names(25, |i| 100 - i as i64);
+        rows.push(("treatment".into(), 3));
+        let total: i64 = rows.iter().map(|(_, n)| n).sum();
+        let (shown, other) = top_variations(rows, &declared(&["control", "treatment"]), total);
+        assert_eq!(shown.len(), SHOWN_VARIATIONS);
+        assert_eq!(shown.get("treatment"), Some(&3));
+        assert_eq!(shown.get("control"), Some(&0));
+        // Undeclared names fill the other 18 slots, largest first.
+        assert!(shown.contains_key("v17"));
+        assert!(!shown.contains_key("v18"));
+        // v00..v24 have 100..=76 evaluations; v18..v24 (82..=76) are not shown.
+        assert_eq!(other, (76..=82).sum::<i64>());
+    }
+
+    #[test]
+    fn a_spelling_of_a_declared_variation_counts_toward_it() {
+        let rows = vec![("on".to_string(), 2), ("on\u{200B}".to_string(), 3)];
+        let (shown, other) = top_variations(rows, &declared(&["on"]), 5);
+        assert_eq!(shown, BTreeMap::from([("on".to_string(), 5)]));
+        assert_eq!(other, 0);
+    }
+
     #[test]
     fn variations_are_capped_at_the_most_evaluated() {
         // v00 has 25 evaluations, v24 has 1.
         let rows = names(25, |i| 25 - i as i64);
         let total = rows.iter().map(|(_, n)| n).sum();
-        let (shown, other) = top_variations(rows, total);
+        let (shown, other) = top_variations(rows, &[], total);
         assert_eq!(shown.len(), SHOWN_VARIATIONS);
         assert_eq!(shown.get("v00"), Some(&25));
         assert_eq!(shown.get("v19"), Some(&6));
@@ -736,7 +980,7 @@ mod tests {
 
     #[test]
     fn variation_ties_at_the_cut_go_by_name() {
-        let (shown, other) = top_variations(names(21, |_| 1), 21);
+        let (shown, other) = top_variations(names(21, |_| 1), &[], 21);
         assert_eq!(shown.len(), 20);
         assert!(shown.contains_key("v19"));
         assert!(!shown.contains_key("v20"));
@@ -748,7 +992,7 @@ mod tests {
         let mut rows = names(20, |_| 2);
         rows.push(("a\u{200B}b".into(), 2));
         rows.push(("a\u{202E}b".into(), 2));
-        let (shown, other) = top_variations(rows, 44);
+        let (shown, other) = top_variations(rows, &[], 44);
         // "a b" (4) outranks every 2, so v19 is the one cut.
         assert_eq!(shown.get("a b"), Some(&4));
         assert!(!shown.contains_key("v19"));
@@ -758,18 +1002,18 @@ mod tests {
     #[test]
     fn a_variation_that_cleans_to_nothing_is_counted_as_other() {
         let rows = vec![("\u{200B}".to_string(), 3), ("on".to_string(), 4)];
-        let (shown, other) = top_variations(rows, 7);
+        let (shown, other) = top_variations(rows, &[], 7);
         assert_eq!(shown, BTreeMap::from([("on".to_string(), 4)]));
         assert_eq!(other, 3);
     }
 
     #[test]
     fn variations_not_fetched_are_counted_as_other() {
-        let (shown, other) = top_variations(vec![("on".to_string(), 4)], 10);
+        let (shown, other) = top_variations(vec![("on".to_string(), 4)], &[], 10);
         assert_eq!(shown.len(), 1);
         assert_eq!(other, 6);
         // Never negative, even given a total smaller than what is shown.
-        assert_eq!(top_variations(vec![("on".to_string(), 4)], 3).1, 0);
+        assert_eq!(top_variations(vec![("on".to_string(), 4)], &[], 3).1, 0);
     }
 
     #[test]

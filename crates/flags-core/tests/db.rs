@@ -2,7 +2,7 @@
 //! database from `#[sqlx::test]`; set `DATABASE_URL` to a superuser on a
 //! scratch cluster (`podman compose up -d` gives you one on port 15434).
 
-use chrono::Utc;
+use chrono::{DurationRound, TimeDelta, Utc};
 use flags_core::apps::{AppsExt, Rotate};
 use flags_core::audit_purge;
 use flags_core::eval::{Context, Operator, Rule};
@@ -1190,12 +1190,12 @@ async fn arguments_with_nul_find_nothing_or_are_refused(pool: PgPool) {
     telemetry::record_evaluations(&mut tx, app.id, KeyKind::Server, events)
         .await
         .unwrap();
-    let h = telemetry::health(&mut tx, flag.id, Some("production\0"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production\0"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 2);
     assert!(!h.environment.unwrap().contains('\0'));
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 3);
@@ -1266,7 +1266,7 @@ async fn telemetry_rolls_up_and_feeds_health(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!((h.evaluations.enabled, h.evaluations.disabled), (300, 300));
@@ -1333,7 +1333,7 @@ async fn health_shows_variation_names_cleaned(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 10);
@@ -1388,7 +1388,7 @@ async fn health_shows_at_most_twenty_variations(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!((h.evaluations.enabled, h.evaluations.disabled), (467, 3));
@@ -1441,13 +1441,71 @@ async fn health_reads_a_bounded_number_of_variation_names(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.evaluations.enabled, 230);
     let expected: BTreeMap<String, i64> = (0..20).map(|i| (format!("a{i:03}"), 2)).collect();
     assert_eq!(h.variations, expected);
     assert_eq!(h.other_variations, 230 - 40);
+    tx.commit().await.unwrap();
+}
+
+// A flag's declared variations are always shown, even when a public client
+// key reports more evaluations under made-up names, and even at zero (#70).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_always_shows_declared_variations(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                variations: Some(json!({"control": {}, "treatment": {}, "unused": {}})),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let event = |variation: String| EvalEvent {
+        flag_key: "f".into(),
+        enabled: true,
+        variation: Some(variation),
+        environment: "production".into(),
+        at: now,
+    };
+    // control 2, treatment 3; junk000..junk119 evaluated 5..=124 times, so
+    // every junk name is louder than a declared one and the 120 of them
+    // exceed the 100 raw names fetched.
+    let mut events: Vec<EvalEvent> = (0..2).map(|_| event("control".into())).collect();
+    events.extend((0..3).map(|_| event("treatment".into())));
+    for i in 0..120 {
+        events.extend((0..(5 + i)).map(|_| event(format!("junk{i:03}"))));
+    }
+    telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, events)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.variations.len(), 20);
+    assert_eq!(h.variations.get("control"), Some(&2));
+    assert_eq!(h.variations.get("treatment"), Some(&3));
+    assert_eq!(h.variations.get("unused"), Some(&0));
+    // The 17 most evaluated junk names (junk103..junk119) take the other slots.
+    assert!(h.variations.contains_key("junk103"));
+    assert!(!h.variations.contains_key("junk102"));
+    // The rest, fetched or not: junk000..junk102.
+    assert_eq!(h.other_variations, (0..=102).map(|i| 5 + i).sum::<i64>());
     tx.commit().await.unwrap();
 }
 
@@ -1498,7 +1556,7 @@ async fn health_merges_error_types_that_read_alike(pool: PgPool) {
         .await
         .unwrap();
 
-    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
         .await
         .unwrap();
     assert_eq!(h.errors.enabled, 39);
@@ -1514,6 +1572,262 @@ async fn health_merges_error_types_that_read_alike(pool: PgPool) {
         .collect();
     assert_eq!(rest.len(), 9);
     assert!(rest.iter().all(|t| t.starts_with('E')), "{rest:?}");
+    tx.commit().await.unwrap();
+}
+
+// Each error group shows the message of its latest report: the newest
+// occurred_at, the row stored last on a tie, within the environment asked
+// about. It is looked up per shown group, not aggregated from every message
+// (#69).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now().duration_trunc(TimeDelta::seconds(1)).unwrap();
+    let ago = |mins: i64| now - TimeDelta::minutes(mins);
+    // (environment, error_type, message, occurred_at), in insertion (id) order.
+    let rows = [
+        (Some("production"), "TypeError", "newest", ago(1)),
+        (Some("production"), "TypeError", "oldest", ago(30)),
+        (
+            Some("production"),
+            "TypeError",
+            "tied, stored first",
+            ago(1),
+        ),
+        (Some("production"), "TypeError", "tied, stored last", ago(1)),
+        (Some("production"), "TypeError", "middle", ago(10)),
+        // Newer, but in another environment.
+        (Some("staging"), "TypeError", "other environment", ago(0)),
+        (
+            None,
+            "RangeError",
+            "no environment, newest",
+            ago(2) + TimeDelta::microseconds(1),
+        ),
+        // A microsecond older but stored later: the time decides, not the id.
+        (
+            Some("production"),
+            "RangeError",
+            "a microsecond older",
+            ago(2),
+        ),
+    ];
+    for (environment, error_type, message, at) in rows {
+        sqlx::query(
+            "INSERT INTO flag_errors \
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at, reporter) \
+             VALUES ($1, $2, $3, true, $4, $5, $6, 'server')",
+        )
+        .bind(org)
+        .bind(flag.id)
+        .bind(environment)
+        .bind(error_type)
+        .bind(message)
+        .bind(at)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    let shown: Vec<(&str, i64, &str)> = h
+        .top_errors
+        .iter()
+        .map(|g| (g.error_type.as_str(), g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("TypeError", 5, "tied, stored last"),
+            ("RangeError", 2, "no environment, newest"),
+        ]
+    );
+    assert_eq!(h.top_errors[0].last_seen, ago(1));
+    assert_eq!(
+        h.top_errors[1].last_seen,
+        ago(2) + TimeDelta::microseconds(1)
+    );
+
+    // Across every environment, the staging report is the newest.
+    let h = telemetry::health(&mut tx, &flag, None, 24).await.unwrap();
+    assert_eq!(h.top_errors[0].count, 6);
+    assert_eq!(h.top_errors[0].last_message, "other environment");
+
+    // A row stored before the reporter was recorded (NULL) is shown as a
+    // client report, its own group beside the server one.
+    sqlx::query(
+        "INSERT INTO flag_errors \
+           (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at) \
+         VALUES ($1, $2, 'production', true, 'TypeError', 'legacy', $3)",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .bind(ago(3))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    let legacy: Vec<(KeyKind, i64, &str)> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.error_type == "TypeError")
+        .map(|g| (g.reporter, g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        legacy,
+        [
+            (KeyKind::Server, 5, "tied, stored last"),
+            (KeyKind::Client, 1, "legacy"),
+        ]
+    );
+
+    // A flag-off group of the same type is its own group with its own latest
+    // message, and a row of another flag in the same org (higher id, later
+    // time) is never chosen as a message.
+    let other = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "g".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    for (flag_id, enabled, message, at) in [
+        (flag.id, false, "flag off", ago(5)),
+        (other.id, true, "another flag", ago(0)),
+    ] {
+        sqlx::query(
+            "INSERT INTO flag_errors \
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at, reporter) \
+             VALUES ($1, $2, 'production', $3, 'TypeError', $4, $5, 'server')",
+        )
+        .bind(org)
+        .bind(flag_id)
+        .bind(enabled)
+        .bind(message)
+        .bind(at)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    let typed: Vec<(bool, KeyKind, i64, &str)> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.error_type == "TypeError")
+        .map(|g| (g.flag_enabled, g.reporter, g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        typed,
+        [
+            (true, KeyKind::Server, 5, "tied, stored last"),
+            (true, KeyKind::Client, 1, "legacy"),
+            (false, KeyKind::Server, 1, "flag off"),
+        ]
+    );
+    tx.commit().await.unwrap();
+}
+
+// A public client key can report any number of error types and spellings.
+// Server-key groups are fetched apart from client ones and keep slots in
+// the answer, so client reports cannot hide what the server reported (#70).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_keeps_server_errors_among_client_floods(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let error = |error_type: String| ErrorEvent {
+        flag_key: "f".into(),
+        flag_enabled: true,
+        environment: Some("production".into()),
+        error_type,
+        error_message: "boom".into(),
+        stack_trace: None,
+        at: now,
+    };
+    // 120 spellings of one junk type (3 each) fill a shared fetch of 100,
+    // and 20 other client types (5 each) outrank every server type.
+    let mut flood: Vec<ErrorEvent> = (1..=120)
+        .flat_map(|k| {
+            let t = format!("Junk{}", "\u{200B}".repeat(k));
+            (0..3).map(move |_| t.clone())
+        })
+        .map(error)
+        .collect();
+    flood.extend(
+        (0..20)
+            .flat_map(|i| (0..5).map(move |_| format!("C{i:02}")))
+            .map(error),
+    );
+    for batch in flood.chunks(telemetry::MAX_BATCH) {
+        telemetry::record_errors(&mut tx, app.id, KeyKind::Client, batch.to_vec())
+            .await
+            .unwrap();
+    }
+    let server = ["S0", "S1", "S2"].map(|t| error(t.into())).to_vec();
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Server, server)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.top_errors.len(), 10);
+    let server: Vec<&str> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.reporter == KeyKind::Server)
+        .map(|g| g.error_type.as_str())
+        .collect();
+    assert_eq!(server, ["S0", "S1", "S2"]);
+    assert!(h
+        .top_errors
+        .iter()
+        .filter(|g| g.reporter == KeyKind::Client)
+        .all(|g| g.count >= 5));
     tx.commit().await.unwrap();
 }
 
