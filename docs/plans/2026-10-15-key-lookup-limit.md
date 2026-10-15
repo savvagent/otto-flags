@@ -19,6 +19,17 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
 
 **Spec:** `docs/specs/2026-10-15-key-lookup-limit-design.md`
 
+## As built
+
+- Tasks 1 and 2 landed as two commits, as planned; Task 1's commit broke the flags-api caller
+  until Task 2, so its gates were `-p flags-core`.
+- Review replaced `unpinned::acquire` / `begin_on` with the opaque `unpinned::Held` (`acquire`,
+  `begin`, `release`) so the raw connection never leaves `unpinned.rs`, and mapped a cancelled
+  lookup task to `Error::Db(PoolClosed)` instead of `Busy`. The task text below keeps the
+  original names.
+- Review added `a_lookup_returns_its_connection_before_it_answers` and the production-sizing
+  assertion in `key_lookups.rs`; the lookup's hold time is bounded in follow-up #130.
+
 ## Global Constraints
 
 - Worktree: `/home/robhicks/dev/otto-flags/.claude/worktrees/feat-120-cap-key-lookups`. Worktree
@@ -66,7 +77,7 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
 
 **Files:** `crates/flags-core/src/{unpinned.rs,error.rs,keys.rs}`, `crates/flags-core/tests/{db.rs,key_round_trips.rs}`
 
-- [ ] **Step 1: Failing tests.** In `keys.rs` `mod tests`, add
+- [x] **Step 1: Failing tests.** In `keys.rs` `mod tests`, add
   `key_lookups_take_half_of_what_the_listener_leaves`: `KeyLookups::for_pool(2).permits() == 1`,
   `for_pool(3) == 1`, `for_pool(5) == 2`, `for_pool(10) == 4`, `for_pool(0) == 1`,
   `for_pool(1) == 1`, and `available() == permits()`
@@ -87,9 +98,9 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   add `a_dropped_lookup_still_remembers_its_unknown_key` to `db.rs`: with the app_keys lock held,
   spawn a `resolve_cached` of an unknown key, wait until `available() == 0`, `abort()` it,
   `ROLLBACK` the lock, poll (5 s) until `available() == 1`, then `unknown.len() == 1`.
-- [ ] **Step 2: Run, see them fail** (do not compile):
+- [x] **Step 2: Run, see them fail** (do not compile):
   `DATABASE_URL=postgres://flags:flags@localhost:15451/otto_flags cargo test -p flags-core`.
-- [ ] **Step 3: `unpinned.rs`.** Move the probe-and-check body of `begin_as_tenant_role` into
+- [x] **Step 3: `unpinned.rs`.** Move the probe-and-check body of `begin_as_tenant_role` into
   `async fn enter<'c>(tx: Transaction<'c, Postgres>, db: &Db, maintenance: bool) ->
   sqlx::Result<Transaction<'c, Postgres>>` (same SQL, same refusal). `begin_as_tenant_role`
   becomes `enter(db.pool().begin().await?, db, maintenance)`. Add
@@ -105,12 +116,12 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   test beside the existing ones: `begin_on` runs as the tenant role without the marker (mirror
   `begin_runs_as_the_tenant_role_without_the_marker`, adapting `role_and_marker` to a
   non-`'static` transaction: change its parameter to `&mut Transaction<'_, Postgres>`).
-- [ ] **Step 4: `error.rs`.** `Error::Busy` with message "too many SDK key lookups are in
+- [x] **Step 4: `error.rs`.** `Error::Busy` with message "too many SDK key lookups are in
   progress; retry shortly", `code() == "busy"`, `retriable()` and `is_transient()` true,
   `is_internal()` false (falls through `failure_reason` to `Failure::reason("busy")`). Fix any
   exhaustive match the compiler flags elsewhere (MCP error mapping) treating it like other
   retriable, non-internal errors.
-- [ ] **Step 5: `keys.rs`.**
+- [x] **Step 5: `keys.rs`.**
   - `pub const KEY_LOOKUP_WAIT: Duration = Duration::from_secs(2);`
   - `pub struct KeyLookups { permits: Arc<tokio::sync::Semaphore>, size: usize, wait: Duration }`
     with `new(permits, wait)` (asserts `permits >= 1`), `for_pool(max_connections: u32)`
@@ -134,8 +145,8 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
     after both; `await` the handle (`Err(join)` → `std::panic::resume_unwind(join.into_panic())`
     if it panicked, else `Busy` for a cancelled runtime). Update the module doc paragraph to
     mention the gate.
-- [ ] **Step 6: Run, see them pass** (same command), then lint and format.
-- [ ] **Step 7: Commit:** `feat(core): cap concurrent sdk key lookups below the pool size`,
+- [x] **Step 6: Run, see them pass** (same command), then lint and format.
+- [x] **Step 7: Commit:** `feat(core): cap concurrent sdk key lookups below the pool size`,
   body explaining why (distinct-key flood, release ping and cancellation), `Fixes #120`.
 
 ## Task 2: Wire the limit into the SDK API
@@ -144,7 +155,7 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
 
 **Files:** `crates/flags-api/src/{lib.rs,sdk.rs,error.rs}`, `crates/flags-api/tests/key_lookups.rs`, `docs/SDK-DEVELOPER-GUIDE.md`
 
-- [ ] **Step 1: Failing test** `crates/flags-api/tests/key_lookups.rs` (own binary,
+- [x] **Step 1: Failing test** `crates/flags-api/tests/key_lookups.rs` (own binary,
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`):
   - `a_flood_of_unknown_keys_leaves_connections_free`: build a pool of 5 from
     `pool.connect_options()` (`PgPoolOptions::new().max_connections(5)`); `AppState::new` on it,
@@ -164,9 +175,9 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
     until `available() == 1`.
   Both tests close the 5-pool and the lock connection before returning (as `key_round_trips.rs`
   does), so sqlx can drop the test database.
-- [ ] **Step 2: Run, see it fail** (no `key_lookups` field):
+- [x] **Step 2: Run, see it fail** (no `key_lookups` field):
   `DATABASE_URL=postgres://flags:flags@localhost:15451/otto_flags cargo test -p flags-api --test key_lookups`.
-- [ ] **Step 3: Implement.** `AppState` gains `pub key_lookups: Arc<KeyLookups>` (doc: #120),
+- [x] **Step 3: Implement.** `AppState` gains `pub key_lookups: Arc<KeyLookups>` (doc: #120),
   set in `new` from `KeyLookups::for_db(&db)` (no `.pool()` in flags-api), and
   `AppState::new`'s signature is unchanged (`unknown_keys` is already an `Arc`). The `Sdk`
   extractor passes `&state.key_lookups`. In `error.rs`, `From<flags_core::Error>` maps
@@ -177,11 +188,11 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   the last second, no new dependency) and nothing per request above `debug`. Update the module
   doc in `error.rs`. In `docs/SDK-DEVELOPER-GUIDE.md`'s HTTP Status Codes table, add
   `| \`503\` | Temporarily unavailable or busy (with \`Retry-After\`) | Return cached/default value; retry after the delay |`.
-- [ ] **Step 4: Run, see it pass**; then the full gates (test, lint, format, extra).
-- [ ] **Step 5: Commit:** `feat(api): refuse sdk key lookups past the limit with 503`, body why,
+- [x] **Step 4: Run, see it pass**; then the full gates (test, lint, format, extra).
+- [x] **Step 5: Commit:** `feat(api): refuse sdk key lookups past the limit with 503`, body why,
   `Fixes #120`.
 
 ## Close-out (before merge, in the PR)
 
-- [ ] The spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked, in
+- [x] The spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked, in
   one final docs commit.

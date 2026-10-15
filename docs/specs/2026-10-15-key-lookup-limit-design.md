@@ -1,6 +1,13 @@
 # Unauthenticated SDK key lookups hold a bounded share of the pool
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#129)
+
+The code is authoritative where this sketch differs in detail. As built after review: the held
+connection is an opaque `unpinned::Held` (`acquire`, `begin`, `release`), so the raw pool
+connection never leaves `unpinned.rs`; a lookup task cancelled by runtime shutdown reports
+`Error::Db(PoolClosed)`, not `Busy`; `a_lookup_returns_its_connection_before_it_answers`
+(`crates/flags-core/tests/db.rs`) pins that the release is awaited; the flood test also asserts
+that `AppState::new` on a pool of 5 gets 2 permits; bounding a lookup's hold time is #130.
 **Issue:** #120
 
 ## 1. Brief
