@@ -54,7 +54,7 @@ One task; the guard and the URL builder are one change to one function.
 
 **Model:** sonnet
 
-- [ ] **Step 1: Write the failing integration tests** (append to `tests/integration_test.rs`;
+- [x] **Step 1: Write the failing integration tests** (append to `tests/integration_test.rs`;
   add `use wiremock::matchers::any;`)
 
 ```rust
@@ -112,13 +112,13 @@ async fn a_base_url_path_prefix_and_trailing_slash_are_kept() {
 }
 ```
 
-- [ ] **Step 2: Run, see them fail**
+- [x] **Step 2: Run, see them fail**
 
 Run: `cargo test --locked --test integration_test` (env per Global Constraints).
 Expected: the refusal test fails (`expect(0)` violated / wrong value for `a/b?c`), and the prefix
 test fails (request goes to `/flags//api/...`).
 
-- [ ] **Step 3: Implement in `src/client.rs`**
+- [x] **Step 3: Implement in `src/client.rs`**
 
 ```rust
 /// Whether the server could hold this flag key, and a URL path can address it.
@@ -184,11 +184,11 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: README** — under the `evaluate` method docs, add: "Flag keys are 1-128 ASCII
+- [x] **Step 4: README** — under the `evaluate` method docs, add: "Flag keys are 1-128 ASCII
   letters, digits, `-`, `_` and `.` (not `.` or `..`), as the server requires; any other key
   returns its default with `reason: "error"` and makes no request."
 
-- [ ] **Step 5: Run all gates** (Global Constraints), `cargo fmt` first. Expected: all pass.
+- [x] **Step 5: Run all gates** (Global Constraints), `cargo fmt` first. Expected: all pass.
 
-- [ ] **Step 6: Commit** — `fix(sdk): send the rust sdk flag key as one path segment`, why-body,
+- [x] **Step 6: Commit** — `fix(sdk): send the rust sdk flag key as one path segment`, why-body,
   `Fixes #95`.

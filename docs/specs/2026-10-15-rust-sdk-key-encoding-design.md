@@ -1,6 +1,6 @@
 # Rust SDK sends the flag key as one path segment
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#106)
 **Issue:** #95
 
 ## 1. Brief
