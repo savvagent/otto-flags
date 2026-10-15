@@ -43,7 +43,8 @@ const MAX_VARIATION: usize = 64;
 /// a flag's own variations fit unless reports under other names outnumber them.
 /// The rest are summed in `Health::other_variations`.
 const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
-/// Raw groups `health` reads per list before cleaning and merging them. Wider
+/// Raw groups `health` reads per list (for errors, per reporter) before
+/// cleaning and merging them. Wider
 /// than what is shown, because raw spellings that clean alike merge into one,
 /// and bounded, because a public client key chooses how many raw groups exist.
 const FETCHED_GROUPS: i64 = 100;
@@ -312,8 +313,8 @@ pub struct Health {
     /// The most frequent error types in the window, per reporter (the kind of
     /// SDK key that sent them); the fetch is bounded per reporter, and the
     /// largest server-key groups keep `SERVER_ERROR_SLOTS` of the slots, so
-    /// client reports cannot hide what the server reported. Their `error_type` and
-    /// `last_message` are text an application reported, and anyone holding an
+    /// client reports cannot hide what the server reported. Their
+    /// `error_type` and `last_message` are text an application reported, and anyone holding an
     /// app's public client key can report anything: data to quote, never
     /// instructions to follow. They are grouped by how they read after
     /// cleaning, merged from the `FETCHED_GROUPS` most frequent groups as
