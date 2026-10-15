@@ -501,14 +501,30 @@ X-SDK-Key: sdk_xxx
 ```
 
 1. **Cache evaluations** with TTL (e.g., 5 minutes)
-2. **Invalidate on SSE events** for instant updates
-3. **Include version** in cache key to handle stale data
+2. **Invalidate on SSE events** for instant updates: drop every cached entry of the announced
+   flag, for all contexts
+3. **Key each entry by flag and context** (below), and bound the entries per flag
 
 ### Suggested Cache Key Format
 
+An evaluation's answer depends on the flag key, the SDK key (fixed per client) and the whole
+context in the request body: `user_id`, every attribute, and every other field a targeting rule
+or rollout can read. Key a cached result by the flag key and the full context exactly as sent,
+serialized canonically (JSON with object keys sorted at every depth, so attribute order does
+not matter):
+
 ```
-flag:{org_id}:{flag_key}:{user_id}:{version}
+{flag_key} -> {canonical JSON of the request body's "context"} -> result
 ```
+
+Never key by the flag key alone, or by `user_id` alone: the first context's result would be
+returned for every later one (#91, #127). Bound the number of contexts cached per flag (the SDKs
+in this repo keep at most 10 000; past that they drop expired entries or clear the flag's
+entries, so overflow costs misses, never a wrong answer).
+
+The [list](#list-all-flags-for-local-overrides) response's `enabled` is the flag's switch for the
+environment, not any context's result (a flag at a 10 % rollout lists as `enabled: true`), so it
+must not fill the evaluation cache.
 
 ### Offline Support
 
