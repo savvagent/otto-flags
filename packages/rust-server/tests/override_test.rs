@@ -1,7 +1,7 @@
 use otto_flags::{Config, ConfigOverrideOptions, FlagClient};
 use serde_json::json;
-use wiremock::{Mock, MockServer, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_override_configuration_completely() {
@@ -26,21 +26,22 @@ async fn test_override_configuration_completely() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
 
     // Set override (merge = false by default)
-    client.set_config_override(
-        "test-flag",
-        json!({
-            "theme": {
-                "primaryColor": "#ff0000"
-            }
-        }),
-        None,
-    ).unwrap();
+    client
+        .set_config_override(
+            "test-flag",
+            json!({
+                "theme": {
+                    "primaryColor": "#ff0000"
+                }
+            }),
+            None,
+        )
+        .unwrap();
 
     let result = client.evaluate("test-flag", None).await.unwrap();
 
@@ -75,22 +76,23 @@ async fn test_merge_configuration() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
 
     // Set override with merge = true
-    client.set_config_override(
-        "test-flag",
-        json!({
-            "theme": {
-                "primaryColor": "#ff0000"
-            },
-            "newField": "added"
-        }),
-        Some(ConfigOverrideOptions::new().with_merge(true)),
-    ).unwrap();
+    client
+        .set_config_override(
+            "test-flag",
+            json!({
+                "theme": {
+                    "primaryColor": "#ff0000"
+                },
+                "newField": "added"
+            }),
+            Some(ConfigOverrideOptions::new().with_merge(true)),
+        )
+        .unwrap();
 
     let result = client.evaluate("test-flag", None).await.unwrap();
 
@@ -119,8 +121,7 @@ async fn test_override_variation() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
 
@@ -148,17 +149,14 @@ async fn test_clear_configuration_override() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
 
     // Set override
-    client.set_config_override(
-        "test-flag",
-        json!({ "overridden": "value" }),
-        None,
-    ).unwrap();
+    client
+        .set_config_override("test-flag", json!({ "overridden": "value" }), None)
+        .unwrap();
 
     // First call should have override
     let result1 = client.evaluate("test-flag", None).await.unwrap();
@@ -179,11 +177,9 @@ async fn test_has_override() {
 
     assert!(!client.has_config_override("test-flag"));
 
-    client.set_config_override(
-        "test-flag",
-        json!({ "test": "value" }),
-        None,
-    ).unwrap();
+    client
+        .set_config_override("test-flag", json!({ "test": "value" }), None)
+        .unwrap();
 
     assert!(client.has_config_override("test-flag"));
 
@@ -197,7 +193,9 @@ async fn test_clear_all_overrides() {
     let config = Config::new("sdk_test_key");
     let client = FlagClient::new(config).unwrap();
 
-    client.set_config_override("flag1", json!({ "config": "a" }), None).unwrap();
+    client
+        .set_config_override("flag1", json!({ "config": "a" }), None)
+        .unwrap();
     client.set_variation_override("flag2", "variant_a");
 
     assert!(client.has_config_override("flag1"));
@@ -232,23 +230,24 @@ async fn test_deep_merge_nested_configurations() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
 
     // Override nested configuration
-    client.set_config_override(
-        "test-flag",
-        json!({
-            "theme": {
-                "colors": {
-                    "primary": "#ff0000"
+    client
+        .set_config_override(
+            "test-flag",
+            json!({
+                "theme": {
+                    "colors": {
+                        "primary": "#ff0000"
+                    }
                 }
-            }
-        }),
-        Some(ConfigOverrideOptions::new().with_merge(true)),
-    ).unwrap();
+            }),
+            Some(ConfigOverrideOptions::new().with_merge(true)),
+        )
+        .unwrap();
 
     let result = client.evaluate("test-flag", None).await.unwrap();
 
@@ -263,12 +262,16 @@ async fn test_get_all_overrides() {
     let config = Config::new("sdk_test_key");
     let client = FlagClient::new(config).unwrap();
 
-    client.set_config_override("flag1", json!({ "config": "a" }), None).unwrap();
-    client.set_config_override(
-        "flag2",
-        json!({ "config": "b" }),
-        Some(ConfigOverrideOptions::new().with_merge(true)),
-    ).unwrap();
+    client
+        .set_config_override("flag1", json!({ "config": "a" }), None)
+        .unwrap();
+    client
+        .set_config_override(
+            "flag2",
+            json!({ "config": "b" }),
+            Some(ConfigOverrideOptions::new().with_merge(true)),
+        )
+        .unwrap();
     client.set_variation_override("flag3", "variant_a");
 
     let config_overrides = client.get_config_overrides();

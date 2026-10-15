@@ -1,7 +1,7 @@
-use otto_flags::{Config, Context, FlagClient};
+use otto_flags::{Config, FlagClient};
 use serde_json::json;
-use wiremock::{Mock, MockServer, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_evaluate_returns_configuration() {
@@ -27,8 +27,7 @@ async fn test_evaluate_returns_configuration() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
     let result = client.evaluate("test-flag", None).await.unwrap();
@@ -59,8 +58,7 @@ async fn test_get_config_returns_value_when_enabled() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
     let result = client.get_config("api-settings", None).await.unwrap();
@@ -83,8 +81,7 @@ async fn test_get_config_returns_none_when_disabled() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
     let result = client.get_config("api-settings", None).await.unwrap();
@@ -111,11 +108,13 @@ async fn test_get_variation_returns_details() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
-    let result = client.get_variation("search-algorithm", None).await.unwrap();
+    let result = client
+        .get_variation("search-algorithm", None)
+        .await
+        .unwrap();
 
     assert_eq!(result.variation, "variant_b");
     assert!(result.enabled);
@@ -134,8 +133,7 @@ async fn test_variation_defaults_to_control() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
     let result = client.get_variation("test-flag", None).await.unwrap();
@@ -157,8 +155,7 @@ async fn test_backward_compatibility_with_is_enabled() {
         .mount(&mock_server)
         .await;
 
-    let config = Config::new("sdk_test_key")
-        .with_base_url(mock_server.uri());
+    let config = Config::new("sdk_test_key").with_base_url(mock_server.uri());
 
     let client = FlagClient::new(config).unwrap();
     let enabled = client.is_enabled("test-flag", None).await;

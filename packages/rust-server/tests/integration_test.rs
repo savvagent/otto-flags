@@ -1,6 +1,6 @@
 use otto_flags::{Config, Context, FlagClient};
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, header};
+use wiremock::matchers::{header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn test_is_enabled_returns_true() {
@@ -203,7 +203,9 @@ async fn test_get_variation_string() {
         attributes: std::collections::HashMap::new(),
     };
 
-    let result: String = client.get_variation("theme", &context, "light".to_string()).await;
+    let result: String = client
+        .get_variation("theme", &context, "light".to_string())
+        .await;
 
     assert_eq!(result, "dark-mode");
 }
@@ -234,7 +236,9 @@ async fn test_get_variation_returns_default_on_error() {
         attributes: std::collections::HashMap::new(),
     };
 
-    let result: String = client.get_variation("theme", &context, "light".to_string()).await;
+    let result: String = client
+        .get_variation("theme", &context, "light".to_string())
+        .await;
 
     assert_eq!(result, "light");
 }
@@ -270,7 +274,10 @@ async fn test_track_event() {
     properties.insert("button".to_string(), serde_json::json!("checkout"));
     properties.insert("value".to_string(), serde_json::json!(99.99));
 
-    client.track("button_click", &context, properties).await.unwrap();
+    client
+        .track("button_click", &context, properties)
+        .await
+        .unwrap();
 }
 
 #[test]

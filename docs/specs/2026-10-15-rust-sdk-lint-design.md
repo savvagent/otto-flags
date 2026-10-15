@@ -67,8 +67,8 @@ The Rust SDK's lint gates are green for everything outside #4's two broken test 
 - `ConfigOverrideOptions::default()` equals `new()` field by field, pinned by a unit test.
 - `cargo test --locked --lib` and `--test dynamic_config_test` pass.
 - `CLAUDE.md` > Gates known-red notes say what is still red for the Rust SDK: the two lines
-  become one, `known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two
-  integration test files do not compile) — #4`.
+  become one, ``known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two
+  integration test files do not compile) — #4``.
 
 ## 5. Scope
 

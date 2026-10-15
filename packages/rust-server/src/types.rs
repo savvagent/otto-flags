@@ -203,13 +203,21 @@ pub struct Metadata {
 }
 
 /// Options for setting configuration overrides
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ConfigOverrideOptions {
     /// Merge with API configuration instead of replacing (default: false)
     pub merge: bool,
 
     /// Validate configuration structure (default: true)
     pub validate: bool,
+}
+
+// Not derived: a derived `Default` would set `validate: false`, contradicting `new()` and the
+// field docs.
+impl Default for ConfigOverrideOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ConfigOverrideOptions {
@@ -244,4 +252,18 @@ pub(crate) struct ConfigOverrideEntry {
 pub(crate) struct VariationOverrideEntry {
     pub variation: String,
     pub timestamp: std::time::SystemTime,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigOverrideOptions;
+
+    // `set_config_override(.., None)` uses `unwrap_or_default()`, so `default()` must keep
+    // validation on, matching `new()` and the field docs (#15).
+    #[test]
+    fn config_override_options_default_validates() {
+        let opts = ConfigOverrideOptions::default();
+        assert!(opts.validate);
+        assert!(!opts.merge);
+    }
 }
