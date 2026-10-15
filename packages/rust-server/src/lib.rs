@@ -46,4 +46,6 @@ mod client;
 mod types;
 
 pub use client::{FlagClient, OttoFlagsError};
-pub use types::{Config, Context, EvaluationResult, Metadata};
+pub use types::{
+    Config, ConfigOverrideOptions, Context, EvaluationResult, Metadata, VariationResult,
+};

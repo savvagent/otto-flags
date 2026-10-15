@@ -114,7 +114,7 @@ impl FlagClient {
         }
 
         // Make API request
-        let url = format!("{}/api/evaluate/{}", self.config.base_url, flag_key);
+        let url = format!("{}/api/flags/{}/evaluate", self.config.base_url, flag_key);
         let body = json!({ "context": ctx });
 
         let response = self
@@ -134,7 +134,7 @@ impl FlagClient {
         // Parse response
         let data: serde_json::Value = response.json().await?;
 
-        let value = data["value"]
+        let value = data["enabled"]
             .as_bool()
             .or_else(|| self.config.defaults.get(flag_key).copied())
             .unwrap_or(false);
