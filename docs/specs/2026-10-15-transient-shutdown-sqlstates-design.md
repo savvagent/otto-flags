@@ -1,6 +1,6 @@
 # Treat Postgres shutdown and startup SQLSTATEs as transient
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#87)
 **Issue:** #56
 
 ## 1. Brief

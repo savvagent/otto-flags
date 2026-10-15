@@ -1,7 +1,12 @@
 # Transient shutdown and startup SQLSTATEs Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
+
+> As shipped, review of #87 refined the doc wording in Step 3 ("usually", `57P03` while shutting
+> down, `57P05` and class `08` named as exclusions) and the tests (`57P05`, `08006`, `08P01`, a
+> wrapped `57P03`, and `retriable` diverging from `is_transient` on `57P04`). The code is the
+> authority for the final text.
 
 **Goal:** `Error::is_transient` returns `true` for Postgres `57P01`, `57P02`, and `57P03`, with the
 reasoning in `TRANSIENT_SQLSTATES`' doc comment, and `retriable` unchanged.
@@ -69,7 +74,7 @@ One task: the change is a constant, its doc, and its test.
 
 **Model:** haiku — fully specified edit.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `only_contention_cancellation_and_connection_failures_are_transient`, after
 `Error::Db(db("57014")),` in the transient list, add:
@@ -98,13 +103,13 @@ In `retriable_keeps_its_meaning_for_mcp_callers`, add:
         assert!(Error::Db(db("57P01")).retriable());
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp cargo test -p flags-core --lib error::tests`
 Expected: FAIL in `only_contention_cancellation_and_connection_failures_are_transient` on
 `Db(Database(FakeDbError("57P01")))`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Replace the `TRANSIENT_SQLSTATES` doc comment and constant with:
 
@@ -164,7 +169,7 @@ in `rollback.rs`.
 
 Do not touch `retriable`.
 
-- [ ] **Step 4: Run tests to verify they pass, then all gates**
+- [x] **Step 4: Run tests to verify they pass, then all gates**
 
 Run: `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp cargo test -p flags-core --lib error::tests`
 Expected: all `error::tests` pass.
@@ -172,7 +177,7 @@ Expected: all `error::tests` pass.
 Then: `cargo fmt --all`, then the full gate list from Global Constraints (test, lint, format,
 extra, and `podman build -t otto-flags:check .`). Report pass counts per test binary.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core/src/error.rs crates/flags-core/src/rollback.rs
