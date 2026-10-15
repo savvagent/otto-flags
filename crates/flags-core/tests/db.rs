@@ -6006,9 +6006,11 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
     ];
     let allowed: BTreeMap<&str, usize> = BTreeMap::from([
         // The helper itself: opens the transaction it then drops into the
-        // tenant role; hands the key lookup a connection it holds itself, so
-        // it can await the connection's return to the pool before freeing its
-        // permit (#120); and reads the pool's size, which touches no table.
+        // tenant role; acquires the opaque `Held` connection the key lookup
+        // keeps across its transaction, so it can await the connection's
+        // return to the pool before freeing its permit (#120; only `Held::begin`
+        // can run anything on it); and reads the pool's size, which touches no
+        // table.
         ("flags-core/src/unpinned.rs", 3),
         // Migrations run as the migrating role: DDL, grants, and the
         // security-definer purge function's owner.

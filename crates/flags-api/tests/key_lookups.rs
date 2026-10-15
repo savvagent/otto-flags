@@ -37,6 +37,8 @@ async fn state_on_a_pool_of_five(pool: &PgPool, limit: KeyLookups) -> (AppState,
         Hints::detached(),
         "otto_whsec_test",
     );
+    // What production gets from a pool of 5, before the test's own limit.
+    assert_eq!(state.key_lookups.permits(), 2);
     state.key_lookups = Arc::new(limit);
     (state, five)
 }

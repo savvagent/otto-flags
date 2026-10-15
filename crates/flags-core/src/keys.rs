@@ -36,11 +36,11 @@ use otto_tenant::Db;
 use rand::RngCore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::PgConnection;
 use tokio::sync::Semaphore;
 
 use crate::error::{Error, Result};
 use crate::ids::FlagAppId;
+use crate::unpinned::Held;
 
 pub const CLIENT_PREFIX: &str = "sdk_";
 pub const SERVER_PREFIX: &str = "srv_";
@@ -136,6 +136,10 @@ pub struct KeyOwner {
 
 /// Resolve a presented key, or `None` if it is unknown, revoked by rotation, or
 /// belongs to an org the platform has deleted.
+///
+/// Ungated and uncached: a request path resolving a key it was just handed
+/// uses [`resolve_cached`], which bounds how many lookups hold a connection
+/// (#120).
 pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
     if !looks_like_key(key) {
         return Ok(None);
@@ -150,21 +154,22 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 /// included, so a caller holding a [`KeyLookups`] permit across this call
 /// covers the connection's whole checkout (#120).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
-    let mut conn = crate::unpinned::acquire(db).await?;
-    // No `?` and no early return between the acquire and `return_to_pool`:
-    // dropping a `PoolConnection` hands its release (rolling back an open
-    // transaction, the ping) to a task sqlx spawns, so this would return, and
-    // its caller free its permit, while the connection is still checked out.
+    let mut conn = Held::acquire(db).await?;
+    // No `?` and no early return between the acquire and `release`: dropping
+    // a pool connection hands its release (rolling back an open transaction,
+    // the ping) to a task sqlx spawns, so this would return, and its caller
+    // free its permit, while the connection is still checked out. (A panic in
+    // `lookup` still takes that path; the permit is then freed by the unwind.)
     let owner = lookup(db, &mut conn, key_hash).await;
-    conn.return_to_pool().await;
+    conn.release().await;
     owner
 }
 
 /// [`resolve_hash`]'s query, on the connection it holds.
-async fn lookup(db: &Db, conn: &mut PgConnection, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+async fn lookup(db: &Db, conn: &mut Held, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
     // No org yet: finding it is the point. Unpinned, as the tenant role
     // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
-    let mut tx = crate::unpinned::begin_on(db, conn).await?;
+    let mut tx = conn.begin(db).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
@@ -228,8 +233,9 @@ pub async fn resolve_cached(
         Err(join) => match join.try_into_panic() {
             // Panic as the lookup would have inline.
             Ok(panic) => std::panic::resume_unwind(panic),
-            // Cancelled: the runtime is shutting down.
-            Err(_) => Err(Error::Busy),
+            // Cancelled: the runtime is shutting down, and the pool with it.
+            // Not `Busy`, whose log line would blame the permits.
+            Err(_) => Err(Error::Db(sqlx::Error::PoolClosed)),
         },
     }
 }

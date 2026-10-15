@@ -7,8 +7,8 @@
 //! touch only the tables deliberately left outside row-level security
 //! (`app_keys`, `deleted_orgs`, `removed_members`).
 //!
-//! They still go through [`begin`] (or [`begin_on`], on a connection the key
-//! lookup takes with [`acquire`]), never a bare query on the pool: the pool
+//! They still go through [`begin`] (or [`Held::begin`], on a connection the
+//! key lookup holds), never a bare query on the pool: the pool
 //! may connect as a role row-level security does not apply to (production's
 //! attach role is a superuser), and a later query on that connection that
 //! named a tenant table by mistake would read every org's rows (#80). Inside
@@ -67,22 +67,38 @@ pub(crate) async fn begin_as_tenant_role(
     enter(db.pool().begin().await?, db, maintenance).await
 }
 
-/// [`begin`] on a connection the caller already holds, rather than one taken
-/// from the pool for the transaction: the same probe, role switch, search
-/// path, and refusal, with no maintenance marker. For the key lookup
-/// ([`crate::keys::resolve_hash`]), which must await its connection's return
-/// to the pool itself (#120).
-pub(crate) async fn begin_on<'c>(
-    db: &Db,
-    conn: &'c mut PgConnection,
-) -> sqlx::Result<Transaction<'c, Postgres>> {
-    enter(conn.begin().await?, db, false).await
-}
+/// A pool connection held across one unpinned transaction, for the key
+/// lookup ([`crate::keys::resolve_hash`]), which must await the connection's
+/// return to the pool itself so its permit covers the whole checkout (#120).
+///
+/// Opaque on purpose: the raw connection never leaves this module, so the
+/// only thing a holder can run on it is [`Held::begin`]'s probed transaction,
+/// never a bare query as the pool's role (#80).
+pub(crate) struct Held(PoolConnection<Postgres>);
 
-/// A connection from `db`'s pool, held by the caller. Only for
-/// [`begin_on`]: nothing may query on it outside that transaction.
-pub(crate) async fn acquire(db: &Db) -> sqlx::Result<PoolConnection<Postgres>> {
-    db.pool().acquire().await
+impl Held {
+    /// Take a connection from `db`'s pool.
+    pub(crate) async fn acquire(db: &Db) -> sqlx::Result<Self> {
+        Ok(Self(db.pool().acquire().await?))
+    }
+
+    /// [`begin`] on the held connection: the same probe, role switch, search
+    /// path, and refusal, with no maintenance marker.
+    pub(crate) async fn begin<'c>(
+        &'c mut self,
+        db: &Db,
+    ) -> sqlx::Result<Transaction<'c, Postgres>> {
+        let conn: &'c mut PgConnection = &mut self.0;
+        enter(conn.begin().await?, db, false).await
+    }
+
+    /// Return the connection to the pool, and wait until it is back: the
+    /// rollback of any transaction left open and sqlx's release ping run
+    /// inside this call, not in the task sqlx spawns when a `PoolConnection`
+    /// is dropped. A connection that fails the ping is closed instead.
+    pub(crate) async fn release(mut self) {
+        self.0.return_to_pool().await;
+    }
 }
 
 /// The most connections `db`'s pool opens. Reads the pool's options; touches
@@ -196,13 +212,13 @@ pub(crate) mod tests {
         );
     }
 
-    /// The same on a connection the caller holds (`begin_on`, #120): the
+    /// The same on a held connection (`Held::begin`, #120): the
     /// tenant role, no marker, the pinned search path.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn begin_on_runs_as_the_tenant_role_without_the_marker(pool: PgPool) {
+    async fn a_held_connection_begins_as_the_tenant_role_without_the_marker(pool: PgPool) {
         let db = Db::from_pool(pool);
-        let mut conn = acquire(&db).await.unwrap();
-        let mut tx = begin_on(&db, &mut conn).await.unwrap();
+        let mut conn = Held::acquire(&db).await.unwrap();
+        let mut tx = conn.begin(&db).await.unwrap();
         assert_eq!(
             role_and_marker(&mut tx).await,
             (db.tenant_role().to_string(), String::new())

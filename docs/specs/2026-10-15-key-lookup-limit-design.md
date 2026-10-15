@@ -63,7 +63,7 @@ semantics unchanged; no new config secret.
 - **A bounded wait, then `503` with `Retry-After`.** A lookup that cannot get a permit within
   `KEY_LOOKUP_WAIT` (2 s, under the pool's 5 s acquire timeout) is refused with the SDK
   surface's existing `503 temporarily_unavailable` body and `Retry-After: 5`. `503` rather than
-  `429`: the limit is global, not the caller's rate, and `503` is the status every SDK already
+  `429`: the limit is global, not the caller's rate, and `503` is the status every SDK
   must already survive: the server sends it, with `Retry-After: 5`, for every database failure
   (`crates/flags-api/src/error.rs`), and the invariant is that SDKs fall back to defaults and
   cached values on any failed lookup. The guide's status table lists only `500` among server
@@ -122,7 +122,7 @@ impl KeyLookups {
     pub fn available(&self) -> usize;                        // free permits, for tests
 }
 
-pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, limit: &KeyLookups, key: &str)
+pub async fn resolve_cached(db: &Db, unknown: &Arc<UnknownKeys>, limit: &KeyLookups, key: &str)
     -> Result<Option<KeyOwner>>;
 ```
 
@@ -135,8 +135,9 @@ is still cached. Awaiting the `JoinHandle` gives the answer; if the request is d
 still finishes and only then frees the permit. A `JoinError` (the task panicked) is re-raised as
 a panic, as it would have been inline.
 
-`resolve_hash`: acquires a `PoolConnection` explicitly, runs the unpinned transaction on it
-(`unpinned::begin_on`), and awaits `PoolConnection::return_to_pool()` before returning, so the
+`resolve_hash`: acquires an opaque `unpinned::Held` connection, runs the unpinned transaction on
+it (`Held::begin`), and awaits `Held::release()` (sqlx's `PoolConnection::return_to_pool()`)
+before returning, so the
 release ping is inside the caller's await (and inside the permit). Same six round trips. The
 transaction work runs in an inner async fn whose result is held while `return_to_pool()` is
 awaited on every outcome, success or error; no `?` may return before it, or `Drop` would fall
@@ -144,14 +145,17 @@ back to sqlx's spawned release and free the permit early. After `return_to_pool(
 connection's `Drop` spawns nothing (production `min_connections` is 0).
 
 `crates/flags-core/src/unpinned.rs`: the probe moves into a helper taking a `Transaction<'c, _>`;
-`begin_as_tenant_role` calls it on `db.pool().begin()` as today, and a new
-`begin_on(db, &'c mut PgConnection)` calls it on `conn.begin()`. Same SQL, same checks.
+`begin_as_tenant_role` calls it on `db.pool().begin()` as today, and a new `Held` (a pool
+connection that never leaves the module, so nothing but its probed transaction can run on it,
+#80) offers `acquire`, `begin` (the helper on `conn.begin()`), and `release`. Same SQL, same
+checks. `unpinned::max_connections(db)` reads the pool's size, so every raw pool access stays
+in `unpinned.rs` (`no_raw_pool_queries_outside_the_allowed_sites`).
 
 `crates/flags-core/src/error.rs`: `Error::Busy` — "too many SDK key lookups are in progress;
 retry shortly", code `busy`, `retriable` and `is_transient` true, `is_internal` false.
 
 `crates/flags-api`: `AppState` gains `pub key_lookups: Arc<KeyLookups>`, built in `AppState::new`
-from `db.pool().options().get_max_connections()` (signature unchanged). The `Sdk` extractor
+via `KeyLookups::for_db(&db)` (signature unchanged; no `.pool()` in flags-api). The `Sdk` extractor
 passes it. `ApiError::from(Error::Busy)` → `503`, `busy`, "the flag service is busy; serve
 cached or default values and retry", with the `Retry-After: 5` every `503` already carries. The
 arm comes before the generic `e =>` arm (otherwise a non-internal error becomes `400`). It is
@@ -223,7 +227,7 @@ Gates per the section (test DB on 15451), clippy, fmt, migrations check, podman 
 - `keys.rs` unit test: `KeyLookups::for_pool` sizing (2→1, 5→2, 10→4).
 - `crates/flags-core/tests/key_round_trips.rs`: unchanged expectations (6 / 0), updated call
   signature. `db.rs` revocation tests: updated signature.
-- `unpinned` tests continue to cover the probe; one added for `begin_on`.
+- `unpinned` tests continue to cover the probe; one added for `Held::begin`.
 
 ## 12. Risks and open questions
 
@@ -236,5 +240,8 @@ Gates per the section (test DB on 15451), clippy, fmt, migrations check, podman 
   `a_lookup_returns_its_connection_before_it_answers` (`crates/flags-core/tests/db.rs`) catches
   a behavior change: it checks, with no wait, that every pool connection is idle when a lookup
   answers.
+- The lookup transaction sets no `lock_timeout`/`statement_timeout`, so a long lock on
+  `app_keys` holds the permits for as long as it lasts (before this change it would have held
+  the whole pool). Bounding it needs care with the six-round-trip pin; follow-up issue.
 - Waiting requests hold a socket and a small future each, up to 2 s; hyper bounds connections,
   not this code.
