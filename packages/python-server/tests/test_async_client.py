@@ -1,5 +1,7 @@
 """Tests for the asynchronous AsyncFlagClient."""
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -461,3 +463,64 @@ class TestAsyncEvaluateContract:
         assert len(errors) == 2
         # Not cached: the second lookup asks the server again.
         assert route.call_count == 2
+
+
+FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+
+
+def _answer_by_user(request: httpx.Request) -> httpx.Response:
+    """Server stand-in: true for user a, false for anyone else."""
+    context = json.loads(request.content)["context"]
+    return httpx.Response(200, json=server_body("checkout", context.get("user_id") == "a"))
+
+
+class TestAsyncContextCache:
+    """The cache is keyed by flag and evaluation context (#127)."""
+
+    async def test_ab(self, async_config: FlagClientConfig) -> None:
+        with respx.mock(assert_all_called=False) as mock:
+            route = mock.post(FLAG_URL).mock(side_effect=_answer_by_user)
+            async with AsyncFlagClient(async_config) as client:
+                results = [
+                    await client.evaluate("checkout", FlagContext(user_id=u))
+                    for u in ("a", "b", "a", "b")
+                ]
+        assert [r.value for r in results] == [True, False, True, False]
+        assert [r.reason for r in results] == ["evaluated", "evaluated", "cached", "cached"]
+        assert route.call_count == 2
+
+    async def test_invalidate(self, async_config: FlagClientConfig) -> None:
+        with respx.mock(assert_all_called=False) as mock:
+            route = mock.post(FLAG_URL).mock(side_effect=_answer_by_user)
+            async with AsyncFlagClient(async_config) as client:
+                for u in ("a", "b"):
+                    await client.evaluate("checkout", FlagContext(user_id=u))
+                await client.invalidate_cache("checkout")
+                for u in ("a", "b"):
+                    result = await client.evaluate("checkout", FlagContext(user_id=u))
+                    assert result.reason == "evaluated"
+        assert route.call_count == 4
+
+    async def test_list_fetch_does_not_seed(self, async_config: FlagClientConfig) -> None:
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get("https://otto-flags.savvagent.com/api/sdk/flags").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "flags": [
+                            {
+                                "key": "checkout",
+                                "enabled": True,
+                                "scope": "application",
+                                "environments": {},
+                            }
+                        ]
+                    },
+                )
+            )
+            mock.post(FLAG_URL).mock(side_effect=_answer_by_user)
+            async with AsyncFlagClient(async_config) as client:
+                await client.get_all_flags("production")
+                result = await client.evaluate("checkout", FlagContext(user_id="b"))
+        assert result.value is False
+        assert result.reason == "evaluated"

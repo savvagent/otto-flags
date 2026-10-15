@@ -4,7 +4,7 @@ Official Python Server SDK for Otto Flags - AI-powered feature flags with automa
 
 ## Features
 
-- 🚀 **Fast Evaluation**: In-memory caching with configurable TTL
+- 🚀 **Fast Evaluation**: In-memory caching with configurable TTL; results are cached per flag and per evaluation context (the context as sent), for `cache_ttl` seconds
 - 🔄 **Real-time Updates**: Automatic cache invalidation via Server-Sent Events
 - 📊 **Telemetry**: Automatic tracking of flag evaluations and errors
 - 🤖 **AI Error Detection**: Correlate errors with flag changes

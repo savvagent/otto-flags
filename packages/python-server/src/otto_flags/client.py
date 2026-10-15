@@ -6,6 +6,7 @@ Otto Flags Server Client for feature flag evaluation with AI-powered error detec
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import time
@@ -16,6 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
+from ._context_key import context_key
 from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
 from ._response import evaluate_payload
 from .cache import FlagCache
@@ -142,8 +144,16 @@ class FlagClient:
             # Check for variation override first
             variation_override = self._variation_overrides.get(flag_key)
 
+            # The cache key is the context as sent, computed before the lookup.
+            eval_context = self._prepare_context(context)
+            ctx_key = context_key(eval_context.to_dict())
+
             # Check cache
-            cached_entry = self._cache.get_entry(flag_key)
+            cached_entry = (
+                self._cache.get_entry(flag_key, context_key=ctx_key)
+                if ctx_key is not None
+                else None
+            )
             if cached_entry is not None:
                 configuration = cached_entry.configuration
                 variation = cached_entry.variation
@@ -173,13 +183,6 @@ class FlagClient:
                 self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
 
-            # Prepare context - inject environment from config if not provided
-            eval_context = context or FlagContext()
-            if not eval_context.application_id and self._config.application_id:
-                eval_context.application_id = self._config.application_id
-            if not eval_context.environment:
-                eval_context.environment = self._config.environment
-
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = self._client.post(
                 f"{self._config.base_url}/api/flags/{quote(flag_key, safe='')}/evaluate",
@@ -194,13 +197,15 @@ class FlagClient:
             data, value = evaluate_payload(response.json())
 
             # Cache the result (including configuration and variation)
-            self._cache.set(
-                flag_key,
-                value,
-                data.get("flagId"),
-                data.get("configuration"),
-                data.get("variation"),
-            )
+            if ctx_key is not None:
+                self._cache.set(
+                    flag_key,
+                    value,
+                    data.get("flagId"),
+                    data.get("configuration"),
+                    data.get("variation"),
+                    context_key=ctx_key,
+                )
 
             # Apply overrides to evaluated result
             final_configuration = data.get("configuration")
@@ -348,7 +353,10 @@ class FlagClient:
             error: The exception that was raised.
             context: Optional context for the evaluation.
         """
-        flag_enabled = self._cache.get(flag_key) or False
+        ctx_key = context_key(self._prepare_context(context).to_dict())
+        flag_enabled = (
+            self._cache.get(flag_key, context_key=ctx_key) if ctx_key is not None else None
+        ) or False
 
         self._telemetry.track_error(
             ErrorEvent(
@@ -571,10 +579,6 @@ class FlagClient:
                 for f in data.get("flags", [])
             ]
 
-            # Cache all flags
-            for flag in flags:
-                self._cache.set(flag.key, flag.enabled, flag.key, flag.configuration)
-
             return flags
 
         except Exception as e:
@@ -622,6 +626,20 @@ class FlagClient:
             if self._config.on_error:
                 self._config.on_error(e)
             return []
+
+    def _prepare_context(self, context: FlagContext | None) -> FlagContext:
+        """
+        Copy the caller's context and fill in the configured defaults.
+
+        The copy keeps the caller's object unmodified, so the same object can
+        be reused without its filled-in fields leaking into later calls.
+        """
+        eval_context = dataclasses.replace(context) if context is not None else FlagContext()
+        if not eval_context.application_id and self._config.application_id:
+            eval_context.application_id = self._config.application_id
+        if not eval_context.environment:
+            eval_context.environment = self._config.environment
+        return eval_context
 
     def _track_evaluation(
         self,
