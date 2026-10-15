@@ -15,6 +15,14 @@
 //! the org is exactly what the key is being resolved to. `app_keys` is outside
 //! row-level security for that reason, and every statement here names the key
 //! hash explicitly.
+//!
+//! The SDK API resolves keys through [`resolve_cached`], which remembers keys
+//! that did not resolve for a minute ([`UnknownKeys`]), so a client repeating
+//! one stops costing a database lookup per request (#104).
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use otto_tenant::ids::OrgId;
 use otto_tenant::Db;
@@ -144,9 +152,174 @@ pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> 
     }))
 }
 
+/// [`resolve`], answering a key that did not resolve within the last
+/// [`UNKNOWN_KEY_TTL`] from `unknown` instead of the database (#104). Only
+/// `Ok(None)` is remembered: a key that resolves, and an error, go to the
+/// database every time, so revocation is exactly as prompt as [`resolve`]'s.
+pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, key: &str) -> Result<Option<KeyOwner>> {
+    if !looks_like_key(key) {
+        return Ok(None);
+    }
+    let hash: [u8; 32] = Sha256::digest(key.as_bytes()).into();
+    if unknown.contains(&hash, Instant::now()) {
+        return Ok(None);
+    }
+    let owner = resolve_hash(db, &hash).await?;
+    if owner.is_none() {
+        unknown.insert(hash, Instant::now());
+    }
+    Ok(owner)
+}
+
+/// How long a key that did not resolve is answered from memory (#104).
+pub const UNKNOWN_KEY_TTL: Duration = Duration::from_secs(60);
+
+/// The most unknown keys remembered at once: a 32-byte hash and an
+/// `Instant` each, about 256 KiB when full.
+pub const UNKNOWN_KEY_CAPACITY: usize = 4096;
+
+/// How often a full cache may scan for expired entries.
+const SWEEP_EVERY: Duration = Duration::from_secs(1);
+
+/// SDK keys presented recently that did not resolve, by SHA-256 hash, so a
+/// client repeating one stops costing a database lookup per request (#104).
+///
+/// Only "not found" is remembered. A key that resolved is looked up again on
+/// every request, so rotating it or deleting its org takes effect at once,
+/// exactly as without the cache; an error is not an answer and is not
+/// remembered. A key that did not resolve cannot start resolving: keys are
+/// random and stored in the transaction that mints them, `app_keys` rows are
+/// never restored, and `deleted_orgs` tombstones are never removed. A feature
+/// that restored either would have to clear this cache.
+///
+/// Bounded at [`UNKNOWN_KEY_CAPACITY`]: when full, expired entries are swept
+/// (at most every second) and, if it is still full, a new key is simply not
+/// remembered: its lookup still answers correctly.
+#[derive(Debug, Default)]
+pub struct UnknownKeys {
+    inner: Mutex<Inner>,
+}
+
+#[derive(Debug, Default)]
+struct Inner {
+    /// Hash → when it expires.
+    expires: HashMap<[u8; 32], Instant>,
+    /// Before this, a full cache does not sweep again.
+    next_sweep: Option<Instant>,
+}
+
+impl UnknownKeys {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Entries held, live or not yet swept.
+    pub fn len(&self) -> usize {
+        self.lock().expires.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The map is only a cache and every state of it is valid, so a panic
+    /// while it was held (it holds no await) loses nothing worth refusing for.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether `hash` did not resolve within the last TTL as of `now`.
+    pub(crate) fn contains(&self, hash: &[u8; 32], now: Instant) -> bool {
+        let mut inner = self.lock();
+        match inner.expires.get(hash) {
+            Some(&until) if now < until => true,
+            Some(_) => {
+                inner.expires.remove(hash);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Remember that `hash` did not resolve, as of `now`.
+    pub(crate) fn insert(&self, hash: [u8; 32], now: Instant) {
+        let mut inner = self.lock();
+        if inner.expires.len() >= UNKNOWN_KEY_CAPACITY && !inner.expires.contains_key(&hash) {
+            if inner.next_sweep.is_some_and(|at| now < at) {
+                return;
+            }
+            inner.expires.retain(|_, until| now < *until);
+            inner.next_sweep = Some(now + SWEEP_EVERY);
+            if inner.expires.len() >= UNKNOWN_KEY_CAPACITY {
+                return;
+            }
+        }
+        inner.expires.insert(hash, now + UNKNOWN_KEY_TTL);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    fn h(n: u32) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[..4].copy_from_slice(&n.to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn an_unknown_key_is_remembered_until_its_ttl() {
+        let cache = UnknownKeys::new();
+        let t0 = Instant::now();
+        assert!(!cache.contains(&h(1), t0));
+        cache.insert(h(1), t0);
+        assert!(cache.contains(&h(1), t0 + UNKNOWN_KEY_TTL - Duration::from_millis(1)));
+        assert!(!cache.contains(&h(1), t0 + UNKNOWN_KEY_TTL));
+        assert_eq!(cache.len(), 0, "an expired entry is dropped when looked up");
+    }
+
+    #[test]
+    fn the_cache_never_grows_past_its_capacity() {
+        let cache = UnknownKeys::new();
+        let t0 = Instant::now();
+        for n in 0..UNKNOWN_KEY_CAPACITY as u32 {
+            cache.insert(h(n), t0);
+        }
+        cache.insert(h(u32::MAX), t0 + Duration::from_secs(1));
+        assert_eq!(cache.len(), UNKNOWN_KEY_CAPACITY);
+        assert!(!cache.contains(&h(u32::MAX), t0 + Duration::from_secs(1)));
+        // Once the old entries expire, a sweep makes room.
+        let later = t0 + UNKNOWN_KEY_TTL + Duration::from_secs(2);
+        cache.insert(h(u32::MAX), later);
+        assert!(cache.contains(&h(u32::MAX), later));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn a_full_cache_sweeps_at_most_once_a_second() {
+        let cache = UnknownKeys::new();
+        let t0 = Instant::now();
+        for n in 0..UNKNOWN_KEY_CAPACITY as u32 {
+            cache.insert(h(n), t0);
+        }
+        // Just before they expire: a sweep finds nothing to drop, the key is
+        // refused, and the next sweep waits a second.
+        let swept = t0 + UNKNOWN_KEY_TTL - Duration::from_millis(500);
+        cache.insert(h(u32::MAX), swept);
+        assert_eq!(cache.len(), UNKNOWN_KEY_CAPACITY);
+        // Everything has expired now, but the second is not up: no sweep.
+        let throttled = t0 + UNKNOWN_KEY_TTL + Duration::from_millis(200);
+        cache.insert(h(u32::MAX), throttled);
+        assert_eq!(cache.len(), UNKNOWN_KEY_CAPACITY);
+        assert!(!cache.contains(&h(u32::MAX), throttled));
+        // A second after the last sweep, the next one makes room.
+        let after = swept + Duration::from_secs(1);
+        cache.insert(h(u32::MAX), after);
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains(&h(u32::MAX), after));
+    }
 
     #[test]
     fn minted_keys_carry_their_kind_and_are_recognised() {
