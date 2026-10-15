@@ -215,7 +215,7 @@ pub async fn inspect(conn: &mut PgConnection) -> Result<PurgeReport> {
 
 /// [`inspect`] in a throwaway tenant transaction, which is rolled back.
 pub async fn check(db: &Db) -> Result<PurgeReport> {
-    let mut tx = db.begin(OrgId::new()).await?;
+    let mut tx = crate::platform_events::begin_pinned(db, OrgId::new()).await?;
     // On an error the dropped transaction rolls back, and the inspect error
     // is the one worth reporting.
     let report = inspect(tx.conn()).await?;

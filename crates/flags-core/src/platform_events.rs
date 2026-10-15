@@ -93,14 +93,40 @@ async fn revoked_on(
 /// `None` for SDK requests, which act for an app rather than a person.
 pub async fn begin_live(db: &Db, org: OrgId, user: Option<UserId>) -> Result<Tx<'static>> {
     let mut tx = db.begin(org).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock_shared($1, hashtext($2::text))")
-        .bind(LIFECYCLE_LOCK)
-        .bind(org)
-        .execute(tx.conn())
-        .await?;
+    // The lock statement also pins the search path
+    // (`crate::unpinned::SEARCH_PATH`), so a request transaction pays no extra
+    // round trip for it. The statement itself is planned before the path takes
+    // effect, so it must never name a relation; its functions are `pg_catalog`
+    // built-ins. Everything after it, the tombstone re-check included, runs
+    // under the pinned path.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock_shared($1, hashtext($2::text)), \
+                set_config('search_path', $3::text, true)",
+    )
+    .bind(LIFECYCLE_LOCK)
+    .bind(org)
+    .bind(crate::unpinned::SEARCH_PATH)
+    .execute(tx.conn())
+    .await?;
     if revoked_on(tx.conn(), org, user).await? {
         return Err(Error::AccessRevoked);
     }
+    Ok(tx)
+}
+
+/// Open a transaction pinned to `org` with the search path pinned
+/// (`crate::unpinned::SEARCH_PATH`). For the webhook handlers and the boot
+/// check, which pin an org without `begin_live`'s shared lifecycle lock and
+/// tombstone re-check (the org-deleting and member-removing handlers take the
+/// exclusive lock themselves); request paths use [`begin_live`]. Every pinned
+/// transaction in flags-core opens through one of the two (`tests/db.rs`
+/// scans for a bare `db.begin(` or `Db::begin(`).
+pub(crate) async fn begin_pinned(db: &Db, org: OrgId) -> Result<Tx<'static>> {
+    let mut tx = db.begin(org).await?;
+    sqlx::query("SELECT set_config('search_path', $1::text, true)")
+        .bind(crate::unpinned::SEARCH_PATH)
+        .execute(tx.conn())
+        .await?;
     Ok(tx)
 }
 
@@ -145,7 +171,7 @@ pub async fn apply(db: &Db, event: &WebhookEvent) -> Result<Outcome> {
             member_removed(db, event, (*org_id).into(), (*user_id).into()).await
         }
         LifecycleEvent::TeamDeleted { org_id, .. } => {
-            let mut tx = db.begin((*org_id).into()).await?;
+            let mut tx = begin_pinned(db, (*org_id).into()).await?;
             let first = first_delivery(&mut tx, event, "team.deleted").await?;
             tx.commit().await?;
             Ok(if first {
@@ -189,7 +215,7 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
         .await?;
     tomb.commit().await?;
 
-    let mut tx = db.begin(org).await?;
+    let mut tx = begin_pinned(db, org).await?;
     exclude_requests(&mut tx, org).await?;
 
     // The audit trail is append-only to `otto_app`, so it goes through the
@@ -264,7 +290,7 @@ async fn member_removed(
     .await?;
     tomb.commit().await?;
 
-    let mut tx = db.begin(org).await?;
+    let mut tx = begin_pinned(db, org).await?;
     exclude_requests(&mut tx, org).await?;
     let first = first_delivery(&mut tx, event, "member.removed").await?;
     // Read under the exclusive lifecycle lock, in a READ COMMITTED transaction

@@ -5479,6 +5479,266 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
     assert_eq!(report.problems(), Vec::<String>::new());
 }
 
+/// Plant a schema named after the tenant role, owned by it, holding empty
+/// copies of `tables` (defaults and unique constraints included). Under the
+/// default `search_path` (`"$user", public`) a transaction running as
+/// `otto_app` would resolve those names here instead of in `public` (#97).
+async fn shadow_schema(pool: &PgPool, tables: &[&str]) {
+    sqlx::query("CREATE SCHEMA otto_app AUTHORIZATION otto_app")
+        .execute(pool)
+        .await
+        .unwrap();
+    for t in tables {
+        for sql in [
+            format!("CREATE TABLE otto_app.{t} (LIKE public.{t} INCLUDING ALL)"),
+            format!("ALTER TABLE otto_app.{t} OWNER TO otto_app"),
+        ] {
+            sqlx::query(&sql).execute(pool).await.unwrap();
+        }
+    }
+}
+
+/// An app in `org`, committed, and its client key.
+async fn app_with_key(db: &Db, org: OrgId) -> String {
+    let mut tx = db.begin(org).await.unwrap();
+    let (_, issued) = tx
+        .create_app("web", &["production".into()], UserId::new())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    issued.client_key.unwrap()
+}
+
+/// The revocation check reads `public`, not a shadowing `otto_app` schema
+/// that says the org is deleted.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn revocation_checks_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    shadow_schema(&pool, &["deleted_orgs"]).await;
+    sqlx::query("INSERT INTO otto_app.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!platform_events::revoked(&db, org, UserId::new())
+        .await
+        .unwrap());
+}
+
+/// Key resolution reads `public`, not a shadowing `otto_app` schema that
+/// holds no keys.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn key_resolution_ignores_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let key = app_with_key(&db, org).await;
+    shadow_schema(&pool, &["app_keys", "deleted_orgs"]).await;
+    let owner = keys::resolve(&db, &key)
+        .await
+        .unwrap()
+        .expect("resolves in public");
+    assert_eq!(owner.org_id, org);
+}
+
+/// A request transaction re-checks the tombstones in `public`, not in a
+/// shadowing schema that says the org is deleted.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn request_tombstone_checks_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    shadow_schema(&pool, &["deleted_orgs"]).await;
+    sqlx::query("INSERT INTO otto_app.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    begin_live(&db, org, None)
+        .await
+        .expect("the only tombstone is in the shadow schema");
+}
+
+/// A request transaction reads tenant tables in `public`, not a shadowing
+/// schema's copy holding another app.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn request_reads_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    app_with_key(&db, org).await;
+    shadow_schema(&pool, &["flag_apps"]).await;
+    sqlx::query(
+        "INSERT INTO otto_app.flag_apps (org_id, name, client_key) VALUES ($1, 'shadow', 'sdk_x')",
+    )
+    .bind(org)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = begin_live(&db, org, None).await.unwrap();
+    let names: Vec<String> = tx
+        .list_apps()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, ["web"]);
+}
+
+/// A temporary table, searched before `public` for relations under the
+/// default path, no longer shadows one: the pinned path lists `pg_temp` last.
+/// One connection, so the temporary table is visible to the transactions.
+/// `verify_tenant_isolation` first caches whether the tenant role can be
+/// assumed: `Db::begin` asks on a second pool connection otherwise, which a
+/// one-connection pool cannot give it while the transaction holds the first.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn transactions_ignore_a_shadowing_temporary_table(pool: PgPool) {
+    let one = PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(pool.connect_options().as_ref().clone())
+        .await
+        .unwrap();
+    let db = Db::from_pool(one);
+    db.verify_tenant_isolation().await.unwrap();
+    let org = OrgId::new();
+    for sql in [
+        "CREATE TEMP TABLE deleted_orgs (LIKE public.deleted_orgs INCLUDING ALL)",
+        "GRANT ALL ON pg_temp.deleted_orgs TO otto_app",
+    ] {
+        sqlx::query(sql).execute(db.pool()).await.unwrap();
+    }
+    sqlx::query("INSERT INTO pg_temp.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    assert!(!platform_events::revoked(&db, org, UserId::new())
+        .await
+        .unwrap());
+    begin_live(&db, org, None)
+        .await
+        .expect("the only tombstone is in the temporary table");
+    db.pool().close().await;
+}
+
+/// A maintenance sweep deletes from `public`, not from a shadowing schema.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn maintenance_transactions_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["platform_events"]).await;
+    for schema in ["public", "otto_app"] {
+        sqlx::query(&format!(
+            "INSERT INTO {schema}.platform_events (event_id, org_id, kind, received_at) \
+             VALUES (gen_random_uuid(), gen_random_uuid(), 'team.deleted', now() - interval '30 days')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    platform_events::sweep(&db, 7).await.unwrap();
+    for (schema, left) in [("public", 0), ("otto_app", 1)] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {schema}.platform_events"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, left, "{schema}");
+    }
+}
+
+/// The rows a webhook writes in `public`, by schema: `(schema, table, rows)`.
+async fn assert_counts(pool: &PgPool, expected: &[(&str, &str, i64)]) {
+    for (schema, table, n) in expected {
+        let got: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {schema}.{table}"))
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(got, *n, "{schema}.{table}");
+    }
+}
+
+/// A delivery of `kind` for `org` with `data`.
+fn delivery(kind: &str, data: serde_json::Value) -> otto_resource::webhook::WebhookEvent {
+    let body = otto_resource::webhook::body(uuid::Uuid::new_v4(), kind, Utc::now(), &data);
+    otto_resource::webhook::parse(&body).unwrap()
+}
+
+/// `team.deleted`'s dedupe marker lands in `public`, so a redelivery is
+/// recognised there and the shadow schema stays empty.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn team_deleted_ignores_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["platform_events"]).await;
+    let org = OrgId::new();
+    let event = delivery(
+        "team.deleted",
+        json!({"org_id": org.as_uuid(), "team_id": uuid::Uuid::new_v4()}),
+    );
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Ignored
+    );
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    assert_counts(
+        &pool,
+        &[
+            ("public", "platform_events", 1),
+            ("otto_app", "platform_events", 0),
+        ],
+    )
+    .await;
+}
+
+/// `org.deleted`'s tombstone and dedupe marker land in `public`.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn org_deleted_ignores_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["deleted_orgs", "platform_events"]).await;
+    let org = OrgId::new();
+    let event = delivery("org.deleted", json!({"org_id": org.as_uuid()}));
+    assert!(matches!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert_counts(
+        &pool,
+        &[
+            ("public", "deleted_orgs", 1),
+            ("public", "platform_events", 1),
+            ("otto_app", "deleted_orgs", 0),
+            ("otto_app", "platform_events", 0),
+        ],
+    )
+    .await;
+}
+
+/// `member.removed`'s tombstone and dedupe marker land in `public`.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn member_removed_ignores_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["removed_members", "platform_events"]).await;
+    let (org, user) = (OrgId::new(), UserId::new());
+    let event = delivery(
+        "member.removed",
+        json!({"org_id": org.as_uuid(), "user_id": user.as_uuid()}),
+    );
+    assert!(matches!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Applied { .. }
+    ));
+    assert_counts(
+        &pool,
+        &[
+            ("public", "removed_members", 1),
+            ("public", "platform_events", 1),
+            ("otto_app", "removed_members", 0),
+            ("otto_app", "platform_events", 0),
+        ],
+    )
+    .await;
+}
+
 /// Every query on the pool's own role, outside a pinned (`begin_live`),
 /// maintenance (`maintenance::begin`), or unpinned (`unpinned::begin`)
 /// transaction, runs as whatever role the pool connects as. In production that
@@ -5526,6 +5786,18 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
         // the notify listener its clone.
         ("flags-server/src/main.rs", 2),
     ]);
+    let found = count_in_crate_src(&PATTERNS);
+    let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        found, allowed,
+        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+    );
+}
+
+/// How often any of `patterns` occurs in each workspace crate's non-test
+/// `src`, by path relative to `crates/`: comment lines and the trailing
+/// `#[cfg(test)] mod tests` (which must be the file's last item) are skipped.
+fn count_in_crate_src(patterns: &[&str]) -> BTreeMap<String, usize> {
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -5580,17 +5852,32 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
             let n: usize = code
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))
-                .map(|l| PATTERNS.iter().map(|p| l.matches(p).count()).sum::<usize>())
+                .map(|l| patterns.iter().map(|p| l.matches(p).count()).sum::<usize>())
                 .sum();
             if n > 0 {
                 found.insert(name, n);
             }
         }
     }
+    found
+}
+
+/// Every pinned transaction in the crates' source opens through
+/// `platform_events::begin_live` or `platform_events::begin_pinned`, which pin
+/// the search path to `public` (#97); a bare `Db::begin` would run with the
+/// role's default path, where a schema named after the role comes first.
+/// Textual, like the scan above: it matches `db.begin(` and `Db::begin(`, and
+/// every `Db` in the workspace is held as `db` (or `self.db`, `state.db`), so
+/// a method call on one held under another name would escape it. If the
+/// helpers move out of `platform_events.rs`, move the allowed site with them.
+#[test]
+fn no_pinned_begin_outside_the_search_path_helpers() {
+    let found = count_in_crate_src(&["db.begin(", "Db::begin("]);
     let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
     assert_eq!(
-        found, allowed,
-        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+        found,
+        BTreeMap::from([("flags-core/src/platform_events.rs", 2)]),
+        "open pinned transactions with `begin_live` or `begin_pinned`"
     );
 }
 

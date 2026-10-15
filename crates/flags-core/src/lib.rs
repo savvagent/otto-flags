@@ -10,9 +10,11 @@
 //! ([`apps::AppsExt`], [`flags::FlagsExt`]) because `Tx` is defined in
 //! otto-tenant. Request paths open their transactions with
 //! [`platform_events::begin_live`], never `Db::begin` directly, so a deleted
-//! org or removed member is refused. Unpinned access goes through
+//! org or removed member is refused; other pinned work (webhooks, the boot
+//! check) uses `platform_events::begin_pinned`. Unpinned access goes through
 //! `maintenance` (background code, across orgs) or `unpinned` (the pre-org
-//! tables only), both as the tenant role.
+//! tables only), both as the tenant role. Every one of these transactions pins
+//! `search_path` to `public` (`unpinned::SEARCH_PATH`, #97).
 //!
 //! No SQL lives outside this crate.
 
