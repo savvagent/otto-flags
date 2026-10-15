@@ -254,6 +254,11 @@ let config = Config::new("sdk_key")
     .with_default("flag", false);
 ```
 
+> **Caching caveat:** results are cached per flag key, not per context, for `cache_ttl`. Until
+> this is fixed (#91), a flag that targets users or rolls out by percentage can return one
+> context's result to another within the TTL; use a short `cache_ttl` or call
+> `invalidate_cache` for such flags.
+
 #### Context
 
 Context builder for flag evaluation.

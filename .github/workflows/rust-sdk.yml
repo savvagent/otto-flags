@@ -1,14 +1,15 @@
 name: Rust SDK
 
 # packages/rust-server, a standalone crate outside the server workspace (ci.yml
-# does not build it). Tests run offline against wiremock.
+# does not build it). Tests run offline against wiremock. The root
+# rust-toolchain.toml governs this crate too (rustup searches parent directories).
 on:
   push:
     branches: [main]
-    paths: ['packages/rust-server/**', '.github/workflows/rust-sdk.yml']
+    paths: ['packages/rust-server/**', 'rust-toolchain.toml', '.github/workflows/rust-sdk.yml']
   pull_request:
     branches: [main]
-    paths: ['packages/rust-server/**', '.github/workflows/rust-sdk.yml']
+    paths: ['packages/rust-server/**', 'rust-toolchain.toml', '.github/workflows/rust-sdk.yml']
 
 concurrency:
   group: rust-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}

@@ -139,7 +139,9 @@ impl FlagClient {
             .or_else(|| self.config.defaults.get(flag_key).copied())
             .unwrap_or(false);
 
-        let mut configuration = data.get("configuration").cloned();
+        // The server always sends the key, as `null` when the flag has no configuration;
+        // `null` means absent (`object?` in docs/SDK-DEVELOPER-GUIDE.md).
+        let mut configuration = data.get("configuration").filter(|v| !v.is_null()).cloned();
         let mut variation = data["variation"].as_str().map(String::from);
 
         // Cache the result (including configuration and variation)

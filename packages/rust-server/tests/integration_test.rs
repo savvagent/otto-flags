@@ -2,7 +2,7 @@
 //! (`docs/SDK-DEVELOPER-GUIDE.md`, Flag Evaluation): `POST /api/flags/{key}/evaluate`
 //! with `Authorization: Bearer <key>` and `{"context": ...}`, answered with `enabled`.
 
-use otto_flags::{Config, Context, FlagClient, VariationResult};
+use otto_flags::{Config, Context, FlagClient, OttoFlagsError, VariationResult};
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -98,18 +98,120 @@ async fn evaluate_sends_the_context_and_reports_the_server_result() {
     assert!(result.value);
     assert_eq!(result.key, "test-flag");
     assert_eq!(result.reason, "evaluated");
+    // The server sends `"configuration": null` for a flag without one; that is absent.
+    assert!(result.configuration.is_none());
+    assert!(result.variation.is_none());
+}
+
+#[tokio::test]
+async fn get_config_is_none_for_an_enabled_flag_without_configuration() {
+    let server = MockServer::start().await;
+    mock_evaluate(
+        &server,
+        "test-flag",
+        200,
+        json!({ "key": "test-flag", "enabled": true, "variation": null, "configuration": null }),
+    )
+    .await;
+
+    let config = client(&server).get_config("test-flag", None).await.unwrap();
+    assert!(config.is_none());
+}
+
+#[tokio::test]
+async fn evaluate_sends_the_configured_application_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/test-flag/evaluate"))
+        .and(body_partial_json(
+            json!({ "context": { "application_id": "app-1" } }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_application_id("app-1"),
+    )
+    .unwrap();
+    assert!(client.is_enabled("test-flag", None).await);
+}
+
+#[tokio::test]
+async fn a_response_without_enabled_falls_back_to_the_default() {
+    let server = MockServer::start().await;
+    // `value` is the field the SDK used to read; the server never sends it.
+    mock_evaluate(&server, "test-flag", 200, json!({ "value": false })).await;
+
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_default("test-flag", true),
+    )
+    .unwrap();
+    assert!(client.is_enabled("test-flag", None).await);
+}
+
+#[tokio::test]
+async fn a_second_evaluation_is_served_from_the_cache() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/test-flag/evaluate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server);
+    assert_eq!(
+        client.evaluate("test-flag", None).await.unwrap().reason,
+        "evaluated"
+    );
+    let cached = client.evaluate("test-flag", None).await.unwrap();
+    assert!(cached.value);
+    assert_eq!(cached.reason, "cached");
+}
+
+#[tokio::test]
+async fn an_unreachable_server_falls_back_to_the_default() {
+    // Bind a port, then free it, so nothing is listening there. (A dropped `MockServer`
+    // goes back to wiremock's pool and keeps listening.)
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let uri = format!("http://127.0.0.1:{port}");
+
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(uri)
+            .with_default("test-flag", true),
+    )
+    .unwrap();
+    assert!(matches!(
+        client.evaluate("test-flag", None).await,
+        Err(OttoFlagsError::RequestFailed(_))
+    ));
+    assert!(client.is_enabled("test-flag", None).await);
 }
 
 #[tokio::test]
 async fn unknown_flag_falls_back_to_the_default() {
     let server = MockServer::start().await;
-    mock_evaluate(
-        &server,
-        "missing-flag",
-        404,
-        json!({ "error": "flag_not_found" }),
-    )
-    .await;
+    // Errors are not cached: `evaluate` and `is_enabled` each reach the server.
+    Mock::given(method("POST"))
+        .and(path("/api/flags/missing-flag/evaluate"))
+        .and(header("Authorization", format!("Bearer {KEY}").as_str()))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(json!({ "error": "flag_not_found" })),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
 
     let client = FlagClient::new(
         Config::new(KEY)
@@ -133,11 +235,16 @@ async fn server_error_falls_back_to_the_default() {
         .mount(&server)
         .await;
 
-    let client = client(&server);
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_default("test-flag", true),
+    )
+    .unwrap();
     let result = client.evaluate("test-flag", None).await.unwrap();
-    assert!(!result.value);
+    assert!(result.value);
     assert_eq!(result.reason, "error");
-    assert!(!client.is_enabled("test-flag", None).await);
+    assert!(client.is_enabled("test-flag", None).await);
 }
 
 #[tokio::test]
@@ -200,7 +307,10 @@ fn config_builder_sets_its_fields() {
 
 #[test]
 fn client_rejects_a_key_without_the_sdk_prefix() {
-    assert!(FlagClient::new(Config::new("not-an-sdk-key")).is_err());
+    assert!(matches!(
+        FlagClient::new(Config::new("not-an-sdk-key")),
+        Err(OttoFlagsError::InvalidApiKey)
+    ));
 }
 
 #[test]
