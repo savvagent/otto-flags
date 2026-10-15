@@ -106,8 +106,8 @@ impl PurgeReport {
                  pg_get_function_identity_arguments(p.oid), p.prosecdef FROM \
                  pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = \
                  p.pronamespace WHERE p.proname = '{NAME}'). If a row is 0004's (arguments \
-                 purge_org uuid, SECURITY DEFINER, pg_get_functiondef matching \
-                 crates/flags-core/migrations/0004_audit_purge.sql), move it into public as \
+                 purge_org uuid, SECURITY DEFINER, and a pg_get_functiondef(p.oid) body \
+                 matching crates/flags-core/migrations/0004_audit_purge.sql), move it into public as \
                  a superuser (ALTER FUNCTION <schema>.{NAME}(uuid) SET SCHEMA public); \
                  otherwise run that file as a superuser with SET search_path = public \
                  first, so it does not land elsewhere again; see docs/deploy/fly.md"

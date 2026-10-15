@@ -65,9 +65,10 @@ inspected, and the missing-function message is correct whether or not 0004 has r
 - `summary()` reads `audit purge … : public.purge_deleted_org_audit(uuid) is owned by …`.
 - The missing-function problem keeps `does not exist` and the run-migrations advice, and adds: if
   0004 is recorded as applied (version 4 in `_sqlx_migrations`), find the function (catalog
-  query) and, as a superuser, move it into `public`
-  (`ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`, quoting `<schema>`
-  if it needs it), or recreate it from 0004's file if it is gone.
+  query returning the quoted schema, identity arguments, and `prosecdef`) and, if it is 0004's,
+  as a superuser move it into `public`
+  (`ALTER FUNCTION <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`); otherwise run
+  0004's file as a superuser with `SET search_path = public` first.
 - A DB test proves the advice: with the function moved to another schema, the check reports it
   missing with that advice, and after the suggested `SET SCHEMA public` the check passes.
 - Every existing test passes unchanged. No migration.
@@ -129,8 +130,8 @@ change runs none of them. No config, secret, scope, or recurring-cost impact.
 
 - Function in another schema: `to_regprocedure('public.…(uuid)')` is NULL, so `owner` is `None`,
   the missing-function message applies, and the new text tells the operator how to find and move it.
-- Function dropped after 0004 ran: the catalog query returns nothing; the message says to recreate
-  it from 0004's file.
+- Function dropped after 0004 ran, or only an unrelated same-named function found: the message
+  says to run 0004's file as a superuser with `SET search_path = public` first.
 - Role names in suggested statements stay quoted with `quote_ident`; `public` and the function name
   are fixed literals that need no quoting.
 
