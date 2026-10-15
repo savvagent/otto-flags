@@ -1556,6 +1556,13 @@ async fn tools_list_carries_annotations(pool: PgPool) {
     assert_eq!(hint("set_flag_environment", "destructiveHint"), true);
     assert_eq!(hint("create_flag", "destructiveHint"), false);
     assert_eq!(hint("remove_rollback_policy", "idempotentHint"), true);
+    // evaluate_flag writes an unbilled usage row (#89), so its description,
+    // read next to the read-only hint, must not claim it records nothing.
+    let evaluate = tools.iter().find(|t| t["name"] == "evaluate_flag").unwrap()["description"]
+        .as_str()
+        .unwrap();
+    assert!(!evaluate.contains("records nothing"), "{evaluate}");
+    assert!(evaluate.contains("not billed"), "{evaluate}");
 }
 
 /// Only setting a policy is billed; the rest record a free row, except the
