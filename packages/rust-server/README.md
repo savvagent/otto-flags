@@ -5,7 +5,7 @@ Official Rust Server SDK for Otto Flags - AI-powered feature flags with automati
 ## Features
 
 - 🚀 **Fast Evaluation**: Thread-safe in-memory caching with configurable TTL
-- 📊 **Telemetry**: Automatic tracking of flag evaluations
+- 📊 **Telemetry**: Evaluation counts and reported errors, batched, for flag health and auto-rollback
 - 🤖 **AI Error Detection**: Correlate errors with flag changes
 - 📦 **Type Safe**: Full Rust type safety with comprehensive documentation
 - 🌐 **Server-Optimized**: Built specifically for Rust server environments
@@ -34,7 +34,9 @@ use otto_flags::{Config, Context, FlagClient};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize the client
-    let config = Config::new("sdk_your_api_key_here")
+    // A server uses the app's secret server key (srv_...); the public client key (sdk_...)
+    // also works.
+    let config = Config::new("srv_your_server_key_here")
         .with_application_id("your-app-id");
 
     let client = FlagClient::new(config)?;
@@ -52,6 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // New feature code
     }
 
+    // Send queued telemetry before exiting
+    client.flush().await;
+
     Ok(())
 }
 ```
@@ -62,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use otto_flags::Config;
 use std::time::Duration;
 
-let config = Config::new("sdk_your_api_key_here")
+let config = Config::new("srv_your_server_key_here")
     .with_application_id("your-app-id")
     .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
@@ -72,6 +77,55 @@ let config = Config::new("sdk_your_api_key_here")
 
 let client = FlagClient::new(config)?;
 ```
+
+### Keys
+
+`FlagClient::new` accepts the app's server key (`srv_...`) or its client key (`sdk_...`). Use the
+server key in a server: it is secret, and only telemetry reported with it drives auto-rollback by
+default (reports made with the public client key count only for policies that opt in). Never ship
+a `srv_` key to a browser or mobile app.
+
+## Telemetry
+
+With telemetry on (the default), the SDK reports to Otto Flags, with the client's key:
+
+- **Evaluations**: one per lookup that got the server's answer (`reason` `"evaluated"` or
+  `"cached"`): the flag key, the result, the variation, the context's `environment`, and a
+  timestamp. No user id, attributes, or other context. Fallbacks (`reason: "error"`) are not
+  reported.
+- **Errors** you report with `track_error`, for errors raised while a flag was in play:
+
+```rust
+use otto_flags::ErrorReport;
+
+match charge(&order).await {
+    Ok(receipt) => receipt,
+    Err(e) => {
+        client.track_error(ErrorReport::from_error("new-checkout", enabled, &e));
+        return Err(e.into());
+    }
+}
+// Or by hand:
+client.track_error(
+    ErrorReport::new("new-checkout", true, "PaymentDeclined", "card declined")
+        .with_environment("production"),
+);
+```
+
+Flag health compares the error rate with a flag on against the rate with it off, and
+auto-rollback acts on it, so report errors from both code paths.
+
+Events are queued in memory and sent in batches every 5 seconds by a background task on the
+Tokio runtime, sooner when a full batch (1,000) is waiting, but at most one send pass per kind a
+second; each request carries up to 1,000 events, so a busy process sends about one request per
+1,000 lookups. Call `client.flush().await` before the process exits (it also
+waits for a send already under way), or the last few seconds of events are lost.
+
+The error message and stack trace are stored by Otto Flags for 14 days and shown to the agents
+that manage your flags: keep end-user data (emails, ids, query values) out of them. A `srv_` key
+is secret: use an `https` `base_url` (the SDK warns otherwise). Telemetry never blocks or fails a lookup: if the
+queue is full (10,000 events per kind) new events are dropped, and a batch that cannot be sent is
+logged at `warn` and dropped, not retried. Turn it off with `Config::with_telemetry(false)`.
 
 ## Usage Examples
 
@@ -246,11 +300,12 @@ let result = client.evaluate("premium-features", Some(context)).await?;
 Configuration builder for the FlagClient.
 
 ```rust
-let config = Config::new("sdk_key")
+let config = Config::new("srv_key")  // or "sdk_key"
     .with_application_id("app-id")
     .with_base_url("https://otto-flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
+    .with_telemetry(true)             // the default
     .with_default("flag", false);
 ```
 
@@ -336,6 +391,18 @@ Clears all cached values.
 client.clear_cache();
 ```
 
+#### track_error(&self, report: ErrorReport)
+
+Queues an error raised while a flag was in play (see [Telemetry](#telemetry)).
+
+#### flush(&self)
+
+Sends all queued telemetry now; call it before the process exits.
+
+```rust
+client.flush().await;
+```
+
 ## Error Handling
 
 A flag lookup never fails your request. `evaluate`, `is_enabled`, `get_config`, and
@@ -356,7 +423,7 @@ if result.reason == "error" {
 ```
 
 Only `FlagClient::new` returns `Err` in practice: `OttoFlagsError::InvalidApiKey` for a key that
-does not start with `sdk_`, or `RequestFailed` if the HTTP client cannot be built.
+starts with neither `srv_` nor `sdk_`, or `RequestFailed` if the HTTP client cannot be built.
 
 ## Best Practices
 

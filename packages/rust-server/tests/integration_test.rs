@@ -316,6 +316,18 @@ fn config_builder_sets_its_fields() {
 }
 
 #[test]
+fn client_accepts_a_server_key() {
+    assert!(FlagClient::new(Config::new("srv_server_key")).is_ok());
+}
+
+#[test]
+fn the_invalid_key_error_names_both_key_kinds() {
+    let message = OttoFlagsError::InvalidApiKey.to_string();
+    assert!(message.contains("sdk_"), "{message}");
+    assert!(message.contains("srv_"), "{message}");
+}
+
+#[test]
 fn client_rejects_a_key_without_the_sdk_prefix() {
     assert!(matches!(
         FlagClient::new(Config::new("not-an-sdk-key")),

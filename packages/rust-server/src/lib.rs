@@ -5,7 +5,8 @@
 //! ## Features
 //!
 //! - 🚀 **Fast Evaluation**: Thread-safe in-memory caching with configurable TTL
-//! - 📊 **Telemetry**: Automatic tracking of flag evaluations
+//! - 📊 **Telemetry**: Evaluation counts and reported errors, batched (`FlagClient::track_error`,
+//!   `FlagClient::flush`)
 //! - 🤖 **AI Error Detection**: Correlate errors with flag changes
 //! - 📦 **Type Safe**: Full Rust type safety with comprehensive documentation
 //! - 🌐 **Server-Optimized**: Built specifically for Rust server environments
@@ -19,7 +20,8 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Initialize the client
-//!     let config = Config::new("sdk_your_api_key_here")
+//!     // The app's server key (srv_...) or client key (sdk_...)
+//!     let config = Config::new("srv_your_server_key_here")
 //!         .with_application_id("your-app-id");
 //!
 //!     let client = FlagClient::new(config)?;
@@ -37,15 +39,20 @@
 //!         // New feature code
 //!     }
 //!
+//!     // Send queued telemetry before exiting
+//!     client.flush().await;
+//!
 //!     Ok(())
 //! }
 //! ```
 
 mod cache;
 mod client;
+mod telemetry;
 mod types;
 
 pub use client::{FlagClient, OttoFlagsError};
 pub use types::{
-    Config, ConfigOverrideOptions, Context, EvaluationResult, Metadata, VariationResult,
+    Config, ConfigOverrideOptions, Context, ErrorReport, EvaluationResult, Metadata,
+    VariationResult,
 };

@@ -1,7 +1,8 @@
 use crate::cache::{context_key, Cache};
+use crate::telemetry::Telemetry;
 use crate::types::{
-    Config, ConfigOverrideEntry, ConfigOverrideOptions, Context, EvaluationResult, Metadata,
-    VariationOverrideEntry, VariationResult,
+    Config, ConfigOverrideEntry, ConfigOverrideOptions, Context, ErrorReport, EvaluationResult,
+    Metadata, VariationOverrideEntry, VariationResult,
 };
 use reqwest::Client as HttpClient;
 use serde_json::json;
@@ -12,7 +13,7 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum OttoFlagsError {
-    #[error("Invalid API key: must start with 'sdk_'")]
+    #[error("Invalid API key: must start with 'sdk_' (client key) or 'srv_' (server key)")]
     InvalidApiKey,
 
     #[error("HTTP request failed: {0}")]
@@ -28,7 +29,7 @@ pub enum OttoFlagsError {
 /// `crates/flags-core/src/flags.rs`), so refusing anything else loses no flag. `.` and `..` pass
 /// that rule but no URL can carry them as a path segment (the `url` crate drops them, and
 /// WHATWG parsing treats `%2e` as a dot segment), so they would reach another endpoint (#95).
-fn is_valid_flag_key(key: &str) -> bool {
+pub(crate) fn is_valid_flag_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 128
         && key != "."
@@ -60,6 +61,7 @@ pub struct FlagClient {
     config: Arc<Config>,
     http_client: HttpClient,
     cache: Cache,
+    telemetry: Telemetry,
     config_overrides: Arc<RwLock<HashMap<String, ConfigOverrideEntry>>>,
     variation_overrides: Arc<RwLock<HashMap<String, VariationOverrideEntry>>>,
 }
@@ -67,9 +69,23 @@ pub struct FlagClient {
 impl FlagClient {
     /// Create a new FlagClient with the given configuration
     pub fn new(config: Config) -> Result<Self, OttoFlagsError> {
-        // Validate API key
-        if !config.api_key.starts_with("sdk_") {
+        // Validate API key: the public client key or the secret server key, which the SDK
+        // guide recommends for server-side SDKs (and whose telemetry drives auto-rollback).
+        if !(config.api_key.starts_with("sdk_") || config.api_key.starts_with("srv_")) {
             return Err(OttoFlagsError::InvalidApiKey);
+        }
+
+        // The server key is a secret: warn when it would cross the network in clear text.
+        if config.api_key.starts_with("srv_") {
+            if let Ok(url) = reqwest::Url::parse(&config.base_url) {
+                let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+                if url.scheme() != "https" && !loopback {
+                    tracing::warn!(
+                        "Otto Flags: the server key will be sent over {}; use an https base_url",
+                        url.scheme()
+                    );
+                }
+            }
         }
 
         let http_client = HttpClient::builder()
@@ -78,6 +94,12 @@ impl FlagClient {
             .map_err(OttoFlagsError::RequestFailed)?;
 
         let cache = Cache::new(config.cache_ttl);
+        let telemetry = Telemetry::new(
+            http_client.clone(),
+            config.base_url.clone(),
+            config.api_key.clone(),
+            config.enable_telemetry,
+        );
 
         tracing::info!("Otto Flags FlagClient initialized");
 
@@ -85,6 +107,7 @@ impl FlagClient {
             config: Arc::new(config),
             http_client,
             cache,
+            telemetry,
             config_overrides: Arc::new(RwLock::new(HashMap::new())),
             variation_overrides: Arc::new(RwLock::new(HashMap::new())),
         })
@@ -132,6 +155,14 @@ impl FlagClient {
             .as_deref()
             .and_then(|key| self.cache.get_entry(flag_key, key))
         {
+            // Report the server's answer, not an override applied on top of it.
+            self.telemetry.track_evaluation(
+                flag_key,
+                cached_entry.value,
+                cached_entry.variation.as_deref(),
+                ctx.environment.as_deref(),
+            );
+
             let mut configuration = cached_entry.configuration.clone();
             let mut variation = cached_entry.variation.clone();
 
@@ -199,6 +230,14 @@ impl FlagClient {
         // `null` means absent (`object?` in docs/SDK-DEVELOPER-GUIDE.md).
         let mut configuration = data.get("configuration").filter(|v| !v.is_null()).cloned();
         let mut variation = data["variation"].as_str().map(String::from);
+
+        // Report the server's answer, not an override applied on top of it.
+        self.telemetry.track_evaluation(
+            flag_key,
+            value,
+            variation.as_deref(),
+            ctx.environment.as_deref(),
+        );
 
         let metadata = Metadata {
             version: data["version"].as_i64(),
@@ -301,6 +340,21 @@ impl FlagClient {
             .pop_if_empty()
             .extend(["api", "flags", flag_key, "evaluate"]);
         Ok(url)
+    }
+
+    /// Report an error the host raised while a flag was in play, for flag health and
+    /// auto-rollback. It is queued and sent in a batch; it never blocks or fails. Does nothing
+    /// when telemetry is off (`Config::with_telemetry(false)`).
+    pub fn track_error(&self, report: ErrorReport) {
+        self.telemetry.track_error(report);
+    }
+
+    /// Send all queued telemetry now. Call it before the process exits: queued events are
+    /// otherwise sent every few seconds by a background task, and lost at exit. Failures are
+    /// logged, never returned; against an unreachable server it can take up to
+    /// `Config::timeout` per batch.
+    pub async fn flush(&self) {
+        self.telemetry.flush().await;
     }
 
     /// Check if a flag is enabled (convenience method); the default on any failure
