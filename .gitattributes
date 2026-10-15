@@ -1,0 +1,3 @@
+# The install page's CSP hashes its inline style and script byte for byte;
+# a CRLF checkout would change those bytes and block both.
+crates/flags-server/src/install_page.html text eol=lf

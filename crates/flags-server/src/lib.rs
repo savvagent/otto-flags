@@ -271,7 +271,7 @@ mod tests {
 
     const BROWSER: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
-    async fn root(
+    async fn request_root(
         method: http::Method,
         path: &str,
         headers: &[(&str, &str)],
@@ -311,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_browser_at_the_root_gets_the_install_page() {
-        let (status, h, body) = root(http::Method::GET, "/", &[("accept", BROWSER)]).await;
+        let (status, h, body) = request_root(http::Method::GET, "/", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(h["content-type"], "text/html; charset=utf-8");
         assert_eq!(h["cache-control"], "public, max-age=3600");
@@ -327,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn head_at_the_root_gets_the_page_headers_and_no_body() {
-        let (status, h, body) = root(http::Method::HEAD, "/", &[("accept", BROWSER)]).await;
+        let (status, h, body) = request_root(http::Method::HEAD, "/", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(h["content-type"], "text/html; charset=utf-8");
         assert_eq!(h["content-security-policy"], install_page::CSP);
@@ -342,12 +342,12 @@ mod tests {
             &[("accept", "application/json")][..],
             &[("accept", BROWSER), ("authorization", "Bearer otto_at_x")][..],
         ] {
-            let (status, h, body) = root(http::Method::GET, "/", headers).await;
+            let (status, h, body) = request_root(http::Method::GET, "/", headers).await;
             assert_eq!(status, StatusCode::NOT_FOUND, "{headers:?}");
             assert_eq!(json(&body), the_json_404("/"), "{headers:?}");
             assert_eq!(h["vary"], "Accept, Authorization", "{headers:?}");
         }
-        let (status, h, body) = root(http::Method::POST, "/", &[("accept", BROWSER)]).await;
+        let (status, h, body) = request_root(http::Method::POST, "/", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json(&body), the_json_404("/"));
         assert!(h.get("allow").is_none());
@@ -355,7 +355,8 @@ mod tests {
 
     #[tokio::test]
     async fn other_paths_keep_the_json_404_for_browsers_too() {
-        let (status, h, body) = root(http::Method::GET, "/nope", &[("accept", BROWSER)]).await;
+        let (status, h, body) =
+            request_root(http::Method::GET, "/nope", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json(&body), the_json_404("/nope"));
         assert!(h.get("vary").is_none());
