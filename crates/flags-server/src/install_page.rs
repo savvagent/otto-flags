@@ -14,6 +14,7 @@
 //! startup, outside both elements, so the hashes never depend on
 //! configuration. A unit test recomputes them from the template.
 
+use axum::body::Bytes;
 use axum::response::{IntoResponse, Response};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::StatusCode;
@@ -29,30 +30,38 @@ pub const CSP: &str = "default-src 'none'; \
      script-src 'sha256-X+vtavDuvM5Xh6gw3SGFEn/6P358qCI6/LPP/D2GTh8='; \
      base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-/// What `/` varies on, for this page and for the JSON 404 it otherwise
-/// answers: without it a cache could hand one to a client that asked for
+/// What `GET`/`HEAD /` vary on, for this page and for the JSON 404 they
+/// otherwise answer: without it a cache could hand one to a client that asked for
 /// the other.
 pub const VARY: &str = "Accept, Authorization";
 
-/// The rendered page, built once at startup.
+/// The rendered page, built once at startup. `Bytes`, so each response
+/// shares it rather than copying it.
 #[derive(Debug, Clone)]
 pub struct InstallPage {
-    html: String,
+    html: Bytes,
 }
 
 impl InstallPage {
     /// `connector_url` is the address an AI assistant connects to (the
-    /// service's resource URI); `platform_url` is the otto platform, whose
-    /// origin the page links to. Both are HTML-escaped.
+    /// service's resource URI, trusted operator config that is shown, not
+    /// parsed); `platform_url` is the otto platform, whose origin the page
+    /// links to. Both are HTML-escaped. The origin goes in first: it is a
+    /// serialized URL origin and cannot contain a `{{` that the connector
+    /// substitution would then expand.
     pub fn new(connector_url: &str, platform_url: &str) -> Self {
         let html = TEMPLATE
-            .replace("{{CONNECTOR_URL}}", &escape(connector_url))
-            .replace("{{PLATFORM_ORIGIN}}", &escape(&origin(platform_url)));
-        Self { html }
+            .replace("{{PLATFORM_ORIGIN}}", &escape(&origin(platform_url)))
+            .replace("{{CONNECTOR_URL}}", &escape(connector_url));
+        Self {
+            html: Bytes::from(html),
+        }
     }
 
-    pub fn html(&self) -> &str {
-        &self.html
+    /// The rendered page, for tests.
+    #[cfg(test)]
+    fn html(&self) -> &str {
+        std::str::from_utf8(&self.html).expect("the page is built from &str")
     }
 
     /// 200 with the page and its security and caching headers. axum drops
@@ -94,8 +103,12 @@ impl InstallPage {
 /// `Authorization` header at all.
 ///
 /// `text/*` and `*/*` do not count: curl and most HTTP libraries send `*/*`
-/// and must keep getting JSON. A `q` that does not parse counts as 0, so a
-/// malformed header gets JSON too.
+/// and must keep getting JSON. A `q` that does not parse, or is outside 0
+/// to 1, counts as 0, so a malformed header gets JSON too. An `Accept` value
+/// that is not visible ASCII is skipped (the others are still read). The
+/// parse is deliberately lenient where leniency is harmless: a parameter
+/// without `=` is ignored, the last `q` wins, and any number `f32` accepts
+/// in 0 to 1 is a qvalue.
 pub fn wants_html(headers: &HeaderMap) -> bool {
     if headers.contains_key(header::AUTHORIZATION) {
         return false;
@@ -135,12 +148,15 @@ fn accepts_html(range: &str) -> bool {
 }
 
 /// `https://otto.savvagent.com/anything` → `https://otto.savvagent.com`.
-/// The fallback is for completeness only: config already refuses a
-/// `FLAGS_PLATFORM_URL` that does not parse as an http(s) URL.
+///
+/// Config already refuses a `FLAGS_PLATFORM_URL` that is not an absolute
+/// http(s) URL, so the empty fallback is reached only by a direct caller
+/// passing something else. It makes the links same-origin paths rather than
+/// letting an arbitrary string (say `javascript:…`) into an `href`.
 fn origin(platform_url: &str) -> String {
     match url::Url::parse(platform_url) {
-        Ok(u) if u.origin().is_tuple() => u.origin().ascii_serialization(),
-        _ => platform_url.trim_end_matches('/').to_string(),
+        Ok(u) if matches!(u.scheme(), "http" | "https") => u.origin().ascii_serialization(),
+        _ => String::new(),
     }
 }
 
@@ -211,6 +227,35 @@ mod tests {
     }
 
     #[test]
+    fn lenient_parameters_are_harmless() {
+        assert!(!accept("text/html;level=1;q=0"));
+        assert!(accept("text/html;level=1;q=0.5"));
+        assert!(!accept("text/html;q=1;q=0"), "the last q wins");
+        assert!(accept("text/html;q"), "a parameter without = is ignored");
+    }
+
+    #[test]
+    fn a_non_ascii_accept_value_is_skipped_not_fatal() {
+        let mut h = HeaderMap::new();
+        h.append(
+            header::ACCEPT,
+            HeaderValue::from_bytes(b"text/html\xff").unwrap(),
+        );
+        assert!(!wants_html(&h));
+        h.append(header::ACCEPT, HeaderValue::from_static("text/html"));
+        assert!(wants_html(&h));
+    }
+
+    #[test]
+    fn the_link_origin_is_the_platform_origin_or_nothing() {
+        assert_eq!(origin("https://p.example/"), "https://p.example");
+        assert_eq!(origin("https://p.example/a/b?c"), "https://p.example");
+        assert_eq!(origin("http://localhost:8080/x"), "http://localhost:8080");
+        assert_eq!(origin("javascript:alert(1)"), "");
+        assert_eq!(origin("not a url"), "");
+    }
+
+    #[test]
     fn every_accept_header_is_read() {
         assert!(wants_html(&headers(&[
             ("accept", "application/json"),
@@ -255,6 +300,9 @@ mod tests {
             .html()
             .contains("https://flags.example.com/mcp?a=1&amp;b=&quot;&lt;x&gt;&#39;"));
         assert!(!page.html().contains("<x>"));
+        let page = InstallPage::new("https://f.example/mcp", "javascript:alert('x')");
+        assert!(page.html().contains("href=\"/products/flags#connect\""));
+        assert!(!page.html().contains("javascript:"));
     }
 
     fn inner<'a>(html: &'a str, tag: &str) -> &'a str {
@@ -287,6 +335,10 @@ mod tests {
         // The hashes cover only the two elements: a style attribute or an
         // inline handler would be blocked, silently breaking the page.
         assert!(!TEMPLATE.contains(" style="), "no style attributes");
+        // `default-src 'none'` blocks every external load, so the page has none.
+        for external in ["<link", "<img", "src=", "url(", "javascript:"] {
+            assert!(!TEMPLATE.contains(external), "no {external}");
+        }
         assert!(
             !TEMPLATE
                 .split(|c: char| c.is_whitespace())

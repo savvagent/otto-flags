@@ -14,7 +14,7 @@ From #71. The ticket was filed non-interactively from a brief whose decisions we
 > browser that lands on the origin should get a page that tells a person how to add the connector.
 >
 > **Acceptance criteria**
-> - [ ] Given a browser `Accept` header, `GET /` returns 200 HTML with the headers above and the
+> - [ ] Given a browser `Accept` header, `GET /` returns 200 HTML with the headers in the ticket's Approach (§6 here) and the
 >   configured connector address.
 > - [ ] `HEAD /` with a browser `Accept` header returns 200 with no body.
 > - [ ] `GET /` with `Accept: */*`, with `Accept: application/json`, or with an HTML `Accept` plus
@@ -28,7 +28,7 @@ From #71. The ticket was filed non-interactively from a brief whose decisions we
 >   https://otto-flags.savvagent.com/` returns the page, and plain `curl -s
 >   https://otto-flags.savvagent.com/` still returns the JSON 404.
 
-The headers, content, and look are fixed by the brief (quoted in §6).
+The headers, content, and look are fixed by the brief and restated in §6.
 
 ## 2. Premise corrections
 
@@ -46,8 +46,9 @@ The headers, content, and look are fixed by the brief (quoted in §6).
 ## 3. Assumptions
 
 - **What counts as a browser:** `Accept` has a media range exactly `text/html` (case-insensitive,
-  parameters allowed) whose `q` is greater than 0. A missing `q` means 1. An unparseable `q`
-  counts as 0, so the request is not served HTML. `text/*` and `*/*` do not count: curl and most
+  parameters allowed) whose `q` is greater than 0. A missing `q` means 1. A `q` that does not
+  parse, or is outside 0 to 1 (`inf`, `NaN`, `5`), counts as 0, so the request is not served
+  HTML. Harmless leniency is kept: a parameter without `=` is ignored, and the last `q` wins. `text/*` and `*/*` do not count: curl and most
   HTTP libraries send `*/*`, and they must keep the JSON. Several `Accept` headers are read
   together.
 - **Any `Authorization` header**, of any scheme and even an empty one, means "not a person on a
@@ -65,7 +66,8 @@ The headers, content, and look are fixed by the brief (quoted in §6).
   dev-dependencies (base64 through `[workspace.dependencies]`), so the server binary gains no
   dependency.
 - **Two copy buttons, one script:** one copies the connector address and one copies the Claude
-  Code command. Each button names its target element by id (`data-copy`). The script copies that
+  Code command. Each button names its target element by id (`data-copy`) and its
+  status region (`data-status`). The script copies that
   element's text, so it never contains the URL and its hash stays constant. Each copyable has its
   own `role="status"` region.
 - **The page is built once, in `router()`,** which runs once at startup. A test builds its own.
@@ -119,12 +121,14 @@ unaffected. axum panics at build time on a route registered twice, and the exist
 ### `crates/flags-server/src/install_page.rs`
 
 - `pub fn wants_html(headers: &HeaderMap) -> bool` implements the rule in §3.
-- `pub struct InstallPage { html: String }`. `InstallPage::new(connector_url, platform_url)`
-  replaces `{{CONNECTOR_URL}}` (every occurrence) and `{{PLATFORM_ORIGIN}}` in
+- `pub struct InstallPage { html: Bytes }`, so each response shares the page instead of copying it.
+  `InstallPage::new(connector_url, platform_url)` replaces `{{PLATFORM_ORIGIN}}` and then
+  `{{CONNECTOR_URL}}` (every occurrence) in
   `include_str!("install_page.html")` with HTML-escaped values (`&`, `<`, `>`, `"`, `'`). The
-  origin comes from `url::Url::parse(platform_url)` and `.origin().ascii_serialization()`, falling
-  back to `platform_url` with its trailing `/` trimmed. Config already requires both values to
-  parse as URLs (`url_var`).
+  origin comes from `url::Url::parse(platform_url)` and `.origin().ascii_serialization()` for an
+  http(s) URL. For anything else it is empty, so the links become same-origin paths and no
+  arbitrary scheme can reach an `href`. Config validates only `FLAGS_PLATFORM_URL` (`url_var`).
+  `FLAGS_RESOURCE_URI` is trusted operator config that is escaped and shown but never parsed.
 - `pub fn response(&self) -> Response` returns 200 with these headers:
   - `Content-Type: text/html; charset=utf-8`
   - `Cache-Control: public, max-age=3600`
@@ -200,7 +204,7 @@ None. There is no new config key (the change reuses `FLAGS_RESOURCE_URI` and
 
 ## 10. Error handling and edge cases
 
-- An `Accept` header that is not valid UTF-8 is ignored, as if it were absent.
+- An `Accept` value that is not visible ASCII is skipped. Any other `Accept` values are still read.
 - Duplicate `Accept` headers are all scanned.
 - `text/html;q=0` alone means no HTML. `text/html;q=0.1` means HTML. `TEXT/HTML` means HTML.
 - `Authorization` that is present but empty still means JSON.
@@ -231,7 +235,7 @@ Gates are as the section lists them, with `DATABASE_URL` set to the local Postgr
   - `POST /` gives the JSON 404, not 405, and carries no `Allow` header.
   - The 404 for `/` carries `Vary`, and the 404 for `/nope` does not.
   - `/nope` with HTML Accept gives the JSON 404.
-  - The existing unauthenticated `/mcp` test is kept. It is extended to send a browser Accept as
+  - The existing unauthenticated `/mcp` test is kept. It is extended to send `Accept: text/html` as
     well, and still expects 401 with `WWW-Authenticate`.
 
 ## 12. Risks and open questions

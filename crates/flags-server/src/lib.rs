@@ -73,8 +73,8 @@ pub fn router(
         .merge(mcp)
         .merge(api)
         // `any`, not `get`: a GET-only route would answer other methods
-        // with 405 (and add `Allow` to every response); `root` keeps them
-        // on the JSON 404.
+        // with 405 (and add `Allow` to its fallback's responses); `root`
+        // keeps them on the JSON 404.
         .route(
             "/",
             any(move |method: Method, headers: HeaderMap, uri: Uri| {
@@ -176,8 +176,9 @@ async fn not_found(uri: Uri) -> Response {
 }
 
 /// `/`: the connector install page for a person's browser, the JSON 404
-/// for everyone else (see [`install_page::wants_html`]). Both vary on
-/// `Accept` and `Authorization`, so a cache never swaps one for the other.
+/// for everyone else (see [`install_page::wants_html`]). For `GET`/`HEAD`
+/// both vary on `Accept` and `Authorization`, so a cache never swaps one for
+/// the other; other methods get the plain 404, which nothing caches.
 async fn root(
     page: Arc<install_page::InstallPage>,
     method: Method,
@@ -256,6 +257,7 @@ mod tests {
             .oneshot(
                 Request::post("/mcp")
                     .header("host", "flags.example.com")
+                    // A browser-like Accept must not reach the install page.
                     .header("accept", "text/html")
                     .body(Body::empty())
                     .unwrap(),
@@ -326,6 +328,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_query_string_still_gets_the_page() {
+        let (status, _, _) = request_root(
+            http::Method::GET,
+            "/?utm_source=otto",
+            &[("accept", BROWSER)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn head_at_the_root_gets_the_page_headers_and_no_body() {
         let (status, h, body) = request_root(http::Method::HEAD, "/", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::OK);
@@ -347,6 +360,10 @@ mod tests {
             assert_eq!(json(&body), the_json_404("/"), "{headers:?}");
             assert_eq!(h["vary"], "Accept, Authorization", "{headers:?}");
         }
+        let (status, h, body) = request_root(http::Method::HEAD, "/", &[("accept", "*/*")]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.is_empty());
+        assert_eq!(h["vary"], "Accept, Authorization");
         let (status, h, body) = request_root(http::Method::POST, "/", &[("accept", BROWSER)]).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json(&body), the_json_404("/"));
