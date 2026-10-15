@@ -167,8 +167,8 @@ class OttoFlagsClient(
                 }
 
                 // Fetch from API
-                val url = flagUrl(flagKey, "evaluate")
-                val json = userContext.toJson()
+                val url = evaluateUrl(flagKey)
+                val json = evaluationBody(userContext)
 
                 val request = Request.Builder()
                     .url(url)
@@ -186,15 +186,26 @@ class OttoFlagsClient(
 
                 val body = response.body?.string() ?: ""
                 val jsonResponse = JSONObject(body)
-                val enabled = jsonResponse.getBoolean("enabled")
+                // The result is "enabled" (docs/SDK-DEVELOPER-GUIDE.md). getBoolean would
+                // also accept the strings "true"/"false"; only a JSON boolean counts (#112).
+                val enabled = jsonResponse.opt("enabled") as? Boolean
+                    ?: return@withContext Result.failure(
+                        OttoFlagsException("The evaluate response has no boolean \"enabled\"")
+                    )
 
-                var configuration = if (jsonResponse.has("configuration")) {
+                // The server sends both fields, as null when the flag has none: isNull is
+                // true for a missing key and for JSON null.
+                var configuration = if (jsonResponse.isNull("configuration")) {
+                    null
+                } else {
                     jsonResponse.getJSONObject("configuration").toMap()
-                } else null
+                }
 
-                var variation = if (jsonResponse.has("variation")) {
+                var variation = if (jsonResponse.isNull("variation")) {
+                    null
+                } else {
                     jsonResponse.getString("variation")
-                } else null
+                }
 
                 // Update cache
                 flagCache[flagKey] = CacheEntry(enabled, configuration, variation)
@@ -260,43 +271,25 @@ class OttoFlagsClient(
 
     /**
      * Get a variation value for a feature flag (legacy method - kept for backward compatibility)
+     *
+     * The server has no variation endpoint: this evaluates the flag through [evaluate], so the
+     * cache and local variation overrides apply. It returns
+     * - the variation name when [defaultValue] is a `String` (or [defaultValue] when the flag
+     *   has no variation),
+     * - whether the flag is enabled when [defaultValue] is a `Boolean`,
+     * - [defaultValue] for any other type, and on any failure.
      */
+    @Suppress("UNCHECKED_CAST")
     suspend fun <T> getVariation(
         flagKey: String,
         userContext: UserContext,
         defaultValue: T
     ): T {
-        return withContext(Dispatchers.IO) {
-            try {
-                if (!isValidFlagKey(flagKey)) {
-                    logError(invalidKeyMessage(flagKey))
-                    return@withContext defaultValue
-                }
-
-                val url = flagUrl(flagKey, "variation")
-                val json = userContext.toJson()
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(json.toString().toRequestBody("application/json".toMediaType()))
-                    .addHeader("Authorization", "Bearer ${config.sdkKey}")
-                    .build()
-
-                val response = okHttpClient.newCall(request).execute()
-
-                if (!response.isSuccessful) {
-                    return@withContext defaultValue
-                }
-
-                val body = response.body?.string() ?: ""
-                val jsonResponse = JSONObject(body)
-
-                @Suppress("UNCHECKED_CAST")
-                (jsonResponse.get("value") as? T) ?: defaultValue
-            } catch (e: Exception) {
-                logError("Error getting variation: $flagKey", e)
-                defaultValue
-            }
+        val result = evaluate(flagKey, userContext).getOrNull() ?: return defaultValue
+        return when (defaultValue) {
+            is String -> (result.variation as T?) ?: defaultValue
+            is Boolean -> result.value as T
+            else -> defaultValue
         }
     }
 
@@ -560,17 +553,31 @@ class OttoFlagsClient(
     }
 
     /**
-     * Build `<apiUrl>/v1/flags/<flagKey>/<action>` with the key as a single, encoded
-     * path segment. An unparsable `apiUrl` throws IllegalArgumentException, which the
-     * callers' try blocks turn into their failure path.
+     * Build `<apiUrl>/api/flags/<flagKey>/evaluate` (docs/SDK-DEVELOPER-GUIDE.md) with the
+     * key as a single, encoded path segment. An unparsable `apiUrl` throws
+     * IllegalArgumentException, which the caller's try block turns into its failure path.
      */
-    internal fun flagUrl(flagKey: String, action: String): HttpUrl =
+    internal fun evaluateUrl(flagKey: String): HttpUrl =
         config.apiUrl.toHttpUrl().newBuilder()
-            .addPathSegment("v1")
+            .addPathSegment("api")
             .addPathSegment("flags")
             .addPathSegment(flagKey)
-            .addPathSegment(action)
+            .addPathSegment("evaluate")
             .build()
+
+    /**
+     * The evaluate request body the SDK guide documents: `{"context": {...}}` with the
+     * server's snake_case context fields. [UserContext.toJson] is the `track` event shape,
+     * which the server does not read here.
+     */
+    internal fun evaluationBody(userContext: UserContext): JSONObject =
+        JSONObject().apply {
+            put("context", JSONObject().apply {
+                put("user_id", userContext.userId)
+                put("environment", config.environment)
+                put("attributes", JSONObject(userContext.attributes))
+            })
+        }
 
     private fun invalidKeyMessage(flagKey: String): String =
         "Invalid flag key ${escapeForMessage(flagKey.take(64))} (${flagKey.length} characters); not evaluated"

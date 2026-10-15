@@ -41,7 +41,7 @@ class OttoFlagsClientNetworkTest {
         mockWebServer.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody("""{"enabled": true, "flagKey": "test-flag"}""")
+                .setBody("""{"enabled": true, "key": "test-flag"}""")
                 .addHeader("Content-Type", "application/json")
         )
 
@@ -52,7 +52,7 @@ class OttoFlagsClientNetworkTest {
         assertTrue(result.getOrDefault(false))
 
         val request = mockWebServer.takeRequest()
-        assertEquals("/v1/flags/test-flag/evaluate", request.path)
+        assertEquals("/api/flags/test-flag/evaluate", request.path)
         assertEquals("POST", request.method)
         assertEquals("Bearer test-key", request.getHeader("Authorization"))
     }
@@ -62,7 +62,7 @@ class OttoFlagsClientNetworkTest {
         mockWebServer.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody("""{"enabled": false, "flagKey": "test-flag"}""")
+                .setBody("""{"enabled": false, "key": "test-flag"}""")
                 .addHeader("Content-Type", "application/json")
         )
 
@@ -134,11 +134,13 @@ class OttoFlagsClientNetworkTest {
         client.isEnabled("test-flag", context)
 
         val request = mockWebServer.takeRequest()
-        val body = request.body.readUtf8()
+        val body = org.json.JSONObject(request.body.readUtf8())
 
-        assertTrue(body.contains("user-456"))
-        assertTrue(body.contains("email"))
-        assertTrue(body.contains("test@example.com"))
+        // {"context": {...}} with snake_case fields (docs/SDK-DEVELOPER-GUIDE.md, #112).
+        val sent = body.getJSONObject("context")
+        assertEquals("user-456", sent.getString("user_id"))
+        assertEquals("test", sent.getString("environment"))
+        assertEquals("test@example.com", sent.getJSONObject("attributes").getString("email"))
     }
 
     @Test
@@ -146,13 +148,46 @@ class OttoFlagsClientNetworkTest {
         mockWebServer.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody("""{"value": "dark-mode"}""")
+                .setBody("""{"key": "theme", "enabled": true, "variation": "dark-mode", "configuration": null}""")
         )
 
         val context = UserContext(userId = "user-123")
         val value = client.getVariation("theme", context, "light")
 
         assertEquals("dark-mode", value)
+        // The server has no variation endpoint; getVariation evaluates the flag (#112).
+        assertEquals("/api/flags/theme/evaluate", mockWebServer.takeRequest().path)
+    }
+
+    @Test
+    fun testEvaluateAcceptsNullVariationAndConfiguration() = runTest {
+        mockWebServer.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"key": "test-flag", "enabled": true, "scope": "application", "variation": null, "configuration": null, "timestamp": 1700000000, "version": 3, "context": {}}"""
+                )
+        )
+
+        val result = client.evaluate("test-flag", UserContext(userId = "user-123"))
+
+        assertTrue(result.isSuccess)
+        val evaluation = result.getOrThrow()
+        assertTrue(evaluation.value)
+        assertNull(evaluation.variation)
+        assertNull(evaluation.configuration)
+    }
+
+    @Test
+    fun testEvaluateWithoutBooleanEnabledFails() = runTest {
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("""{"value": true}"""))
+        mockWebServer.enqueue(MockResponse().setResponseCode(200).setBody("""{"enabled": "true"}"""))
+
+        val context = UserContext(userId = "user-123")
+        assertTrue(client.evaluate("test-flag", context).isFailure)
+        assertTrue(client.evaluate("test-flag", context).isFailure)
+        // Not cached: the second lookup asks the server again.
+        assertEquals(2, mockWebServer.requestCount)
     }
 
     @Test
@@ -173,13 +208,15 @@ class OttoFlagsClientNetworkTest {
         mockWebServer.enqueue(
             MockResponse()
                 .setResponseCode(200)
-                .setBody("""{"value": 100}""")
+                .setBody("""{"key": "max-items", "enabled": true, "variation": "big", "configuration": null}""")
         )
 
         val context = UserContext(userId = "user-123")
         val value = client.getVariation("max-items", context, 10)
 
-        assertEquals(100, value)
+        // The evaluate response has no numeric value; a non-String, non-Boolean default
+        // comes back unchanged.
+        assertEquals(10, value)
     }
 
     @Test

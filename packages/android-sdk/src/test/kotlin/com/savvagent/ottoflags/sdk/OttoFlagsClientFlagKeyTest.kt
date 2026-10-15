@@ -67,8 +67,8 @@ class OttoFlagsClientFlagKeyTest {
         assertFalse(OttoFlagsClient.isValidFlagKey("\u0661"))
     }
 
-    // On a plain JVM this cannot tell the fix from no fix: without the guard, toJson()
-    // hits the org.json stub and getVariation falls back to the default anyway.
+    // On a plain JVM this cannot tell the fix from no fix: without the guard, the request
+    // body hits the org.json stub and getVariation falls back to the default anyway.
     // keyRuleBoundaries and the evaluate test carry the regression check.
     @Test
     fun getVariationReturnsDefaultForInvalidKeysWithoutARequest() = runTest {
@@ -90,17 +90,17 @@ class OttoFlagsClientFlagKeyTest {
         assertFalse(message, message.contains('\u0000'))
     }
 
-    // Checked on the URL builder directly: a network round trip would go through
-    // UserContext.toJson(), and org.json is a stub in local JVM unit tests.
+    // Checked on the URL builder directly: a network round trip would build its body
+    // with org.json, which is a stub in local JVM unit tests.
     @Test
-    fun validKeyKeepsTheExistingPaths() {
+    fun validKeyUsesTheDocumentedEvaluatePath() {
         assertEquals(
-            "/v1/flags/new-checkout.v2_b/evaluate",
-            client.flagUrl("new-checkout.v2_b", "evaluate").encodedPath
+            "/api/flags/new-checkout.v2_b/evaluate",
+            client.evaluateUrl("new-checkout.v2_b").encodedPath
         )
         assertEquals(
-            "/v1/flags/.../variation",
-            client.flagUrl("...", "variation").encodedPath
+            "/api/flags/.../evaluate",
+            client.evaluateUrl("...").encodedPath
         )
     }
 }
