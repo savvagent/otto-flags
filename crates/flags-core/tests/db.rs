@@ -1672,6 +1672,82 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
     tx.commit().await.unwrap();
 }
 
+// A public client key can report any number of error types and spellings.
+// Server-key groups are fetched apart from client ones and keep slots in
+// the answer, so client reports cannot hide what the server reported (#70).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_keeps_server_errors_among_client_floods(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now();
+    let error = |error_type: String| ErrorEvent {
+        flag_key: "f".into(),
+        flag_enabled: true,
+        environment: Some("production".into()),
+        error_type,
+        error_message: "boom".into(),
+        stack_trace: None,
+        at: now,
+    };
+    // 120 spellings of one junk type (3 each) fill a shared fetch of 100,
+    // and 20 other client types (5 each) outrank every server type.
+    let mut flood: Vec<ErrorEvent> = (1..=120)
+        .flat_map(|k| {
+            let t = format!("Junk{}", "\u{200B}".repeat(k));
+            (0..3).map(move |_| t.clone())
+        })
+        .map(error)
+        .collect();
+    flood.extend(
+        (0..20)
+            .flat_map(|i| (0..5).map(move |_| format!("C{i:02}")))
+            .map(error),
+    );
+    for batch in flood.chunks(telemetry::MAX_BATCH) {
+        telemetry::record_errors(&mut tx, app.id, KeyKind::Client, batch.to_vec())
+            .await
+            .unwrap();
+    }
+    let server = ["S0", "S1", "S2"].map(|t| error(t.into())).to_vec();
+    telemetry::record_errors(&mut tx, app.id, KeyKind::Server, server)
+        .await
+        .unwrap();
+
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    assert_eq!(h.top_errors.len(), 10);
+    let server: Vec<&str> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.reporter == KeyKind::Server)
+        .map(|g| g.error_type.as_str())
+        .collect();
+    assert_eq!(server, ["S0", "S1", "S2"]);
+    assert!(h
+        .top_errors
+        .iter()
+        .filter(|g| g.reporter == KeyKind::Client)
+        .all(|g| g.count >= 5));
+    tx.commit().await.unwrap();
+}
+
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn telemetry_records_the_reporting_key_kind(pool: PgPool) {
     let db = db(pool).await;

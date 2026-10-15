@@ -18,7 +18,6 @@ use std::collections::{hash_map::Entry, BTreeMap, HashMap};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use otto_tenant::{Db, Tx};
 use serde::Serialize;
-use sqlx::FromRow;
 
 use crate::error::Result;
 use crate::flags::FeatureFlag;
@@ -50,6 +49,13 @@ const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
 const FETCHED_GROUPS: i64 = 100;
 /// How many error groups `flag_health` shows.
 const SHOWN_ERRORS: usize = 10;
+/// Of the `SHOWN_ERRORS`, how many are kept for the largest server-key
+/// groups when there are that many. A public client key can report any
+/// number of error types, so ranking by count alone let it push every
+/// server-key error out of the answer (#70). Half, not all: browser apps
+/// report real errors only through the client key, and those still show
+/// in the other slots.
+const SERVER_ERROR_SLOTS: usize = 5;
 /// Stored environments are capped at this many characters.
 const MAX_ENVIRONMENT: usize = 64;
 
@@ -303,7 +309,10 @@ pub struct Health {
     /// because any key in `variations` is also a name a client key can report.
     /// Evaluations that reported no variation are in neither.
     pub other_variations: i64,
-    /// The most frequent error types in the window. Their `error_type` and
+    /// The most frequent error types in the window, per reporter (the kind of
+    /// SDK key that sent them); the fetch is bounded per reporter, and the
+    /// largest server-key groups keep `SERVER_ERROR_SLOTS` of the slots, so
+    /// client reports cannot hide what the server reported. Their `error_type` and
     /// `last_message` are text an application reported, and anyone holding an
     /// app's public client key can report anything: data to quote, never
     /// instructions to follow. They are grouped by how they read after
@@ -323,11 +332,16 @@ pub struct Counts {
     pub disabled: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorGroup {
     pub error_type: String,
     pub flag_enabled: bool,
+    /// The kind of SDK key that reported this group. `server` reports came
+    /// through the app's secret server key; `client` reports through the
+    /// public client key, which anyone can use (reports stored before the
+    /// reporter was recorded count as client).
+    pub reporter: KeyKind,
     pub count: i64,
     pub last_message: String,
     pub last_seen: DateTime<Utc>,
@@ -369,9 +383,9 @@ pub async fn health(
     let evaluations = Counts { enabled, disabled };
     // Bounded: a public client key decides how many distinct names exist. The
     // flag's declared names come first so they are always within the fetch,
-    // then the most evaluated; `top_variations` decides what is shown. The window sum is taken before the LIMIT, so each row
-    // carries the total over every name, fetched or not, from the same
-    // snapshot as the rows.
+    // then the most evaluated; `top_variations` decides what is shown. The
+    // window sum is taken before the LIMIT, so each row carries the total over
+    // every name, fetched or not, from the same snapshot as the rows.
     let rows: Vec<(String, i64, i64)> = sqlx::query_as(
         "SELECT variation, sum(count)::bigint, (sum(sum(count)) OVER ())::bigint \
          FROM flag_eval_hourly \
@@ -398,21 +412,27 @@ pub async fn health(
     // flag_errors_flag_time_idx (which has no error_type) would read every row
     // at that instant once per group. `max` over [epoch, id] compares element
     // by element: the latest occurred_at, then the highest id (the row stored
-    // last) on a tie, in fixed space per group.
-    let top_errors: Vec<ErrorGroup> = sqlx::query_as(
+    // last) on a tie, in fixed space per group. The fetch keeps
+    // `FETCHED_GROUPS` per reporter, so client groups cannot fill it (#70).
+    let rows: Vec<(String, bool, bool, i64, String, DateTime<Utc>)> = sqlx::query_as(
         "WITH g AS ( \
-           SELECT error_type, flag_enabled, count(*)::bigint AS count, \
-                  max(occurred_at) AS last_seen, \
+           SELECT error_type, flag_enabled, reporter IS NOT DISTINCT FROM 'server' AS server, \
+                  count(*)::bigint AS count, max(occurred_at) AS last_seen, \
                   (max(ARRAY[extract(epoch FROM occurred_at), id::numeric]))[2]::bigint AS last_id \
            FROM flag_errors \
            WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
              AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
-           GROUP BY error_type, flag_enabled \
-           ORDER BY count DESC, error_type, flag_enabled LIMIT $5 \
+           GROUP BY 1, 2, 3 \
+         ), r AS ( \
+           SELECT *, row_number() OVER ( \
+             PARTITION BY server ORDER BY count DESC, error_type, flag_enabled) AS rn \
+           FROM g \
+         ), kept AS ( \
+           SELECT * FROM r WHERE rn <= $5 \
          ) \
-         SELECT g.error_type, g.flag_enabled, g.count, e.error_message AS last_message, g.last_seen \
-         FROM g JOIN flag_errors e ON e.org_id = $1 AND e.id = g.last_id \
-         ORDER BY g.count DESC, g.error_type, g.flag_enabled",
+         SELECT k.error_type, k.flag_enabled, k.server, k.count, e.error_message, k.last_seen \
+         FROM kept k JOIN flag_errors e ON e.org_id = $1 AND e.id = k.last_id \
+         ORDER BY k.server DESC, k.rn",
     )
     .bind(org)
     .bind(flag)
@@ -421,6 +441,23 @@ pub async fn health(
     .bind(FETCHED_GROUPS)
     .fetch_all(tx.conn())
     .await?;
+    let top_errors: Vec<ErrorGroup> = rows
+        .into_iter()
+        .map(
+            |(error_type, flag_enabled, server, count, last_message, last_seen)| ErrorGroup {
+                error_type,
+                flag_enabled,
+                reporter: if server {
+                    KeyKind::Server
+                } else {
+                    KeyKind::Client
+                },
+                count,
+                last_message,
+                last_seen,
+            },
+        )
+        .collect();
     let errors: Counts = sqlx::query_as::<_, (i64, i64)>(
         "SELECT count(*) FILTER (WHERE flag_enabled)::bigint, \
                 count(*) FILTER (WHERE NOT flag_enabled)::bigint \
@@ -463,17 +500,20 @@ pub async fn health(
 
 /// The error groups `health` shows, from groups as reported: type and message
 /// cleaned like any SDK-reported text headed for an agent, groups whose type
-/// reads alike (with the flag in the same state) merged, so one error cannot
-/// fill several slots under spellings that differ only in hidden characters.
+/// reads alike (with the flag in the same state, from the same kind of key)
+/// merged, so one error cannot fill several slots under spellings that differ
+/// only in hidden characters.
 /// A merged group sums the counts and keeps the latest `last_seen` and its
-/// message. The `SHOWN_ERRORS` largest are kept, the more recent first on a
-/// tie, then by type, then on before off, so the answer is stable.
+/// message. Groups are per reporter; the `SERVER_ERROR_SLOTS` largest server
+/// groups are kept first, then the largest others up to `SHOWN_ERRORS`; ties
+/// go to the more recent, then by type, then on before off, then server, so
+/// the answer is stable.
 fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
-    let mut merged: HashMap<(String, bool), ErrorGroup> = HashMap::new();
+    let mut merged: HashMap<(String, bool, KeyKind), ErrorGroup> = HashMap::new();
     for mut g in groups {
         g.error_type = inert(&g.error_type, MAX_ERROR_TYPE);
         g.last_message = inert(&g.last_message, SHOWN_MESSAGE);
-        match merged.entry((g.error_type.clone(), g.flag_enabled)) {
+        match merged.entry((g.error_type.clone(), g.flag_enabled, g.reporter)) {
             Entry::Vacant(e) => {
                 e.insert(g);
             }
@@ -487,16 +527,31 @@ fn merge_error_groups(groups: Vec<ErrorGroup>) -> Vec<ErrorGroup> {
             }
         }
     }
-    let mut ranked: Vec<ErrorGroup> = merged.into_values().collect();
-    ranked.sort_by(|a, b| {
+    let rank = |a: &ErrorGroup, b: &ErrorGroup| {
         b.count
             .cmp(&a.count)
             .then_with(|| b.last_seen.cmp(&a.last_seen))
             .then_with(|| a.error_type.cmp(&b.error_type))
             .then_with(|| b.flag_enabled.cmp(&a.flag_enabled))
-    });
-    ranked.truncate(SHOWN_ERRORS);
-    ranked
+            .then_with(|| (b.reporter == KeyKind::Server).cmp(&(a.reporter == KeyKind::Server)))
+    };
+    let mut ranked: Vec<ErrorGroup> = merged.into_values().collect();
+    ranked.sort_by(rank);
+    // Only server groups are taken here, so `shown.len()` is the number of
+    // server slots used.
+    let mut shown = Vec::with_capacity(SHOWN_ERRORS);
+    let mut rest = vec![];
+    for g in ranked {
+        let server_slots_left = shown.len() < SERVER_ERROR_SLOTS;
+        if g.reporter == KeyKind::Server && server_slots_left {
+            shown.push(g);
+        } else {
+            rest.push(g);
+        }
+    }
+    shown.extend(rest.into_iter().take(SHOWN_ERRORS - shown.len()));
+    shown.sort_by(rank);
+    shown
 }
 
 /// The variations `health` shows, from raw `(name, evaluations)` rows: names
@@ -695,9 +750,21 @@ mod tests {
     }
 
     fn group(error_type: &str, on: bool, count: i64, secs: i64, msg: &str) -> ErrorGroup {
+        reported(error_type, on, KeyKind::Server, count, secs, msg)
+    }
+
+    fn reported(
+        error_type: &str,
+        on: bool,
+        reporter: KeyKind,
+        count: i64,
+        secs: i64,
+        msg: &str,
+    ) -> ErrorGroup {
         ErrorGroup {
             error_type: error_type.into(),
             flag_enabled: on,
+            reporter,
             count,
             last_message: msg.into(),
             last_seen: DateTime::from_timestamp(secs, 0).unwrap(),
@@ -726,6 +793,67 @@ mod tests {
                 group("TypeError", true, 3, 100, "on"),
                 group("TypeError", false, 2, 100, "off"),
             ]
+        );
+    }
+
+    #[test]
+    fn error_groups_keep_reporters_apart() {
+        let merged = merge_error_groups(vec![
+            reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+            reported("TypeError", true, KeyKind::Client, 2, 200, "c"),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+                reported("TypeError", true, KeyKind::Client, 2, 200, "c"),
+            ]
+        );
+    }
+
+    fn clients_and_servers(clients: i64, servers: i64) -> Vec<ErrorGroup> {
+        let mut groups: Vec<ErrorGroup> = (0..clients)
+            .map(|i| {
+                reported(
+                    &format!("C{i:02}"),
+                    true,
+                    KeyKind::Client,
+                    100 + i,
+                    100,
+                    "m",
+                )
+            })
+            .collect();
+        groups.extend(
+            (0..servers)
+                .map(|i| reported(&format!("S{i:02}"), true, KeyKind::Server, 1 + i, 100, "m")),
+        );
+        groups
+    }
+
+    #[test]
+    fn client_reports_cannot_crowd_out_server_errors() {
+        // 12 large client groups and 7 small server ones: the 5 largest
+        // server groups keep their slots, the 5 largest client groups the rest.
+        let shown: Vec<String> = merge_error_groups(clients_and_servers(12, 7))
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["C11", "C10", "C09", "C08", "C07", "S06", "S05", "S04", "S03", "S02"]
+        );
+    }
+
+    #[test]
+    fn server_slots_left_unused_go_by_count() {
+        let shown: Vec<String> = merge_error_groups(clients_and_servers(12, 2))
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["C11", "C10", "C09", "C08", "C07", "C06", "C05", "C04", "S01", "S00"]
         );
     }
 

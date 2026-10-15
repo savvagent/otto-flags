@@ -626,6 +626,7 @@ async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
         json!({"control": 0, "treatment": 0})
     );
     assert_eq!(health["health"]["otherVariations"], 0);
+    assert_eq!(health["health"]["topErrors"][0]["reporter"], "client");
     assert!(
         health["health"]["assessment"]
             .as_str()
