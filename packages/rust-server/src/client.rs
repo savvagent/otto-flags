@@ -22,6 +22,22 @@ pub enum OttoFlagsError {
     ApiError(String),
 }
 
+/// Whether the server could hold this flag key, and a URL path can address it.
+///
+/// Mirrors the server's key rule (1-128 ASCII letters, digits, `-`, `_`, `.`; `validate_key` in
+/// `crates/flags-core/src/flags.rs`), so refusing anything else loses no flag. `.` and `..` pass
+/// that rule but no URL can carry them as a path segment (the `url` crate drops them, and
+/// WHATWG parsing treats `%2e` as a dot segment), so they would reach another endpoint (#95).
+fn is_valid_flag_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key != "."
+        && key != ".."
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
 /// Otto Flags FlagClient for server-side feature flag evaluation
 #[derive(Clone)]
 pub struct FlagClient {
@@ -68,6 +84,19 @@ impl FlagClient {
         flag_key: &str,
         context: Option<Context>,
     ) -> Result<EvaluationResult, OttoFlagsError> {
+        // A key no flag can have would only change which endpoint the request (and its SDK
+        // key) reaches; it gets its default without a request.
+        if !is_valid_flag_key(flag_key) {
+            // Host code may build keys from input: log a bounded, escaped prefix.
+            let shown: String = flag_key.chars().take(64).collect();
+            tracing::warn!(
+                "Flag key {:?} ({} bytes) is not a valid flag key; using its default",
+                shown,
+                flag_key.len()
+            );
+            return self.get_default_result(flag_key);
+        }
+
         // Prepare context: the cache key and the request body use the same one.
         let mut ctx = context.unwrap_or_default();
         if ctx.application_id.is_none() {
@@ -122,12 +151,12 @@ impl FlagClient {
         }
 
         // Make API request
-        let url = format!("{}/api/flags/{}/evaluate", self.config.base_url, flag_key);
+        let url = self.evaluate_url(flag_key)?;
         let body = json!({ "context": ctx });
 
         let response = self
             .http_client
-            .post(&url)
+            .post(url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .json(&body)
             .send()
@@ -201,6 +230,18 @@ impl FlagClient {
             reason: "evaluated".to_string(),
             metadata: Some(metadata),
         })
+    }
+
+    /// `<base_url>/api/flags/<key>/evaluate`, with the key as one encoded path segment and any
+    /// path prefix in `base_url` kept.
+    fn evaluate_url(&self, flag_key: &str) -> Result<reqwest::Url, OttoFlagsError> {
+        let mut url = reqwest::Url::parse(&self.config.base_url)
+            .map_err(|e| OttoFlagsError::ApiError(format!("invalid base_url: {e}")))?;
+        url.path_segments_mut()
+            .map_err(|()| OttoFlagsError::ApiError("invalid base_url: cannot be a base".into()))?
+            .pop_if_empty()
+            .extend(["api", "flags", flag_key, "evaluate"]);
+        Ok(url)
     }
 
     /// Check if a flag is enabled (convenience method)
@@ -446,6 +487,34 @@ impl FlagClient {
                 serde_json::Value::Object(result)
             }
             _ => override_val.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_flag_key;
+
+    #[test]
+    fn flag_keys_follow_the_server_rule_minus_dot_segments() {
+        let longest = "k".repeat(128);
+        let too_long = "k".repeat(129);
+        for ok in ["a", "My.flag_1-x", "...", longest.as_str()] {
+            assert!(is_valid_flag_key(ok), "{ok:?}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            too_long.as_str(),
+            "a/b",
+            "a?b",
+            "a#b",
+            "a%2Fb",
+            " a",
+            "\u{e9}",
+        ] {
+            assert!(!is_valid_flag_key(bad), "{bad:?}");
         }
     }
 }

@@ -4,7 +4,7 @@
 
 use otto_flags::{Config, Context, FlagClient, OttoFlagsError, VariationResult};
 use serde_json::json;
-use wiremock::matchers::{body_partial_json, header, method, path};
+use wiremock::matchers::{any, body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const KEY: &str = "sdk_test_key";
@@ -489,4 +489,71 @@ async fn the_configured_application_id_is_part_of_the_cached_context() {
     let other = client.evaluate("test-flag", Some(other_app)).await.unwrap();
     assert_eq!(other.reason, "evaluated");
     assert!(!other.value);
+}
+
+/// A key that no flag can have makes no request and falls back to its default (#95).
+async fn refuses_without_a_request(flag: &str) {
+    let server = MockServer::start().await;
+    Mock::given(any())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": false })))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_default(flag, true),
+    )
+    .unwrap();
+
+    let result = client.evaluate(flag, None).await.unwrap();
+    assert!(result.value, "{flag:?} should fall back to its default");
+    assert_eq!(result.reason, "error");
+    assert!(client.is_enabled(flag, None).await);
+}
+
+#[tokio::test]
+async fn a_key_with_path_or_query_characters_is_refused_without_a_request() {
+    for flag in [
+        "a/b?c",
+        "../../api/sdk/flags",
+        "x#y",
+        "50%",
+        "two words",
+        "",
+        ".",
+        "..",
+    ] {
+        refuses_without_a_request(flag).await;
+    }
+}
+
+#[tokio::test]
+async fn a_key_using_every_allowed_character_reaches_its_own_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/My.flag_1-x/evaluate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(client(&server).is_enabled("My.flag_1-x", None).await);
+}
+
+#[tokio::test]
+async fn a_base_url_path_prefix_is_kept_with_or_without_a_trailing_slash() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/flags/api/flags/test-flag/evaluate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": true })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    for base in [
+        format!("{}/flags/", server.uri()),
+        format!("{}/flags", server.uri()),
+    ] {
+        let client = FlagClient::new(Config::new(KEY).with_base_url(base)).unwrap();
+        assert!(client.is_enabled("test-flag", None).await);
+    }
 }
