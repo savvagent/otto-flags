@@ -1632,6 +1632,58 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
     assert_eq!(left, 0);
 }
 
+/// The shipper on the default test pool, whose superuser role RLS does not
+/// apply to: its maintenance transactions drop into `otto_app` (#73), so this
+/// proves the outbox's marker policies let it claim, delete, and record
+/// rejections for every org.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_shipper_reaches_every_org_on_the_superuser_pool(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let insert = |org: Uuid| {
+        let pool = s.db.pool().clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+                 VALUES ($1, NULL, 'create_flag', true)",
+            )
+            .bind(org)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    let count = |table: &'static str| {
+        let pool = s.db.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(&format!("SELECT count(DISTINCT org_id) FROM {table}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+
+    insert(a).await;
+    insert(b).await;
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(platform.lock().unwrap().shipped, 2);
+    assert_eq!(count("usage_outbox").await, 0);
+
+    platform.lock().unwrap().reject_with = Some("unknown org".into());
+    insert(a).await;
+    insert(b).await;
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(count("usage_outbox").await, 0);
+    assert_eq!(count("usage_outbox_rejected").await, 2);
+}
+
 async fn row_count(pool: &PgPool, table: &str) -> i64 {
     sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
         .fetch_one(pool)
