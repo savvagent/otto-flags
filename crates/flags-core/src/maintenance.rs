@@ -2,7 +2,8 @@
 //! read or sweep tenant tables across every org.
 //!
 //! The unpinned row-level policies (`rollback_policies_checker`, the
-//! `*_retention_read` policies, `rollback_events_retention`) grant access only
+//! `*_retention_read` policies, `rollback_events_retention`, 0006's
+//! `flag_versions_retention`) grant access only
 //! when no org is pinned **and** the transaction carries the marker
 //! `app.maintenance = 'on'` (#27). Unpinned alone is not enough: a request
 //! path that forgot to pin an org is unpinned too, and must see nothing. The

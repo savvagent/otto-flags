@@ -7,6 +7,11 @@
 //! transaction, so a failed call leaves no trace and a successful one leaves
 //! exactly one version.
 //!
+//! History is the audit trail of flag changes, so no write removes any of it.
+//! Only the hourly background sweep ([`sweep_versions`]) does, and only for
+//! versions both older than [`VERSION_RETENTION_DAYS`] and outside their
+//! flag's newest [`MIN_RETAINED_VERSIONS`] (#123).
+//!
 //! Writes lock the flag row (`FOR NO KEY UPDATE`) before computing the new
 //! state, so two agents changing different environments of one flag at once
 //! both land: the second waits for the first and merges into its result
@@ -19,7 +24,7 @@
 //! KEY UPDATE` conflicts with itself.
 
 use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Tx;
+use otto_tenant::{Db, Tx};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::FromRow;
@@ -144,6 +149,26 @@ pub struct ChangeMeta {
 
 const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
                     variations, configuration, version, created_at, updated_at, archived_at";
+
+/// Flag versions younger than this are never removed (#123).
+///
+/// `flag_versions` is the audit trail of flag changes (see [`crate::audit`]),
+/// so retention is by age, not by count: however many writes follow a change,
+/// it stays on record this long, and a caller cannot erase a change by making
+/// more of them. 90 days is the retention of rollback events and evaluation
+/// rollups (`telemetry::EVAL_RETENTION_DAYS`) and `flag_health`'s longest
+/// window, so a change and the health data it can be judged by age out
+/// together.
+pub const VERSION_RETENTION_DAYS: i32 = 90;
+
+/// A flag's newest versions, which are kept however old they are (#123), so
+/// a flag changed rarely keeps its rollback depth and its last known-good
+/// state. The current version is always among them.
+pub const MIN_RETAINED_VERSIONS: i32 = 100;
+
+/// Rows [`sweep_versions`] deletes per transaction, to keep each one short on
+/// the small shared database.
+const SWEEP_BATCH: i64 = 1_000;
 
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
@@ -691,6 +716,42 @@ async fn record_version(
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// Retention: delete flag versions older than [`VERSION_RETENTION_DAYS`] that
+/// are not among their flag's newest [`MIN_RETAINED_VERSIONS`], across every
+/// org. Background code only (`flags-server`'s hourly sweep): each batch of at
+/// most [`SWEEP_BATCH`] rows runs in its own maintenance transaction
+/// ([`crate::maintenance`]), which migration 0006's policies require. Returns
+/// the number of rows deleted.
+///
+/// A flag's newest version is its current one (every change records one), so
+/// the newest 100 are measured from `max(version)` without reading
+/// `feature_flags`.
+pub async fn sweep_versions(db: &Db) -> Result<u64> {
+    let mut swept = 0;
+    loop {
+        let mut tx = crate::maintenance::begin(db).await?;
+        let n = sqlx::query(
+            "DELETE FROM flag_versions WHERE id IN ( \
+               SELECT v.id FROM flag_versions v \
+                WHERE v.created_at < now() - make_interval(days => $1) \
+                  AND v.version <= (SELECT max(w.version) FROM flag_versions w \
+                                     WHERE w.flag_id = v.flag_id) - $2 \
+                LIMIT $3)",
+        )
+        .bind(VERSION_RETENTION_DAYS)
+        .bind(MIN_RETAINED_VERSIONS)
+        .bind(SWEEP_BATCH)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        tx.commit().await?;
+        swept += n;
+        if n < SWEEP_BATCH as u64 {
+            return Ok(swept);
+        }
+    }
 }
 
 // ------------------------------------------------------------ the SDK's view

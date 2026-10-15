@@ -55,8 +55,9 @@ impl Flags {
     #[tool(
         name = "flag_history",
         description = "Every version of a flag, newest first: what changed, who changed it, why, \
-                       and the full state at that version. rollback_flag can restore any of them. \
-                       Free.",
+                       and the full state at that version. Versions older than 90 days are \
+                       removed once the flag has 100 newer ones. rollback_flag can restore any \
+                       of them. Free.",
         annotations(read_only_hint = true)
     )]
     pub async fn flag_history(
