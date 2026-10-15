@@ -5491,18 +5491,23 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
 /// Textual, over each workspace crate's non-test `src`: comment lines and the
 /// trailing `#[cfg(test)] mod tests` are skipped (it must be the file's last
 /// item). It counts the ways to an unconstrained connection: `otto_tenant::Db`'s
-/// `.pool()` and `begin_unpinned`, its `audit_global` / `audit_for_org` (which
-/// write on the pool), and any `PgPool` (`PgPoolOptions` included) held or
-/// built outside a `Db`. It cannot see an alias or a reformatted call such as
+/// `.pool()` and `begin_unpinned`, its audit helpers that run on the pool
+/// (`audit_global`, `audit_for_org`, `audit_trail_for_user`), any `PgPool`
+/// (`PgPoolOptions` included) held or built outside a `Db`, and a connection
+/// opened beside the pool. It cannot see an alias or a reformatted call such as
 /// `Db::pool(&db)`.
 #[test]
 fn no_raw_pool_queries_outside_the_allowed_sites() {
-    const PATTERNS: [&str; 5] = [
+    // `Connection::connect` also covers `PgConnection::connect`.
+    const PATTERNS: [&str; 8] = [
         ".pool()",
         "begin_unpinned",
         "audit_global(",
         "audit_for_org(",
+        "audit_trail_for_user(",
         "PgPool",
+        "PgListener::connect(",
+        "Connection::connect",
     ];
     let allowed: BTreeMap<&str, usize> = BTreeMap::from([
         // The helper itself: opens the transaction it then drops into the

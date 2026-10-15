@@ -12,8 +12,9 @@
 //! hash is enough; there is nothing for a slow KDF to protect.
 //!
 //! Resolution runs unpinned, as the tenant role (`crate::unpinned`), because
-//! the org is exactly what the key is being resolved to. `app_keys` is outside row-level security for that
-//! reason, and every statement here names the key hash explicitly.
+//! the org is exactly what the key is being resolved to. `app_keys` is outside
+//! row-level security for that reason, and every statement here names the key
+//! hash explicitly.
 
 use otto_tenant::ids::OrgId;
 use otto_tenant::Db;

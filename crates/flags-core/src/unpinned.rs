@@ -96,6 +96,9 @@ pub(crate) async fn begin_as_tenant_role(
         pool_exempt
     };
     if runs_exempt {
+        // Roll back now rather than on drop, so the role switch (taken when
+        // the tenant role itself is exempt) visibly never outlives the refusal.
+        tx.rollback().await?;
         let kind = if maintenance {
             "maintenance"
         } else {
