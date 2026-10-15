@@ -57,6 +57,20 @@ class OttoFlagsClientFlagKeyTest {
     }
 
     @Test
+    fun keyRuleBoundaries() {
+        assertTrue(OttoFlagsClient.isValidFlagKey("a".repeat(128)))
+        assertFalse(OttoFlagsClient.isValidFlagKey("a".repeat(129)))
+        assertTrue(OttoFlagsClient.isValidFlagKey("..."))
+        assertFalse(OttoFlagsClient.isValidFlagKey(" flag"))
+        assertFalse(OttoFlagsClient.isValidFlagKey("flag "))
+        assertFalse(OttoFlagsClient.isValidFlagKey("fl\u00e9g"))
+        assertFalse(OttoFlagsClient.isValidFlagKey("\u0661"))
+    }
+
+    // On a plain JVM this cannot tell the fix from no fix: without the guard, toJson()
+    // hits the org.json stub and getVariation falls back to the default anyway.
+    // keyRuleBoundaries and the evaluate test carry the regression check.
+    @Test
     fun getVariationReturnsDefaultForInvalidKeysWithoutARequest() = runTest {
         val context = UserContext(userId = "user-123")
         for (key in invalidKeys) {

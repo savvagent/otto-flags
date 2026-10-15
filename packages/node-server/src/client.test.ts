@@ -433,7 +433,7 @@ describe('FlagClient', () => {
     beforeEach(() => {
       originalFetch = global.fetch;
       fetchMock = jest.fn();
-      global.fetch = fetchMock as any;
+      global.fetch = fetchMock as unknown as typeof fetch;
     });
 
     afterEach(() => {
@@ -466,7 +466,7 @@ describe('FlagClient', () => {
       const onError = jest.fn();
       const client = makeClient(onError);
 
-      const result = await client.evaluate(undefined as any);
+      const result = await client.evaluate(undefined as unknown as string);
 
       expect(result.reason).toBe('error');
       expect(result.value).toBe(false);

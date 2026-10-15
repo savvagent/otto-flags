@@ -50,7 +50,7 @@ public class FlagClient implements AutoCloseable {
 
         if (!isValidFlagKey(flagKey)) {
             String message = describeInvalidFlagKey(flagKey);
-            logger.error(message);
+            logger.error("{}", message);
             try {
                 config.getOnError().accept(new IllegalArgumentException(message));
             } catch (RuntimeException callbackFailure) {
@@ -153,7 +153,7 @@ public class FlagClient implements AutoCloseable {
             config.getOnError().accept(e instanceof Exception ? (Exception) e : new Exception(e));
 
             // Return default value
-            boolean defaultValue = config.getDefaults().getOrDefault(flagKey, false);
+            boolean defaultValue = defaultFor(flagKey);
             return new FlagEvaluationResult(flagKey, defaultValue, "error", null);
         }
     }

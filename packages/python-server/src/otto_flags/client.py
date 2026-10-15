@@ -16,7 +16,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ._flag_key import describe_flag_key, is_valid_flag_key
+from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
 from .cache import FlagCache
 from .exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 from .realtime import RealtimeService
@@ -131,7 +131,7 @@ class FlagClient:
                 )
             return FlagEvaluationResult(
                 key=flag_key,
-                value=self._config.defaults.get(flag_key, False),
+                value=default_for(self._config.defaults, flag_key),
                 reason="error",
             )
 

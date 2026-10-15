@@ -141,9 +141,10 @@ public class OttoFlagsClient {
     }
 
     /// Short description of a rejected key for the error message: the first 64
-    /// characters quoted and escaped, plus the full length.
+    /// Unicode scalars quoted and escaped, plus the full length in UTF-8 bytes (the
+    /// unit the key rule counts).
     private static func describeInvalidKey(_ key: String) -> String {
-        "\(String(reflecting: String(key.prefix(64)))) (length \(key.count))"
+        "\(String(reflecting: String(String.UnicodeScalarView(key.unicodeScalars.prefix(64))))) (\(key.utf8.count) bytes)"
     }
 
     /// RFC 3986 unreserved characters only (not `.alphanumerics`, which is Unicode-wide).

@@ -358,6 +358,27 @@ class TestAsyncInvalidFlagKey:
         assert len(errors) == 1
         assert isinstance(errors[0], InvalidFlagKeyError)
 
+    @pytest.mark.parametrize("key", [None, 42, ["a"]])
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_string_key_returns_false_without_raising(self, key: object) -> None:
+        errors: list[Exception] = []
+        route = respx.route()
+        config = FlagClientConfig(
+            api_key="sdk_test_key_12345",
+            enable_realtime=False,
+            enable_telemetry=False,
+            on_error=errors.append,
+        )
+        async with AsyncFlagClient(config) as client:
+            result = await client.evaluate(key)  # type: ignore[arg-type]  # untyped callers
+
+        assert result.value is False
+        assert result.reason == "error"
+        assert route.called is False
+        assert len(errors) == 1
+        assert "non-string value of type" in str(errors[0])
+
     @pytest.mark.asyncio
     @respx.mock
     async def test_valid_key_hits_expected_path(self, async_config: FlagClientConfig) -> None:

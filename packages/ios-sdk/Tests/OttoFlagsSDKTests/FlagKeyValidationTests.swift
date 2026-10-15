@@ -33,8 +33,8 @@ final class FlagKeyValidationTests: XCTestCase {
             apiUrl: "https://otto-flags.example.com",
             sdkKey: "sdk_test",
             environment: "test",
-            enableWebSocket: false,
-            pollingInterval: 3600
+            pollingInterval: 3600,
+            enableWebSocket: false
         )
         client = OttoFlagsClient(config: config, session: session)
     }
