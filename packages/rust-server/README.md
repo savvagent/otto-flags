@@ -413,9 +413,9 @@ key is invalid, the server is unreachable or slow (`with_timeout`), it answers w
 status, or the response is not an evaluate response. The fallback has `reason: "error"`, is logged
 through `tracing` (at `error` when the server refuses the SDK key, else `warn`), and is not cached,
 so a later lookup asks the server again (after the cooldown below). Config and variation
-overrides are not applied to a fallback; `get_config` gives `None` and `get_variation` gives `"control"`, so use `evaluate` when
-you need to tell a fallback from a real answer. The
-lookup methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
+overrides are not applied to a fallback; `get_config` gives `None` and `get_variation` gives
+`"control"`, so use `evaluate` when you need to tell a fallback from a real answer. The lookup
+methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
 
 After a failed lookup the client backs off for `failure_cooldown` (5 seconds by default;
 `Duration::ZERO` turns it off): lookups in that window return their default with

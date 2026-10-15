@@ -180,6 +180,6 @@ warnings`, `cargo test --locked`; `examples/rust-server` `cargo fmt --check` and
 ## 12. Risks & open questions
 
 - A flag configuration over 1 MiB now falls back to its default (with a warning naming the cap).
-  The server has no configuration size limit; a follow-up issue proposes one.
+  The server has no configuration size limit; #115 proposes one.
 - A 5 s client-wide window after a single transient failure turns all uncached flags to their
   defaults for 5 s. That is the trade the ticket asks for; `with_failure_cooldown` tunes it.
