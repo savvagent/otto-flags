@@ -1,6 +1,12 @@
 # Unknown SDK keys stop reaching the database
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#121)
+
+The code is authoritative where this sketch differs in detail (field names, visibility). As
+built after review: the memory bound is roughly 400 KiB counting the map's buckets, not 256 KiB;
+a saturated cache logs a warning at most once a second; `crates/flags-api/tests/unknown_keys.rs`
+checks that the extractor uses the cache (the second request is refused with the database
+closed); and `errors_are_not_remembered` pins that an error is never cached.
 **Issue:** #104
 
 ## 1. Brief
@@ -72,7 +78,7 @@ no unbounded memory.
   feature that did (an org restore, a key import) would have to clear the cache. A TTL still bounds
   the window, so a cache entry can never outlive its usefulness by much.
 - **TTL 60 s, capacity 4096 entries.** One entry is a 32-byte SHA-256 hash and an `Instant`,
-  under 64 bytes with the map's overhead, so a full cache is about 256 KiB. When it is full,
+  about 48 bytes of payload, roughly 400 KiB for a full cache counting the map's buckets. When it is full,
   expired entries are swept (at most once a second), and if it is still full the new key is not
   cached: the lookup still answers correctly, it just reaches the database.
 - **Keyed by SHA-256 of the key** (`keys::hash`, the same hash `app_keys` stores), so the process
@@ -214,10 +220,12 @@ build.
   `resolve_cached`, is rotated away, and the next `resolve_cached` returns `None`; a key whose org
   is tombstoned stops resolving on the next call; after `None` the key is in the cache.
 - `crates/flags-server/tests/e2e.rs` is unchanged; existing SDK tests cover the extractor.
+  `crates/flags-api/tests/unknown_keys.rs` (added in review) shows the extractor goes through
+  the cache.
 
 ## 12. Risks and open questions
 
-- **Distinct random keys still cost one lookup each.** A follow-up issue proposes a per-client or
+- **Distinct random keys still cost one lookup each.** Follow-up #120 proposes a per-client or
   global concurrency limit on SDK key lookups (for example a semaphore capping lookups below the
   pool size, so a flood cannot take every connection), with the `Fly-Client-IP` trust question.
 - **A distinct-key flood fills the cache.** 4096 random keys within one TTL fill it; until

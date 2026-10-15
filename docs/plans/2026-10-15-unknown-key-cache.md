@@ -18,6 +18,17 @@ counting TCP proxy test pins round trips on the wire.
 
 **Spec:** `docs/specs/2026-10-15-unknown-key-cache-design.md`
 
+## As built
+
+- Tasks 1 and 2 landed as one commit: Task 1's `pub(crate)` cache methods have no caller until
+  `resolve_cached`, so Task 1 alone fails clippy's dead-code lint.
+- The sweep-throttle unit test was rewritten so it fails without the throttle (entries expire
+  inside the second after a sweep).
+- Task 3 gained `crates/flags-api/tests/unknown_keys.rs`, red first (no `unknown_keys` field),
+  which closes the pool before the second request so only the cache can answer it.
+- Review added `errors_are_not_remembered`, a saturation warning, a single `digest` definition,
+  and a deadline on the round-trip test's idle wait.
+
 ## Global Constraints
 
 - Gates, from `/home/robhicks/dev/otto-flags/.claude/worktrees/fix-104-bound-key-lookups`, with
@@ -69,7 +80,7 @@ its `mod tests`).
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Failing unit tests** in `keys.rs` `mod tests`:
+- [x] **Step 1: Failing unit tests** in `keys.rs` `mod tests`:
 
 ```rust
     use std::time::{Duration, Instant};
@@ -128,10 +139,10 @@ its `mod tests`).
     }
 ```
 
-- [ ] **Step 2: Run, see them fail to compile**
+- [x] **Step 2: Run, see them fail to compile**
   `cargo test -p flags-core --lib keys::tests` → errors: `UnknownKeys` not found.
 
-- [ ] **Step 3: Implement** (after `resolve_hash`; add `use std::collections::HashMap;`,
+- [x] **Step 3: Implement** (after `resolve_hash`; add `use std::collections::HashMap;`,
   `use std::sync::Mutex;`, `use std::time::{Duration, Instant};`):
 
 ```rust
@@ -223,10 +234,10 @@ impl UnknownKeys {
 }
 ```
 
-- [ ] **Step 4: Run, see them pass** — `cargo test -p flags-core --lib keys::tests` (no DB
+- [x] **Step 4: Run, see them pass** — `cargo test -p flags-core --lib keys::tests` (no DB
   needed), then fmt and clippy.
 
-- [ ] **Step 5: Commit** — `feat(core): remember sdk keys that do not resolve, bounded` with a
+- [x] **Step 5: Commit** — `feat(core): remember sdk keys that do not resolve, bounded` with a
   why-body ending `Fixes #104`.
 
 ### Task 2: The cached resolver and its round-trip pins
@@ -241,7 +252,7 @@ impl UnknownKeys {
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Failing tests.**
+- [x] **Step 1: Failing tests.**
   - `key_round_trips.rs`: the counting proxy (frames the client stream by type byte and 4-byte
     length after the untyped startup packet; counts 'Q' and 'S'), a production-shaped
     one-connection pool through it (`ssl_mode(Disable)`, `acquire_timeout(5 s)`, upstream
@@ -262,9 +273,9 @@ impl UnknownKeys {
       into `deleted_orgs` (superuser pool); `resolve_cached` → `None`.
     - `malformed_keys_are_not_remembered`: `resolve_cached(db, &unknown, "sdk_xyz")` → `None`
       and `unknown.is_empty()`.
-- [ ] **Step 2: Run, see them fail to compile** (`resolve_cached` missing):
+- [x] **Step 2: Run, see them fail to compile** (`resolve_cached` missing):
   `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test key_round_trips --test db`.
-- [ ] **Step 3: Implement** in `keys.rs`:
+- [x] **Step 3: Implement** in `keys.rs`:
 
 ```rust
 /// [`resolve`], answering a key that did not resolve within the last
@@ -291,9 +302,9 @@ pub async fn resolve_cached(
 }
 ```
 
-- [ ] **Step 4: Run, see them pass** (same command; run `key_round_trips` three times to check
+- [x] **Step 4: Run, see them pass** (same command; run `key_round_trips` three times to check
   it is not flaky), then fmt and clippy.
-- [ ] **Step 5: Commit** — `feat(core): resolve sdk keys through the unknown-key cache` with a
+- [x] **Step 5: Commit** — `feat(core): resolve sdk keys through the unknown-key cache` with a
   why-body ending `Fixes #104`.
 
 ### Task 3: Use the cache on the SDK API
@@ -307,13 +318,13 @@ pub async fn resolve_cached(
 
 **Model:** haiku — mechanical wiring.
 
-- [ ] **Step 1:** `AppState` gains, with a doc comment,
+- [x] **Step 1:** `AppState` gains, with a doc comment,
   `pub unknown_keys: std::sync::Arc<flags_core::keys::UnknownKeys>` (keys that did not
   resolve, shared by every request; see `keys::UnknownKeys`), set to
   `Arc::new(UnknownKeys::new())` in `AppState::new`.
-- [ ] **Step 2:** in `sdk.rs` the extractor calls
+- [x] **Step 2:** in `sdk.rs` the extractor calls
   `keys::resolve_cached(&state.db, &state.unknown_keys, key)`.
-- [ ] **Step 3:** full gates (Global Constraints), including `podman build`. The existing
+- [x] **Step 3:** full gates (Global Constraints), including `podman build`. The existing
   `crates/flags-server/tests/e2e.rs` SDK tests (unknown key → 401, rotation) must still pass.
-- [ ] **Step 4: Commit** — `feat(api): answer repeated unknown sdk keys from memory`, body
+- [x] **Step 4: Commit** — `feat(api): answer repeated unknown sdk keys from memory`, body
   ending `Fixes #104`.
