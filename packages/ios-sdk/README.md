@@ -209,26 +209,24 @@ let config = OttoFlagsConfig(
 
 ### Getting Variation Values
 
+`getVariation` evaluates the flag. With a `String` default it returns the variation name (or
+the default when the flag has no variation); with a `Bool` default it returns whether the flag is
+enabled. Any other type, and any failure, returns the default. Use `getConfig` for a flag's
+configuration.
+
 ```swift
-// Get string variation
+// Variation name, or "light" when the flag has none
 let theme = await client.getVariation(
     flagKey: "app-theme",
     context: context,
     defaultValue: "light"
 )
 
-// Get numeric variation
-let maxItems = await client.getVariation(
-    flagKey: "max-items",
+// Enabled state, or false on failure
+let enabled = await client.getVariation(
+    flagKey: "new-checkout",
     context: context,
-    defaultValue: 10
-)
-
-// Get JSON variation
-let config = await client.getVariation(
-    flagKey: "app-config",
-    context: context,
-    defaultValue: ["key": "value"]
+    defaultValue: false
 )
 ```
 

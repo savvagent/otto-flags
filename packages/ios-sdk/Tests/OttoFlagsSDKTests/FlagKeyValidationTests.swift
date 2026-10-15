@@ -21,7 +21,7 @@ final class FlagKeyValidationTests: XCTestCase {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            let body = #"{"enabled": true, "value": "on"}"#.data(using: .utf8)!
+            let body = #"{"key": "k", "enabled": true, "variation": "on", "configuration": null}"#.data(using: .utf8)!
             return (response, body)
         }
 
@@ -54,7 +54,7 @@ final class FlagKeyValidationTests: XCTestCase {
     }
 
     /// Every request except the flag-list poll. A steered key such as `a?b` would
-    /// request `/v1/flags/a`, so filtering on the endpoint suffix would miss it.
+    /// request `/api/flags/a`, so filtering on the endpoint suffix would miss it.
     private func flagRequests() -> [URL] {
         lock.lock()
         defer { lock.unlock() }
@@ -91,7 +91,7 @@ final class FlagKeyValidationTests: XCTestCase {
         XCTAssertEqual(flagRequests().count, 0)
     }
 
-    func testValidKeyKeepsTheExistingEvaluatePath() async throws {
+    func testValidKeyUsesTheDocumentedEvaluatePath() async throws {
         let result = try await client.evaluate(
             flagKey: "new-checkout.v2_b",
             context: UserContext(userId: "u")
@@ -99,17 +99,18 @@ final class FlagKeyValidationTests: XCTestCase {
         XCTAssertTrue(result.value)
         let requests = flagRequests()
         XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests.first?.path, "/v1/flags/new-checkout.v2_b/evaluate")
+        XCTAssertEqual(requests.first?.path, "/api/flags/new-checkout.v2_b/evaluate")
     }
 
-    func testValidKeyKeepsTheExistingVariationPath() async {
+    /// The server has no variation endpoint; `getVariation` evaluates the flag (#112).
+    func testGetVariationUsesTheEvaluatePath() async {
         let value = await client.getVariation(
             flagKey: "new-checkout.v2_b",
             context: UserContext(userId: "u"),
             defaultValue: "fallback"
         )
         XCTAssertEqual(value, "on")
-        XCTAssertEqual(flagRequests().first?.path, "/v1/flags/new-checkout.v2_b/variation")
+        XCTAssertEqual(flagRequests().first?.path, "/api/flags/new-checkout.v2_b/evaluate")
     }
 
     func testInvalidKeyErrorDescribesTheKeyBriefly() async {

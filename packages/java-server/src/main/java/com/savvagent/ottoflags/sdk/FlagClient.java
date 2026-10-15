@@ -1,6 +1,7 @@
 package com.savvagent.ottoflags.sdk;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import okhttp3.*;
 import org.slf4j.Logger;
@@ -98,8 +99,9 @@ public class FlagClient implements AutoCloseable {
             // Build the URL segment by segment so the key is encoded as one path segment.
             HttpUrl url = HttpUrl.get(config.getBaseUrl()).newBuilder()
                     .addPathSegment("api")
-                    .addPathSegment("evaluate")
+                    .addPathSegment("flags")
                     .addPathSegment(flagKey)
+                    .addPathSegment("evaluate")
                     .build();
             JsonObject requestBody = new JsonObject();
             requestBody.add("context", gson.toJsonTree(context));
@@ -116,11 +118,28 @@ public class FlagClient implements AutoCloseable {
                 }
 
                 JsonObject data = gson.fromJson(response.body().string(), JsonObject.class);
-                boolean value = data.has("value") ? data.get("value").getAsBoolean()
-                                : config.getDefaults().getOrDefault(flagKey, false);
+                // The result is "enabled" (docs/SDK-DEVELOPER-GUIDE.md). A body without a
+                // boolean "enabled" is a failed lookup, not a default to cache (#112).
+                JsonElement enabled = data == null ? null : data.get("enabled");
+                if (enabled == null || !enabled.isJsonPrimitive()
+                        || !enabled.getAsJsonPrimitive().isBoolean()) {
+                    throw new IOException("The evaluate response has no boolean \"enabled\"");
+                }
+                boolean value = enabled.getAsBoolean();
 
-                Object configuration = data.has("configuration") ? data.get("configuration") : null;
-                String variation = data.has("variation") ? data.get("variation").getAsString() : null;
+                // The server sends both fields, as null when the flag has none.
+                Object configuration = presentOrNull(data.get("configuration"));
+                JsonElement variationElement = presentOrNull(data.get("variation"));
+                String variation = variationElement == null ? null : variationElement.getAsString();
+
+                // Parse everything before caching, so a failure here caches nothing.
+                FlagEvaluationResult.Metadata metadata = new FlagEvaluationResult.Metadata();
+                JsonElement flagId = presentOrNull(data.get("flagId"));
+                if (flagId != null) metadata.setFlagId(flagId.getAsString());
+                JsonElement description = presentOrNull(data.get("description"));
+                if (description != null) metadata.setDescription(description.getAsString());
+                JsonElement variant = presentOrNull(data.get("variant"));
+                if (variant != null) metadata.setVariant(variant.getAsString());
 
                 // Cache the result (including configuration and variation)
                 setCachedValue(flagKey, value, configuration, variation);
@@ -139,11 +158,6 @@ public class FlagClient implements AutoCloseable {
                 if (variationOverride != null) {
                     variation = variationOverride.variation;
                 }
-
-                FlagEvaluationResult.Metadata metadata = new FlagEvaluationResult.Metadata();
-                if (data.has("flagId")) metadata.setFlagId(data.get("flagId").getAsString());
-                if (data.has("description")) metadata.setDescription(data.get("description").getAsString());
-                if (data.has("variant")) metadata.setVariant(data.get("variant").getAsString());
 
                 logger.debug("Flag '{}' evaluated: {}", flagKey, value);
                 return new FlagEvaluationResult(flagKey, value, configuration, variation, "evaluated", metadata);
@@ -196,6 +210,11 @@ public class FlagClient implements AutoCloseable {
         String prefix = key.length() > 64 ? key.substring(0, 64) : key;
         return "Invalid flag key " + gson.toJson(prefix) + " (length " + key.length()
                 + "): keys must be 1-128 characters of A-Z a-z 0-9 . _ - and not . or ..";
+    }
+
+    /** {@code element}, or null when it is absent or JSON {@code null}. */
+    private static JsonElement presentOrNull(JsonElement element) {
+        return element == null || element.isJsonNull() ? null : element;
     }
 
     private boolean defaultFor(String flagKey) {

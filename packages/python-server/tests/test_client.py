@@ -6,7 +6,7 @@ import respx
 
 from otto_flags import FlagClient, FlagClientConfig, FlagContext
 from otto_flags.exceptions import InvalidAPIKeyError, InvalidFlagKeyError
-from tests.conftest import mock_flag_response, mock_flags_list_response
+from tests.conftest import mock_flag_response, mock_flags_list_response, server_body
 
 
 class TestFlagClientConstruction:
@@ -421,7 +421,7 @@ class TestInvalidFlagKey:
     def test_valid_key_hits_expected_path(self, client_config: FlagClientConfig) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
-        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate("new-checkout.v2_b")
         assert route.called
@@ -432,7 +432,7 @@ class TestInvalidFlagKey:
         key = "a" * 128
         route = respx.post(
             f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
-        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate(key)
         assert route.called
@@ -442,8 +442,54 @@ class TestInvalidFlagKey:
     def test_triple_dot_key_is_valid(self, client_config: FlagClientConfig) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/.../evaluate"
-        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate("...")
         assert route.called
         assert result.reason == "evaluated"
+
+
+
+class TestEvaluateContract:
+    """The evaluate call follows docs/SDK-DEVELOPER-GUIDE.md (#112)."""
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    @respx.mock
+    def test_reads_enabled_from_the_documented_path(
+        self, client_config: FlagClientConfig, enabled: bool
+    ) -> None:
+        route = respx.post(
+            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+        ).mock(return_value=httpx.Response(200, json=server_body("checkout", enabled)))
+        client_config.defaults = {"checkout": not enabled}
+        with FlagClient(client_config) as client:
+            result = client.evaluate("checkout")
+        assert route.call_count == 1
+        assert result.value is enabled
+        assert result.reason == "evaluated"
+        assert result.variation is None
+        assert result.configuration is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [{"value": True}, {"enabled": "true"}, {"enabled": 1}, {"enabled": None}, [True]],
+    )
+    @respx.mock
+    def test_body_without_boolean_enabled_is_a_failed_lookup(
+        self, client_config: FlagClientConfig, body: object
+    ) -> None:
+        route = respx.post(
+            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+        ).mock(return_value=httpx.Response(200, json=body))
+        errors: list[Exception] = []
+        client_config.defaults = {"checkout": False}
+        client_config.on_error = errors.append
+        with FlagClient(client_config) as client:
+            first = client.evaluate("checkout")
+            second = client.evaluate("checkout")
+        assert first.value is False
+        assert first.reason == "error"
+        assert second.reason == "error"
+        assert len(errors) == 2
+        # Not cached: the second lookup asks the server again.
+        assert route.call_count == 2

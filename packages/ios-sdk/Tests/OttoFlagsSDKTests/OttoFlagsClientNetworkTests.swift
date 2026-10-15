@@ -35,7 +35,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
     func testIsEnabledReturnsTrue() async throws {
         // Mock successful response with enabled=true
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/flags/test-flag/evaluate")
+            XCTAssertEqual(request.url?.path, "/api/flags/test-flag/evaluate")
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
 
@@ -49,7 +49,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
             let jsonData = """
             {
                 "enabled": true,
-                "flagKey": "test-flag"
+                "key": "test-flag"
             }
             """.data(using: .utf8)!
 
@@ -75,7 +75,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
             let jsonData = """
             {
                 "enabled": false,
-                "flagKey": "test-flag"
+                "key": "test-flag"
             }
             """.data(using: .utf8)!
 
@@ -117,7 +117,10 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
 
             let jsonData = """
             {
-                "value": "dark-mode"
+                "key": "theme",
+                "enabled": true,
+                "variation": "dark-mode",
+                "configuration": null
             }
             """.data(using: .utf8)!
 
@@ -203,7 +206,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
             let jsonData = """
             {
                 "enabled": true,
-                "flagKey": "test-flag"
+                "key": "test-flag"
             }
             """.data(using: .utf8)!
 

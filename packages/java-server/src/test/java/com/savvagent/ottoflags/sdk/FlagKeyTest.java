@@ -71,13 +71,13 @@ class FlagKeyTest {
     }
 
     @Test
-    void validKeyKeepsExistingPath() throws Exception {
+    void validKeyUsesTheDocumentedPath() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"value\":true}"));
+                .setBody("{\"enabled\":true}"));
         FlagEvaluationResult result = client.evaluate("new-checkout.v2_b", null);
         RecordedRequest request = server.takeRequest(5, TimeUnit.SECONDS);
-        assertEquals("/api/evaluate/new-checkout.v2_b", request.getPath());
+        assertEquals("/api/flags/new-checkout.v2_b/evaluate", request.getPath());
         assertTrue(result.getValue());
         assertEquals(0, errors.get());
     }
@@ -86,7 +86,7 @@ class FlagKeyTest {
     void tripleDotKeyIsValidAndMakesARequest() throws Exception {
         server.enqueue(new MockResponse()
                 .setHeader("Content-Type", "application/json")
-                .setBody("{\"value\":true}"));
+                .setBody("{\"enabled\":true}"));
         client.evaluate("...", null);
         assertEquals(1, server.getRequestCount());
     }

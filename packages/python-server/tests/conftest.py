@@ -46,20 +46,38 @@ def mock_api():
         yield respx_mock
 
 
+def server_body(key: str, enabled: bool) -> dict[str, object]:
+    """The evaluate response exactly as the server sends it (docs/SDK-DEVELOPER-GUIDE.md)."""
+    return {
+        "key": key,
+        "enabled": enabled,
+        "scope": "application",
+        "variation": None,
+        "configuration": None,
+        "timestamp": 1700000000,
+        "version": 3,
+        "context": {"environment": "production"},
+    }
+
+
 def mock_flag_response(
     respx_mock: respx.MockRouter,
     flag_key: str,
     value: bool = True,
     configuration: dict | None = None,
     variation: str | None = None,
-    flag_id: str = "flag_123",
 ) -> None:
     """Helper to mock a flag evaluation response."""
+    # The server's evaluate response (docs/SDK-DEVELOPER-GUIDE.md); it has no "value".
     response_data = {
-        "value": value,
-        "flagId": flag_id,
-        "configuration": configuration,
+        "key": flag_key,
+        "enabled": value,
+        "scope": "application",
         "variation": variation,
+        "configuration": configuration,
+        "timestamp": 1700000000,
+        "version": 1,
+        "context": {},
     }
     respx_mock.post(
         f"https://otto-flags.savvagent.com/api/flags/{flag_key}/evaluate"

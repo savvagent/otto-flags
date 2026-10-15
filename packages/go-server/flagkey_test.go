@@ -93,7 +93,7 @@ func TestEvaluateSendsValidFlagKeys(t *testing.T) {
 			if n := atomic.LoadInt32(&requests); n != 1 {
 				t.Fatalf("requests = %d, want 1", n)
 			}
-			if got, want := path.Load().(string), "/api/evaluate/"+key; got != want {
+			if got, want := path.Load().(string), "/api/flags/"+key+"/evaluate"; got != want {
 				t.Errorf("path = %q, want %q", got, want)
 			}
 		})
