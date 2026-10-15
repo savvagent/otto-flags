@@ -91,7 +91,7 @@ and in the permanent list, after `Error::Db(db("42501")),`:
             Error::Db(db("57000")),
 ```
 
-Update the permanent list's leading comment to name them too, or rely on the new comment above.
+The inline comment above is the only comment change in the permanent list.
 In `retriable_keeps_its_meaning_for_mcp_callers`, add:
 
 ```rust
@@ -170,7 +170,7 @@ Run: `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp cargo test -p flags-core --lib e
 Expected: all `error::tests` pass.
 
 Then: `cargo fmt --all`, then the full gate list from Global Constraints (test, lint, format,
-extra). Report pass counts per test binary.
+extra, and `podman build -t otto-flags:check .`). Report pass counts per test binary.
 
 - [ ] **Step 5: Commit**
 
@@ -188,3 +188,6 @@ what an MCP caller sees, is unchanged.
 Fixes #56
 EOF
 ```
+
+After the PR opens, the shipped rule (CLAUDE.md > Design docs) adds the final commit: the spec's
+`**Status:**` becomes `IMPLEMENTED (#<PR>)` and these boxes are ticked.
