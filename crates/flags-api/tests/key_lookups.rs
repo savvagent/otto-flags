@@ -195,7 +195,7 @@ async fn a_dropped_request_keeps_its_permit_until_the_lookup_ends(pool: PgPool) 
     let req = request(&state, tx);
     until_blocked(&state, &mut lock, 1).await;
     req.abort();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(req.await.unwrap_err().is_cancelled());
     assert_eq!(
         state.key_lookups.available(),
         0,

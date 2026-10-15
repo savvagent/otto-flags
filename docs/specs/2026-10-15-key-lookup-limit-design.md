@@ -232,7 +232,9 @@ Gates per the section (test DB on 15451), clippy, fmt, migrations check, podman 
   and the rest of the service (evaluation for already-authenticated work, MCP, `/readyz`,
   background) keeps working. A per-client limit would be the next step if this proves too coarse.
 - `PoolConnection::return_to_pool` is `#[doc(hidden)] pub` in sqlx 0.8.6; `Cargo.lock` pins it.
-  A sqlx upgrade that removes it fails to compile, and `key_lookups.rs` would catch a behavior
-  change (the dropped-request test).
+  A sqlx upgrade that removes it fails to compile, and
+  `a_lookup_returns_its_connection_before_it_answers` (`crates/flags-core/tests/db.rs`) catches
+  a behavior change: it checks, with no wait, that every pool connection is idle when a lookup
+  answers.
 - Waiting requests hold a socket and a small future each, up to 2 s; hyper bounds connections,
   not this code.

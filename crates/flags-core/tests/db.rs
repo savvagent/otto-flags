@@ -5913,6 +5913,40 @@ async fn a_lookup_waits_for_a_permit_and_is_refused_after_the_wait(pool: PgPool)
     assert_eq!(unknown.len(), 2, "the remembered key and the blocked one");
 }
 
+/// A lookup answers only once its connection is back in the pool, release
+/// ping included, so the permit it ran under covered the whole checkout
+/// (#120). Checked with no wait in between: if the release were left to the
+/// task sqlx spawns when a `PoolConnection` drops, a connection would still
+/// be out here.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_returns_its_connection_before_it_answers(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
+    let all_idle = |db: &otto_tenant::Db| db.pool().num_idle() == db.pool().size() as usize;
+    for _ in 0..3 {
+        let key = keys::NewKey::mint(KeyKind::Client).key;
+        assert!(keys::resolve_hash(&db, &keys::hash(&key))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            all_idle(&db),
+            "resolve_hash answered with its connection out"
+        );
+        assert!(
+            keys::resolve_cached(&db, &unknown, &limit, &key.replace("sdk_", "srv_"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            all_idle(&db),
+            "resolve_cached answered with its connection out"
+        );
+    }
+}
+
 /// A lookup whose caller is dropped mid-lookup still finishes: its answer is
 /// remembered and only then is its permit freed (#120).
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
