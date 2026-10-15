@@ -41,7 +41,8 @@ OkHttp MockWebServer), Swift (XCTest, MockURLProtocol), Kotlin (JUnit 4, MockWeb
   - Python: `on_error(InvalidFlagKeyError(...))` if `on_error` is set, using `repr(prefix)`.
   - Go: `OnError(err)`, with `err` wrapping the exported sentinel `ErrInvalidFlagKey`, using `%q`.
   - Java: `logger.error` + `onError`, using `gson.toJson(prefix)`.
-  - Android: `logError`, using `JSONObject.quote(prefix)`.
+  - Android: `logError`, using a hand-written escaper (printable ASCII other than `"` and `\`
+    kept, everything else `\uXXXX`). Never `org.json`, which is a stub in local unit tests.
   - iOS: the thrown error.
 - **Encoding.** Encode the key segment with:
   - TS/Node: `encodeURIComponent`
@@ -101,7 +102,9 @@ they are one task.
 
 **Model:** sonnet
 
-- [ ] Write failing jest tests in both packages, with `global.fetch` mocked:
+- [ ] Write failing jest tests in both packages, with `global.fetch` mocked. Construct each client
+  with `enableRealtime: false, enableTelemetry: false`; otherwise the realtime and telemetry
+  calls hit the fetch mock.
   - For each of `a/b`, `a?b`, `a#b`, `.`, `..`, `''`, `bad key` and a 129-character key:
     `evaluate` returns the configured default with reason `error`, `fetch` is not called, and
     `onError` is called once.
@@ -135,7 +138,10 @@ they are one task.
 
 **Model:** sonnet
 
-- [ ] Write a test in `client_test.go`:
+- [ ] Write a test in a new file `packages/go-server/flagkey_test.go`. The existing
+  `client_test.go` uses config fields that no longer exist; do not copy its setup. Use the real
+  `Config`: `APIKey` (must start with `sdk_`), `BaseURL`, `EnableRealtime: false`,
+  `EnableTelemetry: false`, `Defaults`, `OnError`. Read `types.go` and `NewClient`.
   - Use an `httptest.Server` that counts requests.
   - The invalid keys (as in Task 1) give 0 requests, the default value, `Reason == "error"`, and
     `errors.Is(err, ErrInvalidFlagKey)`.
@@ -143,21 +149,24 @@ they are one task.
 - [ ] Implement:
   - `var ErrInvalidFlagKey = errors.New(...)`.
   - The check, using a loop or a regexp; regexp `$` in Go matches only at end of text.
+  - Name the URL variable something other than `url` for clarity.
   - The guard at the top of `Evaluate`: call `OnError`, then return `c.getDefaultResult(flagKey, err), err`.
-  - `url.PathEscape(flagKey)` in the `Sprintf`. The local variable named `url` shadows the
-    package, so rename it.
+  - `url.PathEscape(flagKey)` in the `Sprintf`.
 - [ ] Gate not run. Self-check that it compiles by reading it: imports (`errors`, `net/url`) and
-  no shadowing.
+  no shadowing. Note in the report that the package's tests cannot compile today.
 
 ### Task 4: Java SDK
 
 **Model:** sonnet
 
-- [ ] Write a test in `FlagClientTest.java` with `MockWebServer`:
+- [ ] Write a test in a new class `packages/java-server/src/test/java/com/savvagent/ottoflags/sdk/FlagKeyTest.java`
+  with `MockWebServer` (JUnit 5). The existing `FlagClientTest` uses builder methods that no
+  longer exist; do not copy its setup. Use the real `FlagClientConfig.builder(apiKey)` with
+  `.baseUrl(...)`, `.enableRealtime(false)`, `.enableTelemetry(false)`, `.defaults(...)` and
+  `.onError(...)`. Read `FlagClientConfig.java`.
   - The invalid keys give `getRequestCount() == 0`, the default value, and reason `"error"`.
   - A valid key's request path is `/api/evaluate/new-checkout.v2_b`.
 
-  Match the existing test style (JUnit 5).
 - [ ] Implement a private static `isValidFlagKey`, and the guard at the top of `evaluate` that
   logs, calls `onError`, and returns `new FlagEvaluationResult(flagKey, default, "error", null)`.
   Build the URL as
@@ -168,8 +177,12 @@ they are one task.
 
 **Model:** sonnet
 
-- [ ] Write tests in `OttoFlagsClientNetworkTests.swift`, using `MockURLProtocol.requestHandler`
-  to count requests:
+- [ ] Add an `internal init(config: OttoFlagsConfig, session: URLSession)`. The public
+  `init(config:)` delegates to it with `URLSession(configuration: .default)`.
+- [ ] Write tests in `OttoFlagsClientNetworkTests.swift`. Build the client with a session whose
+  configuration has `protocolClasses = [MockURLProtocol.self]`, and with `enableWebSocket: false`.
+  Record the URLs of requests through `MockURLProtocol.requestHandler`. Count only requests whose
+  path ends in `/evaluate` or `/variation`, because polling may fetch other paths.
   - `evaluate` with each invalid key throws `OttoFlagsError.invalidFlagKey` with 0 requests.
   - `getVariation` with an invalid key returns `defaultValue` with 0 requests.
   - A valid key's request URL path is `/v1/flags/new-checkout.v2_b/evaluate`.
@@ -185,7 +198,9 @@ they are one task.
 
 **Model:** sonnet
 
-- [ ] Write tests in `OttoFlagsClientNetworkTest.kt`:
+- [ ] Write tests in `OttoFlagsClientNetworkTest.kt`, or a new class beside it, with a client
+  built with `enableLogging = false` so `android.util.Log` is never called. Keep the guard inside
+  the existing `try`.
   - `evaluate` with each invalid key returns `Result.failure` and `mockWebServer.requestCount == 0`.
   - `getVariation` returns `defaultValue` with no request.
   - A valid key's `takeRequest().path` is `/v1/flags/new-checkout.v2_b/evaluate`.

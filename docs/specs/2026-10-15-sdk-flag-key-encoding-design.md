@@ -92,8 +92,11 @@ From #107:
   | Python | `repr` |
   | Go | `%q` |
   | Java | gson `toJson` |
-  | Kotlin | `JSONObject.quote` |
+  | Kotlin | a small hand-written escaper: printable ASCII other than `"` and `\` kept, everything else `\uXXXX`, in quotes |
   | Swift | `String(reflecting:)` |
+
+  Kotlin does not use `org.json`'s `JSONObject.quote`, because `org.json` is a stub in Android
+  local unit tests.
 - **Reason `"error"`** in the returned result where the SDK has a reason field (TS, Node, Python,
   Go, Java), as for every other failed lookup.
 - **Encoding is applied even though a valid key needs none.** Every character the rule allows is
@@ -167,6 +170,11 @@ changes to encode the key segment. Public API changes:
 
 Python puts the helper in `otto_flags/_flag_key.py`, shared by both clients.
 
+The iOS client gains an `internal init(config:session:)`, and the public `init(config:)` calls it
+with the default session. This lets the tests, through `@testable import`, inject a `URLSession`
+configured with `MockURLProtocol`. Today the client hard-codes its session, and the network tests
+are commented out because nothing can be injected. This is not public API.
+
 ## 7. Invariants impact
 
 - **SDKs never throw into the host app on a flag lookup:** holds.
@@ -222,5 +230,12 @@ Per SDK, failing test first.
 - Adding a case to the iOS `OttoFlagsError` enum can break a host's exhaustive `switch`. The
   alternative was to reuse `invalidURL`, but that would hide the cause. Accepted, because the SDK
   is unpublished.
+- The existing Go `client_test.go` and Java `FlagClientTest.java` do not compile against the
+  current SDK API. They use config fields that no longer exist; known-red #17 covers only Go's
+  missing `go.sum`. The new tests use the real APIs in new files, but Go compiles every
+  `_test.go` in a package together and Maven fails the whole module on a test-compile error, so
+  neither suite can run until that is fixed (filed as a follow-up). The Android network tests may
+  already be red on a plain JVM, because they use `org.json` and `android.util.Log` without
+  Robolectric. The new Android test turns logging off, and the guard avoids `org.json`.
 - Until #112, Go, Java, iOS and Android still call endpoints the server does not serve, so for
   valid keys this fix changes nothing observable there.
