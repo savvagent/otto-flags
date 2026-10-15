@@ -76,7 +76,7 @@ redeploys unchanged on merge.
   `GET /api/features?userId=`, `POST /api/data` and their JSON shapes.
 - [x] **Step 4: Run, see it pass.** All four gates above.
 - [x] **Step 5: README + CLAUDE.md.** README env vars, defaults, run steps, and snippet match
-  `main.rs`, and a Known limitations section links the SDK bugs the example exposes (#91, #92,
-  #93); remove the #16 known-red line and add a `cargo test --locked` gate for the example.
+  `main.rs`, and a Known limitations section links the SDK bugs the example exposes (#91 and #93;
+  #92 was fixed by #94 before merge); remove the #16 known-red line and add a `cargo test --locked` gate for the example.
 - [x] **Step 6: Commit.** `fix(examples): port the rust example to the current sdk and axum 0.7`
   with a why-body ending `Fixes #16`.

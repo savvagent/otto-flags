@@ -17,8 +17,6 @@ Example Axum server that evaluates Otto Flags with the Otto Flags Rust Server SD
 These are open in the Rust SDK, not in this example, and they matter when you run it against a
 real API:
 
-- The SDK reads a `value` field the evaluate response does not send, so every flag currently
-  comes back as its default (here, off) ([#92](https://github.com/savvagent/otto-flags/issues/92)).
 - The SDK caches results per flag key for 60 seconds, ignoring the context, so one user's result
   is served to the next ([#91](https://github.com/savvagent/otto-flags/issues/91)).
 - The SDK accepts only the public client key (`sdk_`), not the server key (`srv_`) the SDK guide
@@ -56,9 +54,6 @@ cargo run --release
 The server listens on [http://localhost:8083](http://localhost:8083).
 
 ## API Endpoints
-
-The sample responses show flags as configured on the server; until #92 is fixed, every flag
-comes back off (see Known limitations).
 
 ### Health check
 
