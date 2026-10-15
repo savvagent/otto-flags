@@ -5479,6 +5479,141 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
     assert_eq!(report.problems(), Vec::<String>::new());
 }
 
+/// Plant a schema named after the tenant role, owned by it, holding empty
+/// copies of `tables` (defaults and unique constraints included). Under the
+/// default `search_path` (`"$user", public`) a transaction running as
+/// `otto_app` would resolve those names here instead of in `public` (#97).
+async fn shadow_schema(pool: &PgPool, tables: &[&str]) {
+    sqlx::query("CREATE SCHEMA otto_app AUTHORIZATION otto_app")
+        .execute(pool)
+        .await
+        .unwrap();
+    for t in tables {
+        for sql in [
+            format!("CREATE TABLE otto_app.{t} (LIKE public.{t} INCLUDING ALL)"),
+            format!("ALTER TABLE otto_app.{t} OWNER TO otto_app"),
+        ] {
+            sqlx::query(&sql).execute(pool).await.unwrap();
+        }
+    }
+}
+
+/// An app in `org`, committed, and its client key.
+async fn app_with_key(db: &Db, org: OrgId) -> String {
+    let mut tx = db.begin(org).await.unwrap();
+    let (_, issued) = tx
+        .create_app("web", &["production".into()], UserId::new())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    issued.client_key.unwrap()
+}
+
+/// Unpinned lookups (key resolution, the revocation check) read `public`, not
+/// a shadowing `otto_app` schema that says the org is deleted and holds no keys.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unpinned_lookups_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let key = app_with_key(&db, org).await;
+    shadow_schema(&pool, &["deleted_orgs", "app_keys"]).await;
+    sqlx::query("INSERT INTO otto_app.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!platform_events::revoked(&db, org, UserId::new())
+        .await
+        .unwrap());
+    let owner = keys::resolve(&db, &key)
+        .await
+        .unwrap()
+        .expect("resolves in public");
+    assert_eq!(owner.org_id, org);
+}
+
+/// A request transaction re-checks the tombstones and reads tenant tables in
+/// `public`, not in a shadowing schema.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn request_transactions_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    app_with_key(&db, org).await;
+    shadow_schema(&pool, &["deleted_orgs", "flag_apps"]).await;
+    sqlx::query("INSERT INTO otto_app.deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut tx = begin_live(&db, org, None)
+        .await
+        .expect("the only tombstone is in the shadow schema");
+    let names: Vec<String> = tx
+        .list_apps()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(names, ["web"]);
+}
+
+/// A maintenance sweep deletes from `public`, not from a shadowing schema.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn maintenance_transactions_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["platform_events"]).await;
+    for schema in ["public", "otto_app"] {
+        sqlx::query(&format!(
+            "INSERT INTO {schema}.platform_events (event_id, org_id, kind, received_at) \
+             VALUES (gen_random_uuid(), gen_random_uuid(), 'team.deleted', now() - interval '30 days')"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    platform_events::sweep(&db, 7).await.unwrap();
+    for (schema, left) in [("public", 0), ("otto_app", 1)] {
+        let n: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {schema}.platform_events"))
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, left, "{schema}");
+    }
+}
+
+/// A webhook's dedupe marker lands in `public`, so a redelivery is recognised
+/// there and the shadow schema stays empty.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn webhooks_ignore_a_shadowing_schema(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    shadow_schema(&pool, &["platform_events"]).await;
+    let org = OrgId::new();
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "team.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid(), "team_id": uuid::Uuid::new_v4()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Ignored
+    );
+    assert_eq!(
+        platform_events::apply(&db, &event).await.unwrap(),
+        Outcome::Duplicate
+    );
+    for (schema, n) in [("public", 1), ("otto_app", 0)] {
+        let got: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) FROM {schema}.platform_events"))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(got, n, "{schema}");
+    }
+}
+
 /// Every query on the pool's own role, outside a pinned (`begin_live`),
 /// maintenance (`maintenance::begin`), or unpinned (`unpinned::begin`)
 /// transaction, runs as whatever role the pool connects as. In production that

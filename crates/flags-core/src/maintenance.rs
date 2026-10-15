@@ -129,16 +129,21 @@ mod tests {
         );
     }
 
-    /// The role and the marker end with the transaction, committed or rolled
-    /// back, so the next user of the pooled connection gets neither.
+    /// The role, the marker, and the search path end with the transaction,
+    /// committed or rolled back, so the next user of the pooled connection
+    /// gets none of them.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn the_role_and_marker_end_with_the_transaction(pool: PgPool) {
+    async fn the_role_marker_and_search_path_end_with_the_transaction(pool: PgPool) {
         let one = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .connect_with(pool.connect_options().as_ref().clone())
             .await
             .unwrap();
         let pool_role: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&one)
+            .await
+            .unwrap();
+        let pool_path: String = sqlx::query_scalar("SELECT current_setting('search_path')")
             .fetch_one(&one)
             .await
             .unwrap();
@@ -150,15 +155,16 @@ mod tests {
             } else {
                 tx.rollback().await.unwrap();
             }
-            let after: (String, String) = sqlx::query_as(
-                "SELECT current_user::text, coalesce(current_setting('app.maintenance', true), '')",
+            let after: (String, String, String) = sqlx::query_as(
+                "SELECT current_user::text, coalesce(current_setting('app.maintenance', true), ''), \
+                        current_setting('search_path')",
             )
             .fetch_one(db.pool())
             .await
             .unwrap();
             assert_eq!(
                 after,
-                (pool_role.clone(), String::new()),
+                (pool_role.clone(), String::new(), pool_path.clone()),
                 "commit: {commit}"
             );
         }

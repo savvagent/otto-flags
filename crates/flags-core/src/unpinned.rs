@@ -20,6 +20,14 @@
 use otto_tenant::Db;
 use sqlx::{Postgres, Transaction};
 
+/// The `search_path` every flags-core transaction runs with (#97): unqualified
+/// names resolve in `public` after the built-ins, never in a schema named after
+/// the current role (`"$user"`, first in the default path) and never in a
+/// same-session temporary table (`pg_temp`, otherwise searched first for
+/// relations). The same value `0004_audit_purge.sql` gives the purge function.
+/// Set transaction-locally, so it ends with the transaction like the role.
+pub(crate) const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
+
 /// Open an unpinned transaction on `db`'s pool as the tenant role, with no
 /// maintenance marker. See [`begin_as_tenant_role`] for the role rules.
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>> {
@@ -30,9 +38,10 @@ pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres
 /// (`db.tenant_role()`) when the pool's role can assume it, setting the
 /// maintenance marker `app.maintenance = 'on'` only when `maintenance` is
 /// true. Only [`crate::maintenance::begin`] passes true; everything else
-/// calls [`begin`]. Role and marker are both transaction-local
-/// (`set_config(…, true)`, which for `role` is `SET LOCAL ROLE`), so they end
-/// with the transaction and never leak to the next user of the connection.
+/// calls [`begin`]. Role, marker, and search path ([`SEARCH_PATH`]) are all
+/// transaction-local (`set_config(…, true)`, which for `role` is
+/// `SET LOCAL ROLE`), so they end with the transaction and never leak to the
+/// next user of the connection.
 ///
 /// Whether the role can be assumed is the question `otto_tenant::Db::begin`
 /// asks before its own `SET LOCAL ROLE`, with the same catalog query: its
@@ -52,21 +61,24 @@ pub(crate) async fn begin_as_tenant_role(
     maintenance: bool,
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
     let mut tx = db.pool().begin().await?;
-    // One round trip for the probes, the marker, and the role switch (these
-    // run on every SDK key lookup). The probes are a MATERIALIZED CTE so they
+    // One round trip for the probes, the marker, the role switch, and the
+    // search path (these run on every SDK key lookup). The probes are a MATERIALIZED CTE so they
     // read `current_user` before the outer select list can switch the role.
     // Each `set_config` sits in its own select-list column inside a CASE: a
     // volatile function in a CASE arm runs only when that arm is taken, and
     // a column of its own is never skipped the way one operand of a boolean
     // expression can be. Exemption is a role attribute, never inherited
     // through membership, so each role is checked by name. If the result is
-    // refused below, the switch is rolled back with the transaction.
-    let (assumable, pool_exempt, tenant_exempt, _, _): (
+    // refused below, the switch is rolled back with the transaction. The
+    // search path is set unconditionally: the pool's own role, kept when the
+    // tenant role cannot be assumed, has the same `"$user"` entry.
+    let (assumable, pool_exempt, tenant_exempt, _, _, _): (
         bool,
         bool,
         bool,
         Option<String>,
         Option<String>,
+        String,
     ) = sqlx::query_as(
         "WITH probe AS MATERIALIZED ( \
            SELECT EXISTS ( \
@@ -83,11 +95,13 @@ pub(crate) async fn begin_as_tenant_role(
                     AS tenant_exempt) \
          SELECT assumable, pool_exempt, tenant_exempt, \
                 CASE WHEN $2 THEN set_config('app.maintenance', 'on', true) END, \
-                CASE WHEN assumable THEN set_config('role', $1::text, true) END \
+                CASE WHEN assumable THEN set_config('role', $1::text, true) END, \
+                set_config('search_path', $3::text, true) \
          FROM probe",
     )
     .bind(db.tenant_role())
     .bind(maintenance)
+    .bind(SEARCH_PATH)
     .fetch_one(&mut *tx)
     .await?;
     let runs_exempt = if assumable {
@@ -142,6 +156,20 @@ pub(crate) mod tests {
             role_and_marker(&mut tx).await,
             (db.tenant_role().to_string(), String::new())
         );
+    }
+
+    /// Every unpinned transaction resolves names in `public` only (#97).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_pins_the_search_path(pool: PgPool) {
+        let db = Db::from_pool(pool);
+        for maintenance in [false, true] {
+            let mut tx = begin_as_tenant_role(&db, maintenance).await.unwrap();
+            let path: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            assert_eq!(path, SEARCH_PATH, "maintenance: {maintenance}");
+        }
     }
 
     /// No org pinned and no marker: a tenant table's policies return nothing,
@@ -265,6 +293,11 @@ pub(crate) mod tests {
             role_and_marker(&mut tx).await,
             ("otto_app".to_string(), String::new())
         );
+        let path: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(path, SEARCH_PATH);
         tx.rollback().await.unwrap();
         db.pool().close().await;
     }
