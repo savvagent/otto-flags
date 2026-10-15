@@ -1,6 +1,6 @@
 # Maintenance transactions run as the tenant role
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#78)
 **Issue:** #73
 
 ## 1. Brief
@@ -89,19 +89,26 @@ Out: unpinned `db.pool()` use outside `maintenance::begin` (premise correction a
 
 ## 6. Architecture
 
-`crates/flags-core/src/maintenance.rs`, `begin(db)`:
+`crates/flags-core/src/maintenance.rs`, `begin(db)` (as shipped, after PR review):
 
 ```rust
 let mut tx = db.pool().begin().await?;
-// Same question otto_tenant::Db::begin asks before SET LOCAL ROLE (its probe is private).
-let (_, assumable): (String, bool) = sqlx::query_as(
-    "SELECT set_config('app.maintenance', 'on', true), EXISTS ( \
-       SELECT 1 FROM pg_catalog.pg_roles r \
-       WHERE r.rolname = $1 AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE'))",
+let (_, assumable, pool_exempt, tenant_exempt): (String, bool, bool, bool) = sqlx::query_as(
+    "SELECT set_config('app.maintenance', 'on', true), \
+            EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = $1 \
+                      AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')), \
+            EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = current_user \
+                      AND (r.rolsuper OR r.rolbypassrls)), \
+            EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = $1 \
+                      AND (r.rolsuper OR r.rolbypassrls))",
 )
 .bind(db.tenant_role())
 .fetch_one(&mut *tx)
 .await?;
+let runs_exempt = if assumable { tenant_exempt } else { pool_exempt };
+if runs_exempt {
+    return Err(sqlx::Error::Configuration(/* names the role, no SQL text */));
+}
 if assumable {
     sqlx::query(&format!("SET LOCAL ROLE {}", db.tenant_role()))
         .execute(&mut *tx)
@@ -110,10 +117,13 @@ if assumable {
 Ok(tx)
 ```
 
-`set_config(..., true)` is the transaction-local form of `SET LOCAL`. The marker and the probe are
-two select-list columns, so both are always evaluated (folding them into one `AND` would let
-Postgres skip `set_config` when the probe is false). The probe runs before the role changes, as
-the pool's own role, which is the question `Db` asks (`current_user` of the connection).
+`set_config(..., true)` is the transaction-local form of `SET LOCAL`. The marker and the probes
+are separate select-list columns, so all are always evaluated (folding them into one boolean
+expression would let Postgres skip `set_config`). The probes run before the role changes, as the
+pool's own role; the assumability probe is the question `Db` asks (`current_user` of the
+connection). Exemption (`rolsuper`, `rolbypassrls`) is a role attribute, not inherited through
+membership, so each role is checked by name: the transaction is refused when the role it would
+run as is exempt. `error::db_reason` logs that refusal as `configuration`.
 
 The signature and visibility are unchanged (`pub(crate)`, same return type), so every caller is
 untouched: `platform_events::sweep` (`platform_events.rs:114`), `telemetry::sweep`
@@ -156,12 +166,17 @@ None: no secret, config key, scope, or registration. Deploy-safety: production's
 must hold the grants in the table above. Production logs `tenant isolation enforced as role
 "otto_app"` and serves pinned tool writes on these tables today, and the sequence and
 `removed_members` grants come from the same baseline statements; post-deploy verification reads
-the logs for shipper, sweep, and checker failures (SQLSTATE `42501`).
+the logs for shipper, sweep, and checker failures (SQLSTATE `42501`, or `reason="configuration"`
+for the refusal).
 
 ## 10. Error handling & edge cases
 
 - The probe or `SET LOCAL ROLE` failing returns `sqlx::Error` from `begin`, as the marker statement
   could before; every caller already handles a `begin` error (logs and retries next tick).
+- The role the transaction would run as is exempt from RLS: `begin` returns
+  `sqlx::Error::Configuration` (reason `configuration`), and the callers log and retry as above;
+  the shipper keeps its rows. It never reaches a tool or SDK response: only background loops call
+  these functions.
 - A pool whose connections already `SET ROLE otto_app` at session level (the tests' `otto_app_db`):
   `current_user` is `otto_app`, a member of itself, so the probe is true and `SET LOCAL ROLE
   otto_app` is a no-op.

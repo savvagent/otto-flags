@@ -1,7 +1,7 @@
 # Maintenance tenant role Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** `maintenance::begin` drops into the tenant role (`SET LOCAL ROLE`, when assumable, as
 `otto_tenant::Db::begin` decides), so every background maintenance transaction is subject to RLS
@@ -51,6 +51,14 @@ not-assumable fallback, and that every caller still works across orgs on the sup
 | **Modify.** `docs/deploy/fly.md` | RLS note: the marker policies apply in production |
 | **Modify.** `CLAUDE.md` | Invariant line: `maintenance::begin` drops into `otto_app` |
 
+## After review (PR #78)
+
+Added in the review round, recorded in spec §3, §6, §10: `begin` refuses a transaction that
+would run as a role exempt from row-level security (pool role when the tenant role is not
+assumable, else the tenant role), logged with reason `configuration`; tests for the
+transaction-local role and marker, the non-exempt fallback, both refusals, and removed-member
+tombstones in the sweep test.
+
 ## Task Order & Rationale
 
 Task 1 is the change and its direct proof. Task 2 adds the caller-level regression tests (they pass
@@ -75,7 +83,7 @@ otto-tenant).
 
 **Model:** sonnet — small, fully specified change.
 
-- [ ] **Step 1: Write the failing tests.** Append to `crates/flags-core/src/maintenance.rs`:
+- [x] **Step 1: Write the failing tests.** Append to `crates/flags-core/src/maintenance.rs`:
 
 ```rust
 #[cfg(test)]
@@ -132,14 +140,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify the first fails.**
+- [x] **Step 2: Run the tests to verify the first fails.**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib maintenance`
 Expected: `begin_runs_as_the_tenant_role_with_the_marker` FAILS (current_user is `flags`, not
 `otto_app`); `begin_keeps_the_pool_role_when_the_tenant_role_is_not_assumable` passes. Neither
 is skipped.
 
-- [ ] **Step 3: Implement.** Replace `begin` and extend the module doc in
+- [x] **Step 3: Implement.** Replace `begin` and extend the module doc in
   `crates/flags-core/src/maintenance.rs`:
 
 Module doc: after the paragraph ending "require the marker only when unpinned.", add:
@@ -192,7 +200,7 @@ pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass, then the full gates.**
+- [x] **Step 4: Run the tests to verify they pass, then the full gates.**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --lib maintenance`
 Expected: 2 passed, 0 skipped.
@@ -202,7 +210,7 @@ Then: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test
 existing test that runs a maintenance caller (sweeps, `due_policies`, `ship_once`) must still pass:
 they now run as `otto_app`.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add crates/flags-core/src/maintenance.rs
@@ -235,7 +243,7 @@ Fixes #73"
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Add the db test.** In `crates/flags-core/tests/db.rs`:
+- [x] **Step 1: Add the db test.** In `crates/flags-core/tests/db.rs`:
 
 ```rust
 /// The retention sweeps on the default test pool, whose superuser role RLS
@@ -328,7 +336,7 @@ If `policy_fixture`'s signature or the `set_policy` arguments differ
 from the above, adapt to what the file uses (the existing `unpinned_sweeps_delete_as_otto_app` is
 authoritative) without changing what is asserted.
 
-- [ ] **Step 2: Add the e2e test.** In `crates/flags-server/tests/e2e.rs`:
+- [x] **Step 2: Add the e2e test.** In `crates/flags-server/tests/e2e.rs`:
 
 ```rust
 /// The shipper on the default test pool, whose superuser role RLS does not
@@ -384,17 +392,17 @@ async fn the_shipper_reaches_every_org_on_the_superuser_pool(pool: PgPool) {
 }
 ```
 
-- [ ] **Step 3: Run both tests.**
+- [x] **Step 3: Run both tests.**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db sweeps_reach_every_org_on_the_superuser_pool`
 and `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e the_shipper_reaches_every_org_on_the_superuser_pool`
 Expected: 1 passed each, not skipped. (These pass with or without Task 1 — a superuser sees every
 org — so there is no red step; Task 1's unit test is what shows they now run as `otto_app`.)
 
-- [ ] **Step 4: Full gates.** Run `cargo fmt --all` first (rustfmt will re-wrap these snippets),
+- [x] **Step 4: Full gates.** Run `cargo fmt --all` first (rustfmt will re-wrap these snippets),
   then test, lint, and format as in Global Constraints.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add crates/flags-core/tests/db.rs crates/flags-server/tests/e2e.rs
@@ -421,7 +429,7 @@ Fixes #73"
 
 **Model:** haiku — text replacement given verbatim.
 
-- [ ] **Step 1: Replace the fly.md bullet** (from "- Migration `0003` (#12)" through "transaction
+- [x] **Step 1: Replace the fly.md bullet** (from "- Migration `0003` (#12)" through "transaction
   to see across orgs.") with:
 
 ```markdown
@@ -441,16 +449,16 @@ Fixes #73"
   `SET LOCAL app.maintenance = 'on'` in their transaction to see across orgs.
 ```
 
-- [ ] **Step 2: In CLAUDE.md**, change "the usage shipper), which sets the\n  `app.maintenance`
+- [x] **Step 2: In CLAUDE.md**, change "the usage shipper), which sets the\n  `app.maintenance`
   marker the unpinned RLS policies require." to "the usage shipper), which drops into `otto_app`
   and sets the `app.maintenance` marker the unpinned RLS policies require." Re-wrap to the
   file's ~100-column width.
 
-- [ ] **Step 3: Gates.** `cargo fmt --all -- --check`; the migrations extra gate
+- [x] **Step 3: Gates.** `cargo fmt --all -- --check`; the migrations extra gate
   (`git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` prints
   nothing); `podman build -t otto-flags:check .` (the image builds with Task 1's change).
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add docs/deploy/fly.md CLAUDE.md
