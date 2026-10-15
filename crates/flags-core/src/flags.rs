@@ -148,6 +148,10 @@ const COLS: &str = "id, org_id, app_id, key, name, description, status, environm
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
+/// Validates and trims a flag key. `.` and `..` are refused although their
+/// characters are allowed: SDKs send the key as a URL path segment (`POST
+/// /api/flags/{key}/evaluate`, `POST /api/evaluate/{key}`), where URL parsers
+/// resolve them as dot segments and the request reaches another route (#105).
 fn validate_key(key: &str) -> Result<String> {
     let key = key.trim();
     if key.is_empty() || key.len() > 128 {
@@ -159,6 +163,12 @@ fn validate_key(key: &str) -> Result<String> {
     {
         return Err(Error::Invalid(format!(
             "flag key {key:?} may contain only letters, digits, '-', '_' and '.'"
+        )));
+    }
+    if matches!(key, "." | "..") {
+        return Err(Error::Invalid(format!(
+            "flag key {key:?} is a URL dot segment, which SDKs cannot evaluate over REST; \
+             choose another key"
         )));
     }
     Ok(key.to_string())
@@ -770,5 +780,18 @@ mod tests {
         assert_eq!(public.environments["production"]["rollout_percentage"], 10);
         let private = SdkFlag::from_flag(&flag, "production", true);
         assert!(private.environments.to_string().contains("ceo@example.com"));
+    }
+
+    #[test]
+    fn dot_segment_keys_are_refused() {
+        for key in [".", "..", " .. "] {
+            match validate_key(key) {
+                Err(Error::Invalid(msg)) => assert!(msg.contains("dot segment"), "{key:?}: {msg}"),
+                other => panic!("{key:?} was not refused: {other:?}"),
+            }
+        }
+        for key in ["...", "a.b", ".a", "a."] {
+            assert_eq!(validate_key(key).unwrap(), key);
+        }
     }
 }

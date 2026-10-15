@@ -40,8 +40,9 @@ pub struct FlagRefArgs {
 #[serde(rename_all = "camelCase")]
 pub struct CreateFlagArgs {
     pub app: String,
-    /// The key application code will check. Letters, digits, '-', '_', '.';
-    /// at most 128 characters. Cannot be changed later.
+    /// The key application code will check. Letters, digits, '-', '_', '.',
+    /// but not '.' or '..' alone; at most 128 characters. Cannot be changed
+    /// later.
     pub key: String,
     /// Human-readable name. Defaults to the key.
     #[serde(default)]
