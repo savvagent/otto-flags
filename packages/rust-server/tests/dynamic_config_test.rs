@@ -18,9 +18,9 @@ async fn test_evaluate_returns_configuration() {
     });
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/test-flag"))
+        .and(path("/api/flags/test-flag/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": true,
+            "enabled": true,
             "configuration": config_json,
             "flag_id": "flag-123"
         })))
@@ -50,9 +50,9 @@ async fn test_get_config_returns_value_when_enabled() {
     });
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/api-settings"))
+        .and(path("/api/flags/api-settings/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": true,
+            "enabled": true,
             "configuration": config_json
         })))
         .mount(&mock_server)
@@ -73,9 +73,9 @@ async fn test_get_config_returns_none_when_disabled() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/api-settings"))
+        .and(path("/api/flags/api-settings/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": false,
+            "enabled": false,
             "configuration": { "some": "config" }
         })))
         .mount(&mock_server)
@@ -99,9 +99,9 @@ async fn test_get_variation_returns_details() {
     });
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/search-algorithm"))
+        .and(path("/api/flags/search-algorithm/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": true,
+            "enabled": true,
             "variation": "variant_b",
             "configuration": config_json
         })))
@@ -126,9 +126,9 @@ async fn test_variation_defaults_to_control() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/test-flag"))
+        .and(path("/api/flags/test-flag/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": true
+            "enabled": true
         })))
         .mount(&mock_server)
         .await;
@@ -147,9 +147,9 @@ async fn test_backward_compatibility_with_is_enabled() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/api/evaluate/test-flag"))
+        .and(path("/api/flags/test-flag/evaluate"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "value": true,
+            "enabled": true,
             "configuration": { "some": "config" }
         })))
         .mount(&mock_server)
