@@ -57,8 +57,9 @@ pub const NAMES: &[&str] = &[
 
 /// Tools that only read. The rule: no write scope is required and no state
 /// changes. Every tool but `propose_rollback` records a usage row through
-/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true` lets connector clients run these
-/// without asking. `propose_rollback` is a dry run and belongs here.
+/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true`
+/// lets connector clients run these without asking. `propose_rollback` is a
+/// dry run and belongs here.
 pub const READ_ONLY: &[&str] = &[
     "whoami",
     "usage",
