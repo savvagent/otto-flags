@@ -5911,3 +5911,175 @@ async fn create_flag_refuses_dot_segment_keys(pool: PgPool) {
     }
     assert!(tx.list_flags(&app, true).await.unwrap().is_empty());
 }
+
+/// A JSON string whose compact serialization is exactly `n` bytes.
+fn sized(n: usize) -> serde_json::Value {
+    json!("x".repeat(n - 2))
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn configuration_size_is_capped_on_write(pool: PgPool) {
+    let max = eval::MAX_CONFIGURATION_BYTES;
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let new = |key: &str, configuration, variations| NewFlag {
+        key: key.into(),
+        configuration,
+        variations,
+        ..Default::default()
+    };
+
+    let err = tx
+        .create_flag(&app, new("big", Some(sized(max + 1)), None), actor, None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument", "{err}");
+    assert!(err.to_string().contains(&max.to_string()), "{err}");
+    let over_variation = json!({"control": {}, "treatment": {"configuration": sized(max + 1)}});
+    let err = tx
+        .create_flag(
+            &app,
+            new("big-variation", None, Some(over_variation.clone())),
+            actor,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument", "{err}");
+    assert!(err.to_string().contains("\"treatment\""), "{err}");
+    assert!(tx.list_flags(&app, true).await.unwrap().is_empty());
+
+    let flag = tx
+        .create_flag(
+            &app,
+            new(
+                "at-limit",
+                Some(sized(max)),
+                Some(json!({"treatment": {"configuration": sized(max)}})),
+            ),
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(flag.configuration, Some(sized(max)));
+
+    for patch in [
+        FlagPatch {
+            configuration: Some(sized(max + 1)),
+            ..Default::default()
+        },
+        FlagPatch {
+            variations: Some(over_variation),
+            ..Default::default()
+        },
+    ] {
+        let err = tx
+            .update_flag(&app, "at-limit", patch, meta(actor))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_argument", "{err}");
+    }
+    let updated = tx
+        .update_flag(
+            &app,
+            "at-limit",
+            FlagPatch {
+                configuration: Some(json!({"theme": "dark"})),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.version, flag.version + 1);
+    assert_eq!(updated.configuration, Some(json!({"theme": "dark"})));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
+    let max = eval::MAX_CONFIGURATION_BYTES;
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "legacy".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    tx.set_environment(
+        &app,
+        "legacy",
+        "production",
+        EnvPatch {
+            enabled: Some(true),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    // Stored before the cap existed: written around the validation.
+    let big = sized(max + 10_000);
+    sqlx::query("UPDATE feature_flags SET configuration = $3 WHERE org_id = $1 AND id = $2")
+        .bind(org)
+        .bind(flag.id)
+        .bind(&big)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(org).await.unwrap();
+    let stored = tx.find_flag(app.id, "legacy").await.unwrap().unwrap();
+    let e = eval::evaluate(stored.view(), "production", &Context::default());
+    assert!(e.enabled);
+    assert_eq!(e.configuration, Some(big.clone()));
+
+    let renamed = tx
+        .update_flag(
+            &app,
+            "legacy",
+            FlagPatch {
+                name: Some("Legacy".into()),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.name, "Legacy");
+    assert_eq!(renamed.configuration, Some(big.clone()));
+
+    let err = tx
+        .update_flag(
+            &app,
+            "legacy",
+            FlagPatch {
+                configuration: Some(big),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "invalid_argument", "{err}");
+}

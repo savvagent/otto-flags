@@ -188,14 +188,15 @@ fn validate_text(what: &str, s: Option<String>, max: usize) -> Result<Option<Str
 }
 
 /// Postgres `jsonb` cannot hold NUL, so configuration carrying it is refused
-/// rather than failing the write's statement.
+/// rather than failing the write's statement. Its size is capped at
+/// [`eval::MAX_CONFIGURATION_BYTES`] (#115).
 fn validate_configuration(c: &Value) -> Result<()> {
     if eval::contains_nul(c) {
         return Err(Error::Invalid(
             "configuration must not contain NUL (U+0000)".into(),
         ));
     }
-    Ok(())
+    eval::check_configuration_size("configuration", c).map_err(invalid)
 }
 
 fn invalid(e: String) -> Error {
