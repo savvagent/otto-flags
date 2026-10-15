@@ -17,6 +17,8 @@ Setup:
     3. Set OTTO_FLAGS_API_KEY in settings
 """
 
+from __future__ import annotations
+
 import os
 from functools import wraps
 
