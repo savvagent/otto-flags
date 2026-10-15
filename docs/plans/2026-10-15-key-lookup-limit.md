@@ -68,7 +68,8 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
 
 - [ ] **Step 1: Failing tests.** In `keys.rs` `mod tests`, add
   `key_lookups_take_half_of_what_the_listener_leaves`: `KeyLookups::for_pool(2).permits() == 1`,
-  `for_pool(3) == 1`, `for_pool(5) == 2`, `for_pool(10) == 4`, and `available() == permits()`
+  `for_pool(3) == 1`, `for_pool(5) == 2`, `for_pool(10) == 4`, `for_pool(0) == 1`,
+  `for_pool(1) == 1`, and `available() == permits()`
   on a fresh one. In `crates/flags-core/tests/db.rs`, add
   `a_lookup_waits_for_a_permit_and_is_refused_after_the_wait` (`#[sqlx::test(migrator =
   "flags_core::MIGRATOR")]`): `KeyLookups::new(1, Duration::from_millis(200))`; a separate
@@ -77,6 +78,8 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   `available() == 0`; a second `resolve_cached` of another key returns `Err(Error::Busy)` (match
   on the variant) after the wait; a cached unknown key (insert one first via a lookup before the
   lock) still answers `Ok(None)` with no permit free; then `ROLLBACK` the lock and the spawned
+  (spawned calls need owned values: a cloned `Db`, `Arc<UnknownKeys>`, `Arc<KeyLookups>`, an
+  owned `String` key)
   lookup returns `Ok(None)`, and `available()` returns to 1 (poll with a 5 s deadline). Update
   every existing `resolve_cached` call in `db.rs` and `key_round_trips.rs` to the new signature:
   `unknown` becomes `Arc<UnknownKeys>` (`Arc::new(UnknownKeys::new())`) and a
@@ -91,10 +94,17 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   sqlx::Result<Transaction<'c, Postgres>>` (same SQL, same refusal). `begin_as_tenant_role`
   becomes `enter(db.pool().begin().await?, db, maintenance)`. Add
   `pub(crate) async fn begin_on<'c>(db: &Db, conn: &'c mut PgConnection) ->
-  sqlx::Result<Transaction<'c, Postgres>>` = `enter(conn.begin().await?, db, false)`. Add a unit
+  sqlx::Result<Transaction<'c, Postgres>>` = `enter(conn.begin().await?, db, false)` (needs
+  `use sqlx::Connection;`). Add `pub(crate) async fn acquire(db: &Db) ->
+  sqlx::Result<PoolConnection<Postgres>>` (`db.pool().acquire()`) and `pub(crate) fn
+  max_connections(db: &Db) -> u32` (`db.pool().options().get_max_connections()`), so every raw
+  pool access stays in this file: update `no_raw_pool_queries_outside_the_allowed_sites`
+  (`crates/flags-core/tests/db.rs`) from `("flags-core/src/unpinned.rs", 1)` to `3`, with the
+  reasons in its comment (a connection the key lookup holds so it can await its return before
+  freeing its permit, #120; reading the pool's size, which touches no table). Add a unit
   test beside the existing ones: `begin_on` runs as the tenant role without the marker (mirror
   `begin_runs_as_the_tenant_role_without_the_marker`, adapting `role_and_marker` to a
-  non-`'static` transaction if needed).
+  non-`'static` transaction: change its parameter to `&mut Transaction<'_, Postgres>`).
 - [ ] **Step 4: `error.rs`.** `Error::Busy` with message "too many SDK key lookups are in
   progress; retry shortly", `code() == "busy"`, `retriable()` and `is_transient()` true,
   `is_internal()` false (falls through `failure_reason` to `Failure::reason("busy")`). Fix any
@@ -104,11 +114,12 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
   - `pub const KEY_LOOKUP_WAIT: Duration = Duration::from_secs(2);`
   - `pub struct KeyLookups { permits: Arc<tokio::sync::Semaphore>, size: usize, wait: Duration }`
     with `new(permits, wait)` (asserts `permits >= 1`), `for_pool(max_connections: u32)`
-    (`max(1, (max - 1) / 2)`, `KEY_LOOKUP_WAIT`), `permits()`, `available()`; `Debug`. Doc
+    (`max(1, max.saturating_sub(1) / 2)`, `KEY_LOOKUP_WAIT`), `for_db(db: &Db)` (=
+    `for_pool(unpinned::max_connections(db))`), `permits()`, `available()`; `Debug`. Doc
     comment carries the reasoning: the listener holds one connection; why the permit must cover
     the release ping and survive cancellation (sqlx returns connections in a spawned task on
     drop).
-  - `resolve_hash`: `let mut conn = db.pool().acquire().await?;` run the existing query in an
+  - `resolve_hash`: `let mut conn = unpinned::acquire(db).await?;` run the existing query in an
     inner `async fn lookup(db, &mut PgConnection, hash) -> Result<Option<KeyOwner>>` that uses
     `unpinned::begin_on(db, conn)` and commits as today; hold its result, then
     `conn.return_to_pool().await;` on every outcome, then return the result. No `?` between the
@@ -151,10 +162,12 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
     `KeyLookups::new(1, 300 ms)`; spawn one request; poll until `available() == 0` and one lock
     waiter; `abort()` the task; sleep 100 ms; `available()` is still 0; `ROLLBACK`; poll (5 s)
     until `available() == 1`.
+  Both tests close the 5-pool and the lock connection before returning (as `key_round_trips.rs`
+  does), so sqlx can drop the test database.
 - [ ] **Step 2: Run, see it fail** (no `key_lookups` field):
   `DATABASE_URL=postgres://flags:flags@localhost:15451/otto_flags cargo test -p flags-api --test key_lookups`.
 - [ ] **Step 3: Implement.** `AppState` gains `pub key_lookups: Arc<KeyLookups>` (doc: #120),
-  set in `new` from `KeyLookups::for_pool(db.pool().options().get_max_connections())`, and
+  set in `new` from `KeyLookups::for_db(&db)` (no `.pool()` in flags-api), and
   `AppState::new`'s signature is unchanged (`unknown_keys` is already an `Arc`). The `Sdk`
   extractor passes `&state.key_lookups`. In `error.rs`, `From<flags_core::Error>` maps
   `Error::Busy` to `503`, code `busy` (an arm before the generic `e =>` arm, which would make it
@@ -167,3 +180,8 @@ connection is checked out. `flags_api::AppState` sizes one from the pool; `Error
 - [ ] **Step 4: Run, see it pass**; then the full gates (test, lint, format, extra).
 - [ ] **Step 5: Commit:** `feat(api): refuse sdk key lookups past the limit with 503`, body why,
   `Fixes #120`.
+
+## Close-out (before merge, in the PR)
+
+- [ ] The spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked, in
+  one final docs commit.
