@@ -1,6 +1,6 @@
 # Non-Rust server and mobile SDKs follow the evaluate contract
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#126)
 **Issue:** #112
 
 ## 1. Brief
@@ -107,7 +107,8 @@ is on reads as on.
 ## 5. Scope
 
 **In:**
-- `packages/python-server/src/otto_flags/{client,async_client}.py` and their tests
+- `packages/python-server/src/otto_flags/{client,async_client}.py`, with one shared reader in a
+  new `_response.py`, and their tests
   (`tests/conftest.py`, `tests/test_client.py`, `tests/test_async_client.py`)
 - `packages/node-server/src/client.ts`, `client.test.ts`, and the evaluate mocks in
   `dynamic-config.test.ts` and `config-overrides.test.ts`
@@ -120,6 +121,8 @@ is on reads as on.
   `OttoFlagsClientNetworkTests.swift`
 - `packages/android-sdk/.../OttoFlagsClient.kt`, `OttoFlagsClientFlagKeyTest.kt`,
   `OttoFlagsClientNetworkTest.kt`
+- the `getVariation` sections of the iOS and Android `README.md`, which showed numeric and map
+  defaults that now always return the default
 - one changeset
 
 **Out:** the server (it is the ground truth and is not changed), Rust and TypeScript SDKs,
@@ -173,7 +176,14 @@ None.
 - Body not JSON, JSON not an object, `enabled` missing, `null`, a string or a number: failed
   lookup, not cached.
 - `variation: null`, `configuration: null`: absent, not an error.
-- Cached hits are unchanged: only real `enabled` values are cached.
+- Cached hits are unchanged: only real `enabled` values are cached. Every SDK here caches by flag
+  key alone, ignoring the context (the Rust SDK fixed the same bug in #103). While every lookup
+  ended in the default this hid nothing; with real results it serves the first context's answer
+  to every context for the TTL. Filed as #127 (nothing is published, so no host app is affected
+  yet).
+- iOS reads `enabled` with `as? Bool`, which also bridges a JSON `0`/`1` (`NSNumber`). The server
+  never sends a number there; a CoreFoundation type check would not build on every platform the
+  package lists, so the exception stays and is recorded here.
 - Go: `json.Unmarshal` of `"enabled": null` into `*bool` leaves it nil, so it is a failure too.
   `"variation": null` into a `string` and `"configuration": null` into a map decode as zero
   values without error, so Go needs no null handling.

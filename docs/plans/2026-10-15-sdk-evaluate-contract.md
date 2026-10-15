@@ -1,7 +1,7 @@
 # SDK evaluate contract Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** Python, Node, Go, Java, iOS and Android SDKs evaluate flags through
 `POST /api/flags/{key}/evaluate` and read `enabled`, as `docs/SDK-DEVELOPER-GUIDE.md` documents.
@@ -44,6 +44,8 @@ MockWebServer, JUnit 4).
 | File | Responsibility |
 |---|---|
 | **Modify.** `packages/python-server/src/otto_flags/client.py`, `async_client.py` | read `enabled`, fail without it |
+| **Create.** `packages/python-server/src/otto_flags/_response.py` | the one `enabled` reader both clients use |
+| **Modify.** `packages/ios-sdk/README.md`, `packages/android-sdk/README.md` | `getVariation` examples match the new rules |
 | **Modify.** `packages/python-server/tests/conftest.py`, `test_client.py`, `test_async_client.py` | server-shaped mocks, contract tests |
 | **Modify.** `packages/node-server/src/client.ts`, `client.test.ts`, `dynamic-config.test.ts`, `config-overrides.test.ts` | read `enabled`, fail without it; tests and mocks |
 | **Create.** `.changeset/node-server-evaluate-enabled.md` | patch changeset |
@@ -63,108 +65,108 @@ the same shape is applied, unverified by a compiler, to Go, Java, Swift and Kotl
 
 Model: sonnet
 
-- [ ] Change `mock_flag_response` in `tests/conftest.py` to answer with the server's shape
+- [x] Change `mock_flag_response` in `tests/conftest.py` to answer with the server's shape
   (`key`, `enabled`, `scope`, `variation`, `configuration`, `timestamp`, `version`, `context`);
   the key-path tests in `test_client.py` and the async tests answer with `enabled`.
-- [ ] Add sync and async tests: `enabled: true` with no `value` → `value is True`, reason
+- [x] Add sync and async tests: `enabled: true` with no `value` → `value is True`, reason
   `evaluated`, path `/api/flags/{key}/evaluate`; a body `{"value": true}` (no `enabled`) → the
   default, reason `error`, `on_error` called once, and a second call makes a second request.
-- [ ] Run the Python gate: the new tests fail.
-- [ ] In `client.py` and `async_client.py`, read `data["enabled"]`; when `data` is not a dict or
+- [x] Run the Python gate: the new tests fail.
+- [x] In `client.py` and `async_client.py`, read `data["enabled"]`; when `data` is not a dict or
   `enabled` is not a `bool`, raise `OttoFlagsError` (caught by the existing `except`).
-- [ ] Run the Python gate: all pass; mypy clean.
-- [ ] Commit `fix(sdk): read enabled from the python sdk evaluate response`.
+- [x] Run the Python gate: all pass; mypy clean.
+- [x] Commit `fix(sdk): read enabled from the python sdk evaluate response`.
 
 ### Task 2: Node reads `enabled`
 
 Model: sonnet
 
-- [ ] In `client.test.ts`, `dynamic-config.test.ts` and `config-overrides.test.ts`, evaluate
+- [x] In `client.test.ts`, `dynamic-config.test.ts` and `config-overrides.test.ts`, evaluate
   mocks answer `enabled` instead of `value`. In `client.test.ts` add tests: `{enabled: true}` → true
   and the fetch URL ends `/api/flags/test-flag/evaluate`; `{value: true}` → default, reason
   `error`, `onError` called, not cached (second call fetches again).
-- [ ] Run the pnpm gate: the new tests fail.
-- [ ] In `client.ts`, type the body with `enabled?: unknown`; throw when it is not a boolean.
-- [ ] Run the pnpm gate: all pass.
-- [ ] Add `.changeset/node-server-evaluate-enabled.md` (`"@otto-flags/node-server": patch`).
-- [ ] Commit `fix(sdk): read enabled from the node sdk evaluate response`.
+- [x] Run the pnpm gate: the new tests fail.
+- [x] In `client.ts`, type the body with `enabled?: unknown`; throw when it is not a boolean.
+- [x] Run the pnpm gate: all pass.
+- [x] Add `.changeset/node-server-evaluate-enabled.md` (`"@otto-flags/node-server": patch`).
+- [x] Commit `fix(sdk): read enabled from the node sdk evaluate response`.
 
 ### Task 3: Go uses the documented path and `enabled`
 
 Model: sonnet
 
-- [ ] `flagkey_test.go`: the valid-key path pin becomes `/api/flags/<key>/evaluate`.
-- [ ] `dynamic_config_test.go`, `override_test.go`: evaluate mocks answer `enabled` instead of
+- [x] `flagkey_test.go`: the valid-key path pin becomes `/api/flags/<key>/evaluate`.
+- [x] `dynamic_config_test.go`, `override_test.go`: evaluate mocks answer `enabled` instead of
   `value` (they do not compile until #113; this keeps them from failing on the contract once
   they do). `client_test.go` is left to #113: its whole API surface is stale.
-- [ ] Create `evaluate_contract_test.go`: an `httptest` server answering the server's shape
+- [x] Create `evaluate_contract_test.go`: an `httptest` server answering the server's shape
   (`"variation": null`, `"configuration": null`) → `Value` true, reason `evaluated`, path pinned;
   a body without `enabled` → default + non-nil error, reason `error`, `OnError` called, a second
   call makes a second request.
-- [ ] `client.go`: endpoint `"%s/api/flags/%s/evaluate"`; response field `Enabled *bool
+- [x] `client.go`: endpoint `"%s/api/flags/%s/evaluate"`; response field `Enabled *bool
   \`json:"enabled"\``; nil → error result; cache and return `*response.Enabled`.
-- [ ] Gate not run (no Go toolchain; #17, #113).
-- [ ] Commit `fix(sdk): call the documented evaluate path from the go sdk`.
+- [x] Gate not run (no Go toolchain; #17, #113).
+- [x] Commit `fix(sdk): call the documented evaluate path from the go sdk`.
 
 ### Task 4: Java uses the documented path, `enabled`, and null fields
 
 Model: sonnet
 
-- [ ] `FlagClientTest.java` is left to #113 (it does not compile; its whole API surface is
+- [x] `FlagClientTest.java` is left to #113 (it does not compile; its whole API surface is
   stale).
-- [ ] `FlagKeyTest.java`: mocks answer `{"enabled":true}`; the path pin becomes
+- [x] `FlagKeyTest.java`: mocks answer `{"enabled":true}`; the path pin becomes
   `/api/flags/new-checkout.v2_b/evaluate`.
-- [ ] Create `EvaluateContractTest.java` (MockWebServer, JUnit 5): server-shaped body with null
+- [x] Create `EvaluateContractTest.java` (MockWebServer, JUnit 5): server-shaped body with null
   `variation`/`configuration` → true, `evaluated`, null variation; no `enabled` → default,
   `error`, `onError` once, not cached; `"enabled":"true"` (string) → `error`.
-- [ ] `FlagClient.java`: path segments `api`, `flags`, key, `evaluate`; `enabled` must be a
+- [x] `FlagClient.java`: path segments `api`, `flags`, key, `evaluate`; `enabled` must be a
   boolean `JsonPrimitive`, else `IOException`; `variation`/`configuration` absent when
   `JsonNull`.
-- [ ] Gate not run (no Maven; #113).
-- [ ] Commit `fix(sdk): call the documented evaluate path from the java sdk`.
+- [x] Gate not run (no Maven; #113).
+- [x] Commit `fix(sdk): call the documented evaluate path from the java sdk`.
 
 ### Task 5: iOS uses the documented path and body; `getVariation` on `evaluate`
 
 Model: sonnet
 
-- [ ] `FlagKeyValidationTests.swift`: path pins become `/api/flags/new-checkout.v2_b/evaluate`;
+- [x] `FlagKeyValidationTests.swift`: path pins become `/api/flags/new-checkout.v2_b/evaluate`;
   the variation test expects the evaluate path and the variation name from a body with
   `"variation": "on"`.
-- [ ] Create `EvaluateContractTests.swift`: the request body (read from `httpBodyStream` when
+- [x] Create `EvaluateContractTests.swift`: the request body (read from `httpBodyStream` when
   `httpBody` is nil) is `{"context": {"user_id", "environment", "attributes"}}`;
   `getVariation` returns the variation name, `defaultValue` for a null variation, and the
   enabled state for a `Bool` default.
-- [ ] `OttoFlagsClientNetworkTests.swift`: path and mock bodies follow the server shape.
-- [ ] `OttoFlagsClient.swift`: path `/api/flags/{key}/evaluate`; body from a new internal
+- [x] `OttoFlagsClientNetworkTests.swift`: path and mock bodies follow the server shape.
+- [x] `OttoFlagsClient.swift`: path `/api/flags/{key}/evaluate`; body from a new internal
   `evaluationBody(for:)`; `getVariation<T>` delegates to `evaluate`; its doc comment states the semantics (variation
   name for a `String` default, enabled state for a `Bool` default, else the default; cache and
   overrides apply). Update the stale `/v1/flags/a` comment in `FlagKeyValidationTests.swift`.
-- [ ] Gate not run (no Swift toolchain; #119).
-- [ ] Commit `fix(sdk): call the documented evaluate endpoint from the ios sdk`.
+- [x] Gate not run (no Swift toolchain; #119).
+- [x] Commit `fix(sdk): call the documented evaluate endpoint from the ios sdk`.
 
 ### Task 6: Android uses the documented path and body; nulls; `getVariation` on `evaluate`
 
 Model: sonnet
 
-- [ ] `OttoFlagsClientFlagKeyTest.kt`: `evaluateUrl(key).encodedPath` is
+- [x] `OttoFlagsClientFlagKeyTest.kt`: `evaluateUrl(key).encodedPath` is
   `/api/flags/<key>/evaluate`.
-- [ ] `OttoFlagsClientNetworkTest.kt`: path and bodies follow the server shape; the request body
+- [x] `OttoFlagsClientNetworkTest.kt`: path and bodies follow the server shape; the request body
   has `context.user_id` and `context.environment`; `getVariation` returns the variation name;
   the numeric case returns its default; a null `configuration`/`variation` is not an error.
-- [ ] `OttoFlagsClient.kt`: `flagUrl(key, action)` → `evaluateUrl(key)`; body
+- [x] `OttoFlagsClient.kt`: `flagUrl(key, action)` → `evaluateUrl(key)`; body
   `{"context": {...}}`; `enabled` via `opt("enabled") as? Boolean`; `isNull` checks;
   `getVariation<T>` delegates to `evaluate`, with the same doc comment as iOS.
-- [ ] Gate: none (no Gradle wrapper); recorded. The network tests reach `org.json`, a stub on a
+- [x] Gate: none (no Gradle wrapper); recorded. The network tests reach `org.json`, a stub on a
   plain JVM (#113), so only the URL-builder test is meaningful without Robolectric; recorded in
   the PR body.
-- [ ] Commit `fix(sdk): call the documented evaluate endpoint from the android sdk`.
+- [x] Commit `fix(sdk): call the documented evaluate endpoint from the android sdk`.
 
 ### Task 7: Follow-ups and PR body
 
 Model: haiku
 
-- [ ] File two issues (type `bug`, no attribution): non-Rust SDKs fill metadata from fields the
+- [x] File two issues (type `bug`, no attribution): non-Rust SDKs fill metadata from fields the
   server never sends; iOS and Android call `/v1/events`, `/v1/stream` and `/v1/flags`, which the
-  server does not serve.
-- [ ] The PR body names both, and records the gates not run (Go, Java, Swift) and Android's lack
+  server does not serve. (Filed as #124 and #125; review added #127, context-blind caching.)
+- [x] The PR body names both, and records the gates not run (Go, Java, Swift) and Android's lack
   of a gate.
