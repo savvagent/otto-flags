@@ -54,6 +54,8 @@ pub(crate) const MAX_VARIATIONS: usize = 20;
 /// SDKs fall back to their default (#115). Only writes are checked: a
 /// configuration stored before the cap still evaluates and rolls back.
 /// Documented in `docs/SDK-DEVELOPER-GUIDE.md`.
+/// `limits_are_documented` pins the value: the MCP tool argument docs
+/// (`crates/flags-mcp/src/tools/flags.rs`) and the guide state it in prose.
 pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
 /// One environment's state for a flag.
@@ -485,11 +487,15 @@ pub(crate) fn json_len(v: &Value) -> usize {
 
 /// Refuses a configuration over [`MAX_CONFIGURATION_BYTES`]; `what` names it
 /// in the message.
-pub(crate) fn check_configuration_size(what: &str, c: &Value) -> Result<(), String> {
+pub(crate) fn check_configuration_size(
+    what: impl FnOnce() -> String,
+    c: &Value,
+) -> Result<(), String> {
     let n = json_len(c);
     if n > MAX_CONFIGURATION_BYTES {
         return Err(format!(
-            "{what} is {n} bytes as JSON; the limit is {MAX_CONFIGURATION_BYTES} bytes"
+            "{} is {n} bytes as JSON; the limit is {MAX_CONFIGURATION_BYTES} bytes",
+            what()
         ));
     }
     Ok(())
@@ -517,7 +523,7 @@ pub fn validate_variations(v: &Value) -> Result<Value, String> {
     for (name, variation) in &parsed {
         validate_name("variation name", name)?;
         if let Some(c) = &variation.configuration {
-            check_configuration_size(&format!("variation {name:?} configuration"), c)?;
+            check_configuration_size(|| format!("variation {name:?} configuration"), c)?;
         }
     }
     serde_json::to_value(&parsed).map_err(|e| e.to_string())
@@ -927,5 +933,13 @@ mod tests {
             e.contains(&(MAX_CONFIGURATION_BYTES + 1).to_string()),
             "{e}"
         );
+    }
+
+    #[test]
+    fn limits_are_documented() {
+        // "32 KiB" is written out in the create_flag and update_flag argument
+        // docs (crates/flags-mcp/src/tools/flags.rs) and in
+        // docs/SDK-DEVELOPER-GUIDE.md; change them with this constant.
+        assert_eq!(MAX_CONFIGURATION_BYTES, 32 * 1024);
     }
 }

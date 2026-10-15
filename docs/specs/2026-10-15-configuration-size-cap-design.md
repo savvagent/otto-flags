@@ -54,7 +54,9 @@ From #115 (found while working #111):
 - **Writes of other fields are unaffected.** `update_flag` checks only the fields its patch
   carries: renaming a flag whose stored configuration predates the cap succeeds. Re-submitting an
   over-limit configuration (or a `variations` set containing one) is refused, as for any new
-  write.
+  write. Because `update_flag` replaces the whole variations set, a flag holding one pre-cap
+  oversized variation cannot have any variation edited until that configuration is brought
+  under the limit (production has no such flag).
 - **Existing data:** checked 2026-10-15 SELECT-only (read-only transaction) against production
   `otto_flags`: `feature_flags` and `flag_versions` hold 0 rows, so nothing exceeds the cap and no
   data change is needed or handed to Rob.
@@ -141,8 +143,10 @@ None.
 
 ## 11. Risks & open questions
 
-- The list endpoint and SSE events are bounded per flag only by 21 × 32 KiB, and the list is
-  unbounded in flag count (pre-existing). Not in scope.
+- The list endpoint and SSE events are bounded per flag only by 21 × 32 KiB, the list is
+  unbounded in flag count, and `flag_versions` keeps every snapshot (all pre-existing). A
+  per-flag total was considered in review and left out: the AC asks for a per-configuration
+  limit, and a per-flag total would not bound the list either. Tracked in #123.
 - 32 KiB may be small for a client that stores large configuration blobs; none exist in
   production, and the constant is one line to raise (raising is compatible with every SDK whose
   read cap stays above it).

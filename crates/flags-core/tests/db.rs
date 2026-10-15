@@ -5991,7 +5991,8 @@ async fn configuration_size_is_capped_on_write(pool: PgPool) {
             &app,
             "at-limit",
             FlagPatch {
-                configuration: Some(json!({"theme": "dark"})),
+                variations: Some(json!({"control": {"configuration": sized(max)}})),
+                configuration: Some(sized(max)),
                 ..Default::default()
             },
             meta(actor),
@@ -5999,7 +6000,24 @@ async fn configuration_size_is_capped_on_write(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(updated.version, flag.version + 1);
-    assert_eq!(updated.configuration, Some(json!({"theme": "dark"})));
+    assert_eq!(
+        updated.variations,
+        json!({"control": {"configuration": sized(max)}})
+    );
+    // JSON null clears the configuration; it is never measured against the cap.
+    let cleared = tx
+        .update_flag(
+            &app,
+            "at-limit",
+            FlagPatch {
+                configuration: Some(serde_json::Value::Null),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.configuration, None);
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
@@ -6018,6 +6036,7 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
             &app,
             NewFlag {
                 key: "legacy".into(),
+                variations: Some(json!({"on": {}})),
                 ..Default::default()
             },
             actor,
@@ -6025,6 +6044,22 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
         )
         .await
         .unwrap();
+    // Stored before the cap existed: written around the validation.
+    let big = sized(max + 10_000);
+    let big_variations = json!({"on": {"configuration": sized(max + 20_000)}});
+    sqlx::query(
+        "UPDATE feature_flags SET configuration = $3, variations = $4 \
+         WHERE org_id = $1 AND id = $2",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .bind(&big)
+    .bind(&big_variations)
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    // Neither the kill switch nor a targeting change re-checks the stored
+    // configurations.
     tx.set_environment(
         &app,
         "legacy",
@@ -6037,23 +6072,32 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
     )
     .await
     .unwrap();
-    // Stored before the cap existed: written around the validation.
-    let big = sized(max + 10_000);
-    sqlx::query("UPDATE feature_flags SET configuration = $3 WHERE org_id = $1 AND id = $2")
-        .bind(org)
-        .bind(flag.id)
-        .bind(&big)
-        .execute(tx.conn())
-        .await
-        .unwrap();
     tx.commit().await.unwrap();
 
     let mut tx = db.begin(org).await.unwrap();
     let stored = tx.find_flag(app.id, "legacy").await.unwrap().unwrap();
-    let e = eval::evaluate(stored.view(), "production", &Context::default());
-    assert!(e.enabled);
+    // Off (no state for the environment): the flag's own configuration.
+    let e = eval::evaluate(stored.view(), "staging", &Context::default());
+    assert!(!e.enabled);
     assert_eq!(e.configuration, Some(big.clone()));
+    let with_variation = tx
+        .set_environment(
+            &app,
+            "legacy",
+            "production",
+            EnvPatch {
+                default_variation: Some(Some("on".into())),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    let e = eval::evaluate(with_variation.view(), "production", &Context::default());
+    assert_eq!(e.variation.as_deref(), Some("on"));
+    assert_eq!(e.configuration, Some(sized(max + 20_000)));
 
+    // A write that does not carry the configurations leaves them alone.
     let renamed = tx
         .update_flag(
             &app,
@@ -6068,18 +6112,46 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
         .unwrap();
     assert_eq!(renamed.name, "Legacy");
     assert_eq!(renamed.configuration, Some(big.clone()));
+    assert_eq!(renamed.variations, big_variations);
 
-    let err = tx
+    // Resubmitting either is a new write, so it is refused.
+    for patch in [
+        FlagPatch {
+            configuration: Some(big.clone()),
+            ..Default::default()
+        },
+        FlagPatch {
+            variations: Some(big_variations.clone()),
+            ..Default::default()
+        },
+    ] {
+        let err = tx
+            .update_flag(&app, "legacy", patch, meta(actor))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), "invalid_argument", "{err}");
+    }
+
+    // Shrinking it is allowed, and a rollback restores the stored state
+    // unchecked: the incident path never fails on pre-cap data.
+    let shrunk = tx
         .update_flag(
             &app,
             "legacy",
             FlagPatch {
-                configuration: Some(big),
+                configuration: Some(json!({"small": true})),
                 ..Default::default()
             },
             meta(actor),
         )
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), "invalid_argument", "{err}");
+        .unwrap();
+    assert_eq!(shrunk.configuration, Some(json!({"small": true})));
+    let (back, to) = tx
+        .rollback_flag(&app, "legacy", Some(renamed.version), meta(actor))
+        .await
+        .unwrap();
+    assert_eq!(to, renamed.version);
+    assert_eq!(back.configuration, Some(big));
+    assert_eq!(back.variations, big_variations);
 }

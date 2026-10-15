@@ -196,7 +196,7 @@ fn validate_configuration(c: &Value) -> Result<()> {
             "configuration must not contain NUL (U+0000)".into(),
         ));
     }
-    eval::check_configuration_size("configuration", c).map_err(invalid)
+    eval::check_configuration_size(|| "configuration".into(), c).map_err(invalid)
 }
 
 fn invalid(e: String) -> Error {
