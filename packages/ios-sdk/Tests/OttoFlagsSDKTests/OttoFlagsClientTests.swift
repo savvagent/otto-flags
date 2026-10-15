@@ -9,8 +9,8 @@ final class OttoFlagsClientTests: XCTestCase {
         let config = OttoFlagsConfig(
             sdkKey: "test-key",
             environment: "test",
-            enableWebSocket: false,
-            pollingInterval: 0 // Disable polling for tests
+            pollingInterval: 0, // Disable polling for tests
+            enableWebSocket: false
         )
         client = OttoFlagsClient(config: config)
     }
@@ -95,8 +95,8 @@ final class OttoFlagsClientTests: XCTestCase {
     func testClientCleanup() {
         let config = OttoFlagsConfig(
             sdkKey: "test-key",
-            enableWebSocket: false,
-            pollingInterval: 0
+            pollingInterval: 0,
+            enableWebSocket: false
         )
         let testClient = OttoFlagsClient(config: config)
 

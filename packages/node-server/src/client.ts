@@ -13,6 +13,22 @@ import {
 } from './types';
 
 /**
+ * Whether `key` can be a flag key. Mirrors the server's rule: 1-128 characters
+ * from `[A-Za-z0-9._-]`, and not `.` or `..`. The key is a URL path segment, and
+ * `.` and `..` cannot be carried in one (clients normalize them away), so no
+ * flag can have those keys. Checking before the request keeps an invalid key,
+ * and the SDK key sent with it, from steering the request elsewhere (#107).
+ */
+function isValidFlagKey(key: unknown): boolean {
+  return (
+    typeof key === 'string' &&
+    key !== '.' &&
+    key !== '..' &&
+    /^[A-Za-z0-9._-]{1,128}$/.test(key)
+  );
+}
+
+/**
  * Otto Flags Server Client for feature flag evaluation with AI-powered error detection
  */
 export class FlagClient {
@@ -76,6 +92,23 @@ export class FlagClient {
    * Evaluate a feature flag
    */
   async evaluate(flagKey: string, context?: FlagContext): Promise<FlagEvaluationResult> {
+    if (!isValidFlagKey(flagKey)) {
+      // Untyped callers can pass anything here.
+      const key: unknown = flagKey;
+      const described =
+        typeof key === 'string'
+          ? `${JSON.stringify(key.slice(0, 64))} (length ${key.length})`
+          : `non-string value of type ${typeof key}`;
+      this.config.onError(
+        new Error(`Invalid flag key ${described}: keys are 1-128 characters of [A-Za-z0-9._-] and not "." or ".."`)
+      );
+      return {
+        key: String(key),
+        value: (typeof key === 'string' && this.config.defaults[key]) || false,
+        reason: 'error',
+      };
+    }
+
     const startTime = Date.now();
 
     try {
@@ -135,7 +168,7 @@ export class FlagClient {
       const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
 
       // Per SDK Developer Guide: POST /api/flags/{key}/evaluate
-      const response = await fetch(`${this.config.baseUrl}/api/flags/${flagKey}/evaluate`, {
+      const response = await fetch(`${this.config.baseUrl}/api/flags/${encodeURIComponent(flagKey)}/evaluate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

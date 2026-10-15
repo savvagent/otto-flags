@@ -12,11 +12,13 @@ import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
+from urllib.parse import quote
 
 import httpx
 
+from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
 from .cache import FlagCache
-from .exceptions import InvalidAPIKeyError
+from .exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 from .realtime import RealtimeService
 from .telemetry import TelemetryService
 from .types import (
@@ -120,6 +122,19 @@ class FlagClient:
         Returns:
             FlagEvaluationResult with value, configuration, and metadata.
         """
+        if not is_valid_flag_key(flag_key):
+            # Never put an unvalidated key in the URL path (#107): no request,
+            # no telemetry, just the configured default.
+            if self._config.on_error:
+                self._config.on_error(
+                    InvalidFlagKeyError(f"Invalid flag key: {describe_flag_key(flag_key)}")
+                )
+            return FlagEvaluationResult(
+                key=flag_key,
+                value=default_for(self._config.defaults, flag_key),
+                reason="error",
+            )
+
         start_time = time.time()
 
         try:
@@ -166,7 +181,7 @@ class FlagClient:
 
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = self._client.post(
-                f"{self._config.base_url}/api/flags/{flag_key}/evaluate",
+                f"{self._config.base_url}/api/flags/{quote(flag_key, safe='')}/evaluate",
                 json={"context": eval_context.to_dict()},
                 headers={
                     "Content-Type": "application/json",

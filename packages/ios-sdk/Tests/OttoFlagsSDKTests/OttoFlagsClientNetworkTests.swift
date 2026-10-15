@@ -16,8 +16,8 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
             apiUrl: "https://otto-flags.savvagent.com",
             sdkKey: "test-key",
             environment: "test",
-            enableWebSocket: false,
-            pollingInterval: 0 // Disable polling for tests
+            pollingInterval: 0, // Disable polling for tests
+            enableWebSocket: false
         )
 
         // We'll need to modify OttoFlagsClient to accept custom URLSession for testing

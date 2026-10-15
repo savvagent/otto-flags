@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,17 @@ func NewClient(config Config) (*FlagClient, error) {
 
 // Evaluate evaluates a feature flag and returns the result
 func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, error) {
+	// Reject malformed keys before anything else: no request, no cache lookup.
+	if !isValidFlagKey(flagKey) {
+		prefix := flagKey
+		if len(prefix) > 64 {
+			prefix = prefix[:64]
+		}
+		err := fmt.Errorf("%w: %q (%d bytes)", ErrInvalidFlagKey, prefix, len(flagKey))
+		c.config.OnError(err)
+		return c.getDefaultResult(flagKey, err), err
+	}
+
 	// Check cache first
 	if cachedEntry, found := c.cache.GetEntry(flagKey); found {
 		configuration := cachedEntry.Configuration
@@ -107,8 +119,8 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		return c.getDefaultResult(flagKey, err), err
 	}
 
-	url := fmt.Sprintf("%s/api/evaluate/%s", c.config.BaseURL, flagKey)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	endpoint := fmt.Sprintf("%s/api/evaluate/%s", c.config.BaseURL, url.PathEscape(flagKey))
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return c.getDefaultResult(flagKey, err), err
 	}

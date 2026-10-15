@@ -54,6 +54,7 @@ from .exceptions import (
     ConfigurationError,
     ConnectionError,
     InvalidAPIKeyError,
+    InvalidFlagKeyError,
     OttoFlagsError,
     RateLimitError,
     TimeoutError,
@@ -108,6 +109,7 @@ __all__ = [
     # Exceptions
     "OttoFlagsError",
     "InvalidAPIKeyError",
+    "InvalidFlagKeyError",
     "APIError",
     "AuthenticationError",
     "RateLimitError",

@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
-from otto_flags.exceptions import InvalidAPIKeyError
+from otto_flags.exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 
 
 @pytest.fixture
@@ -315,3 +315,100 @@ class TestAsyncCacheManagement:
             # Third call hits API again
             result = await client.evaluate("test-flag")
             assert result.reason == "evaluated"
+
+
+INVALID_FLAG_KEYS = [
+    "a/b",
+    "a?b",
+    "a#b",
+    ".",
+    "..",
+    "",
+    "bad key",
+    "flag\n",
+    "a" * 129,
+]
+
+
+class TestAsyncInvalidFlagKey:
+    """Flag keys that cannot be carried in a URL path are never sent (#107)."""
+
+    @pytest.mark.parametrize("key", INVALID_FLAG_KEYS)
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_invalid_key_returns_default_without_request(self, key: str) -> None:
+        errors: list[Exception] = []
+        route = respx.route()
+        config = FlagClientConfig(
+            api_key="sdk_test_key_12345",
+            base_url="https://otto-flags.savvagent.com",
+            enable_realtime=False,
+            enable_telemetry=False,
+            defaults={key: True},
+            on_error=errors.append,
+        )
+        async with AsyncFlagClient(config) as client:
+            result = await client.evaluate(key)
+
+        assert result.value is True
+        assert result.reason == "error"
+        assert result.key == key
+        assert route.called is False
+        assert respx.calls.call_count == 0
+        assert len(errors) == 1
+        assert isinstance(errors[0], InvalidFlagKeyError)
+
+    @pytest.mark.parametrize("key", [None, 42, ["a"]])
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_non_string_key_returns_false_without_raising(self, key: object) -> None:
+        errors: list[Exception] = []
+        route = respx.route()
+        config = FlagClientConfig(
+            api_key="sdk_test_key_12345",
+            enable_realtime=False,
+            enable_telemetry=False,
+            on_error=errors.append,
+        )
+        async with AsyncFlagClient(config) as client:
+            result = await client.evaluate(key)  # type: ignore[arg-type]  # untyped callers
+
+        assert result.value is False
+        assert result.reason == "error"
+        assert route.called is False
+        assert len(errors) == 1
+        assert "non-string value of type" in str(errors[0])
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_valid_key_hits_expected_path(self, async_config: FlagClientConfig) -> None:
+        route = respx.post(
+            "https://otto-flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
+        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        async with AsyncFlagClient(async_config) as client:
+            result = await client.evaluate("new-checkout.v2_b")
+        assert route.called
+        assert result.reason == "evaluated"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_128_character_key_is_valid(self, async_config: FlagClientConfig) -> None:
+        key = "a" * 128
+        route = respx.post(
+            f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
+        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        async with AsyncFlagClient(async_config) as client:
+            result = await client.evaluate(key)
+        assert route.called
+        assert result.reason == "evaluated"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_triple_dot_key_is_valid(self, async_config: FlagClientConfig) -> None:
+        route = respx.post(
+            "https://otto-flags.savvagent.com/api/flags/.../evaluate"
+        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        async with AsyncFlagClient(async_config) as client:
+            result = await client.evaluate("...")
+        assert route.called
+        assert result.reason == "evaluated"

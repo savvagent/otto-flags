@@ -48,6 +48,17 @@ public class FlagClient implements AutoCloseable {
     public FlagEvaluationResult evaluate(String flagKey, FlagContext context) {
         long startTime = System.currentTimeMillis();
 
+        if (!isValidFlagKey(flagKey)) {
+            String message = describeInvalidFlagKey(flagKey);
+            logger.error("{}", message);
+            try {
+                config.getOnError().accept(new IllegalArgumentException(message));
+            } catch (RuntimeException callbackFailure) {
+                logger.error("onError callback failed: {}", callbackFailure.getMessage());
+            }
+            return new FlagEvaluationResult(flagKey, defaultFor(flagKey), "error", null);
+        }
+
         try {
             // Check cache first
             CacheEntry cachedEntry = getCachedEntry(flagKey);
@@ -84,7 +95,12 @@ public class FlagClient implements AutoCloseable {
             }
 
             // Call API
-            String url = config.getBaseUrl() + "/api/evaluate/" + flagKey;
+            // Build the URL segment by segment so the key is encoded as one path segment.
+            HttpUrl url = HttpUrl.get(config.getBaseUrl()).newBuilder()
+                    .addPathSegment("api")
+                    .addPathSegment("evaluate")
+                    .addPathSegment(flagKey)
+                    .build();
             JsonObject requestBody = new JsonObject();
             requestBody.add("context", gson.toJsonTree(context));
 
@@ -137,9 +153,58 @@ public class FlagClient implements AutoCloseable {
             config.getOnError().accept(e instanceof Exception ? (Exception) e : new Exception(e));
 
             // Return default value
-            boolean defaultValue = config.getDefaults().getOrDefault(flagKey, false);
+            boolean defaultValue = defaultFor(flagKey);
             return new FlagEvaluationResult(flagKey, defaultValue, "error", null);
         }
+    }
+
+    /**
+     * Returns whether a flag key may be sent to the API.
+     *
+     * <p>A key is valid when it is 1 to 128 characters long, every character is in
+     * {@code [A-Za-z0-9._-]}, and it is not {@code .} or {@code ..}. This mirrors the
+     * server's flag key rule. The key becomes one URL path segment carrying the SDK key in
+     * the Authorization header; a key containing {@code /}, {@code ?} or {@code #} could
+     * steer the request, and that header, to another endpoint, and {@code .} or {@code ..}
+     * cannot be carried in a URL path because clients normalize them away (#107).
+     *
+     * @param key the flag key, possibly null
+     * @return true if the key is safe to use as a path segment
+     */
+    private static boolean isValidFlagKey(String key) {
+        if (key == null || key.isEmpty() || key.length() > 128) {
+            return false;
+        }
+        if (key.equals(".") || key.equals("..")) {
+            return false;
+        }
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+            if (!ok) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String describeInvalidFlagKey(String key) {
+        if (key == null) {
+            return "Invalid flag key: null";
+        }
+        String prefix = key.length() > 64 ? key.substring(0, 64) : key;
+        return "Invalid flag key " + gson.toJson(prefix) + " (length " + key.length()
+                + "): keys must be 1-128 characters of A-Z a-z 0-9 . _ - and not . or ..";
+    }
+
+    private boolean defaultFor(String flagKey) {
+        Map<String, Boolean> defaults = config.getDefaults();
+        if (flagKey == null || defaults == null) {
+            return false;
+        }
+        Boolean value = defaults.get(flagKey);
+        return value != null ? value : false;
     }
 
     /**

@@ -15,6 +15,15 @@ class InvalidAPIKeyError(OttoFlagsError):
     pass
 
 
+class InvalidFlagKeyError(OttoFlagsError):
+    """Passed to ``on_error`` when a flag key is not a valid flag key.
+
+    The SDK makes no request for such a key and returns the configured default.
+    """
+
+    pass
+
+
 class APIError(OttoFlagsError):
     """Raised when the API returns an error response."""
 
