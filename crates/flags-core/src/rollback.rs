@@ -1166,11 +1166,21 @@ pub async fn check_flag(
                     code: e.code(),
                     transient: e.is_transient(),
                 });
-                // The code only: database text never reaches a log above debug.
-                tracing::warn!(%org, %flag, policy = %policy.id, code = e.code(),
-                    "auto-rollback could not act on a policy");
-                tracing::debug!(%org, %flag, policy = %policy.id, error = %e,
-                    "auto-rollback policy failure");
+                // Text-free fields only: database text never reaches a log
+                // above debug (#54).
+                let f = e.failure_reason();
+                tracing::warn!(
+                    %org, %flag, policy = %policy.id, code = e.code(),
+                    reason = f.reason, status = f.status, sqlstate = f.sqlstate(),
+                    transport = f.transport,
+                    "auto-rollback could not act on a policy"
+                );
+                tracing::debug!(
+                    %org, %flag, policy = %policy.id, code = e.code(),
+                    reason = f.reason, status = f.status, sqlstate = f.sqlstate(),
+                    transport = f.transport, error = %e,
+                    "auto-rollback policy failure"
+                );
             }
         }
     }
@@ -1687,8 +1697,17 @@ async fn run<E: EntitlementSource>(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(code = e.code(), "auto-rollback backstop could not list due policies");
-                        tracing::debug!(error = %e, "auto-rollback backstop failure");
+                        let f = e.failure_reason();
+                        tracing::warn!(
+                            code = e.code(), reason = f.reason, status = f.status,
+                            sqlstate = f.sqlstate(), transport = f.transport,
+                            "auto-rollback backstop could not list due policies"
+                        );
+                        tracing::debug!(
+                            code = e.code(), reason = f.reason, status = f.status,
+                            sqlstate = f.sqlstate(), transport = f.transport, error = %e,
+                            "auto-rollback backstop failure"
+                        );
                     }
                 }
             }
@@ -1786,12 +1805,20 @@ async fn check_one(
         }
         Err(e) => {
             let result = classify(&e);
-            // The code only: database text never reaches a log above debug.
+            // Text-free fields only: database text never reaches a log above
+            // debug (#54).
+            let f = e.failure_reason();
+            let retry = result == Checked::Retry;
             tracing::warn!(
-                %org, %flag, code = e.code(), retry = result == Checked::Retry,
+                %org, %flag, code = e.code(), reason = f.reason, status = f.status,
+                sqlstate = f.sqlstate(), transport = f.transport, retry,
                 "auto-rollback check failed"
             );
-            tracing::debug!(%org, %flag, error = %e, "auto-rollback check failure");
+            tracing::debug!(
+                %org, %flag, code = e.code(), reason = f.reason, status = f.status,
+                sqlstate = f.sqlstate(), transport = f.transport, retry, error = %e,
+                "auto-rollback check failure"
+            );
             result
         }
     }
