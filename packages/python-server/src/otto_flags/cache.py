@@ -245,7 +245,7 @@ class AsyncFlagCache:
                 if entry.expires_at > now
             ]
 
-    async def __aenter__(self) -> "AsyncFlagCache":
+    async def __aenter__(self) -> AsyncFlagCache:
         """Async context manager entry."""
         return self
 

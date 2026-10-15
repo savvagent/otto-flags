@@ -99,7 +99,7 @@ class FlagClient:
             self._realtime.subscribe("*", lambda event: self._cache.invalidate(event.flag_key))
             self._realtime.connect()
 
-    def __enter__(self) -> "FlagClient":
+    def __enter__(self) -> FlagClient:
         """Context manager entry."""
         return self
 
@@ -414,7 +414,7 @@ class FlagClient:
             try:
                 json.dumps(config)
             except (TypeError, ValueError) as e:
-                raise ValueError(f"Invalid configuration for flag '{flag_key}': {e}")
+                raise ValueError(f"Invalid configuration for flag '{flag_key}': {e}") from e
 
         # Store override
         self._config_overrides[flag_key] = ConfigOverrideEntry(

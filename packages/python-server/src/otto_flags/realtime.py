@@ -7,6 +7,7 @@ Per SDK Developer Guide: GET /api/flags/stream with Authorization header.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import threading
@@ -14,7 +15,7 @@ import time
 from typing import Any, Callable
 
 import httpx
-from httpx_sse import connect_sse, aconnect_sse
+from httpx_sse import aconnect_sse, connect_sse
 
 from .types import FlagUpdateEvent
 
@@ -69,43 +70,40 @@ class RealtimeService:
 
         while not self._closed and self._reconnect_attempts < self._max_reconnect_attempts:
             try:
-                with httpx.Client(timeout=None) as client:
-                    with connect_sse(
-                        client,
-                        "GET",
-                        url,
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                    ) as event_source:
-                        self._connected = True
-                        self._reconnect_attempts = 0
-                        self._reconnect_delay = 1.0
-                        self._on_connection_change(True)
-                        print("[Otto Flags] Real-time connection established", file=sys.stderr)
+                with httpx.Client(timeout=None) as client, connect_sse(
+                    client,
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                ) as event_source:
+                    self._connected = True
+                    self._reconnect_attempts = 0
+                    self._reconnect_delay = 1.0
+                    self._on_connection_change(True)
+                    print("[Otto Flags] Real-time connection established", file=sys.stderr)
 
-                        for event in event_source.iter_sse():
-                            if self._closed:
-                                break
+                    for event in event_source.iter_sse():
+                        if self._closed:
+                            break
 
-                            # Handle different event types
-                            if event.event == "heartbeat":
-                                continue
-                            elif event.event == "connected":
-                                continue
-                            elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
-                                self._handle_flag_event(event.event, event.data)
-                            elif event.data:
-                                # Fallback for generic messages
-                                try:
-                                    data = json.loads(event.data)
-                                    if "type" in data and "key" in data:
-                                        update_event = FlagUpdateEvent(
-                                            type=data["type"],
-                                            flag_key=data["key"],
-                                            data=data,
-                                        )
-                                        self._notify_subscribers(update_event)
-                                except json.JSONDecodeError:
-                                    pass
+                        # Handle different event types
+                        if event.event == "heartbeat" or event.event == "connected":
+                            continue
+                        elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
+                            self._handle_flag_event(event.event, event.data)
+                        elif event.data:
+                            # Fallback for generic messages
+                            try:
+                                data = json.loads(event.data)
+                                if "type" in data and "key" in data:
+                                    update_event = FlagUpdateEvent(
+                                        type=data["type"],
+                                        flag_key=data["key"],
+                                        data=data,
+                                    )
+                                    self._notify_subscribers(update_event)
+                            except json.JSONDecodeError:
+                                pass
 
             except Exception as e:
                 if not self._closed:
@@ -258,41 +256,38 @@ class AsyncRealtimeService:
 
         while not self._closed and self._reconnect_attempts < self._max_reconnect_attempts:
             try:
-                async with httpx.AsyncClient(timeout=None) as client:
-                    async with aconnect_sse(
-                        client,
-                        "GET",
-                        url,
-                        headers={"Authorization": f"Bearer {self._api_key}"},
-                    ) as event_source:
-                        self._connected = True
-                        self._reconnect_attempts = 0
-                        self._reconnect_delay = 1.0
-                        self._on_connection_change(True)
-                        print("[Otto Flags] Real-time connection established", file=sys.stderr)
+                async with httpx.AsyncClient(timeout=None) as client, aconnect_sse(
+                    client,
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                ) as event_source:
+                    self._connected = True
+                    self._reconnect_attempts = 0
+                    self._reconnect_delay = 1.0
+                    self._on_connection_change(True)
+                    print("[Otto Flags] Real-time connection established", file=sys.stderr)
 
-                        async for event in event_source.aiter_sse():
-                            if self._closed:
-                                break
+                    async for event in event_source.aiter_sse():
+                        if self._closed:
+                            break
 
-                            if event.event == "heartbeat":
-                                continue
-                            elif event.event == "connected":
-                                continue
-                            elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
-                                await self._handle_flag_event(event.event, event.data)
-                            elif event.data:
-                                try:
-                                    data = json.loads(event.data)
-                                    if "type" in data and "key" in data:
-                                        update_event = FlagUpdateEvent(
-                                            type=data["type"],
-                                            flag_key=data["key"],
-                                            data=data,
-                                        )
-                                        await self._notify_subscribers(update_event)
-                                except json.JSONDecodeError:
-                                    pass
+                        if event.event == "heartbeat" or event.event == "connected":
+                            continue
+                        elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
+                            await self._handle_flag_event(event.event, event.data)
+                        elif event.data:
+                            try:
+                                data = json.loads(event.data)
+                                if "type" in data and "key" in data:
+                                    update_event = FlagUpdateEvent(
+                                        type=data["type"],
+                                        flag_key=data["key"],
+                                        data=data,
+                                    )
+                                    await self._notify_subscribers(update_event)
+                            except json.JSONDecodeError:
+                                pass
 
             except asyncio.CancelledError:
                 break
@@ -392,10 +387,8 @@ class AsyncRealtimeService:
         self._reconnect_attempts = self._max_reconnect_attempts
         if self._connection_task:
             self._connection_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._connection_task
-            except asyncio.CancelledError:
-                pass
             self._connection_task = None
 
     async def close(self) -> None:

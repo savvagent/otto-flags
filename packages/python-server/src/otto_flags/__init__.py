@@ -54,8 +54,8 @@ from .exceptions import (
     ConfigurationError,
     ConnectionError,
     InvalidAPIKeyError,
-    RateLimitError,
     OttoFlagsError,
+    RateLimitError,
     TimeoutError,
 )
 from .realtime import AsyncRealtimeService, RealtimeService
