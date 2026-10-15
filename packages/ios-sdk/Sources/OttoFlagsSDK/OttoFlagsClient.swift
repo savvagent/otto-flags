@@ -195,7 +195,7 @@ public class OttoFlagsClient {
 
         // Fetch from API
         guard let encodedKey = Self.encodePathSegment(flagKey),
-              let url = URL(string: "\(config.apiUrl)/v1/flags/\(encodedKey)/evaluate") else {
+              let url = URL(string: "\(config.apiUrl)/api/flags/\(encodedKey)/evaluate") else {
             throw OttoFlagsError.invalidURL
         }
 
@@ -205,8 +205,7 @@ public class OttoFlagsClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = config.timeout
 
-        let body = try JSONSerialization.data(withJSONObject: context.toJSON())
-        request.httpBody = body
+        request.httpBody = try JSONSerialization.data(withJSONObject: evaluationBody(for: context))
 
         let (data, response) = try await session.data(for: request)
 
@@ -285,42 +284,42 @@ public class OttoFlagsClient {
     }
 
     /// Get a variation value for a feature flag (legacy method - kept for backward compatibility)
+    ///
+    /// The server has no variation endpoint: this evaluates the flag through `evaluate`, so the
+    /// cache and local variation overrides apply. It returns
+    /// - the variation name when `defaultValue` is a `String` (or `defaultValue` when the flag
+    ///   has no variation),
+    /// - whether the flag is enabled when `defaultValue` is a `Bool`,
+    /// - `defaultValue` for any other type, and on any failure.
     /// - Parameters:
     ///   - flagKey: The key of the feature flag
     ///   - context: User context for evaluation
     ///   - defaultValue: Default value if flag evaluation fails
     /// - Returns: The variation value or default
     public func getVariation<T>(flagKey: String, context: UserContext, defaultValue: T) async -> T {
-        guard Self.isValidFlagKey(flagKey) else {
+        guard let result = try? await evaluate(flagKey: flagKey, context: context) else {
             return defaultValue
         }
-
-        do {
-            guard let encodedKey = Self.encodePathSegment(flagKey),
-                  let url = URL(string: "\(config.apiUrl)/v1/flags/\(encodedKey)/variation") else {
-                return defaultValue
-            }
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.timeoutInterval = config.timeout
-
-            let body = try JSONSerialization.data(withJSONObject: context.toJSON())
-            request.httpBody = body
-
-            let (data, _) = try await session.data(for: request)
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let value = json["value"] as? T else {
-                return defaultValue
-            }
-
-            return value
-        } catch {
-            return defaultValue
+        if defaultValue is String {
+            return (result.variation as? T) ?? defaultValue
         }
+        if defaultValue is Bool {
+            return (result.value as? T) ?? defaultValue
+        }
+        return defaultValue
+    }
+
+    /// The evaluate request body the SDK guide documents: `{"context": {...}}` with the
+    /// server's snake_case context fields. `UserContext.toJSON()` is the `track` event shape,
+    /// which the server does not read here.
+    func evaluationBody(for context: UserContext) -> [String: Any] {
+        [
+            "context": [
+                "user_id": context.userId,
+                "environment": config.environment,
+                "attributes": context.attributes,
+            ] as [String: Any],
+        ]
     }
 
     /// Track an event for analytics
