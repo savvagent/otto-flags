@@ -1633,9 +1633,10 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
 }
 
 /// The shipper on the default test pool, whose superuser role RLS does not
-/// apply to: its maintenance transactions drop into `otto_app` (#73), so this
-/// proves the outbox's marker policies let it claim, delete, and record
-/// rejections for every org.
+/// apply to. Its maintenance transactions run there as `otto_app` (#73), so
+/// this guards that the outbox's marker policies and grants still let it
+/// claim, delete, and record rejections for every org. It would pass before
+/// #73 too: it guards, it does not reproduce.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn the_shipper_reaches_every_org_on_the_superuser_pool(pool: PgPool) {
     let (url, platform) = start_platform().await;

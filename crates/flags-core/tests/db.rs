@@ -2859,9 +2859,10 @@ async fn unpinned_sweeps_delete_as_otto_app(pool: PgPool) {
 }
 
 /// The retention sweeps on the default test pool, whose superuser role RLS
-/// does not apply to: maintenance transactions drop into `otto_app` (#73), so
-/// this proves the marker policies, not the pool role, let them reach every
-/// org's expired rows (and only those).
+/// does not apply to. Maintenance transactions run there as `otto_app` (#73;
+/// `maintenance`'s own tests prove the role), so this guards that the marker
+/// policies and grants still let them reach every org's expired rows, and only
+/// those. It would pass before #73 too: it guards, it does not reproduce.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
     let db = db(pool.clone()).await;
@@ -2933,15 +2934,29 @@ async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
             .await
             .unwrap();
         }
+        // Removed-member tombstones: no RLS, but otto_app needs the DELETE grant.
+        for hours in [1, 0] {
+            sqlx::query(
+                "INSERT INTO removed_members (org_id, user_id, removed_at) \
+                 VALUES ($1, $2, now() - make_interval(hours => $3))",
+            )
+            .bind(org)
+            .bind(uuid::Uuid::new_v4())
+            .bind(hours)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
     }
 
     assert_eq!(telemetry::sweep(&db).await.unwrap(), 6);
-    assert_eq!(platform_events::sweep(&db, keep_days).await.unwrap(), 2);
+    assert_eq!(platform_events::sweep(&db, keep_days).await.unwrap(), 4);
     for table in [
         "flag_errors",
         "flag_eval_hourly",
         "rollback_events",
         "platform_events",
+        "removed_members",
     ] {
         // Uuid orders bytewise, as Postgres orders uuid; OrgId has no Ord.
         let orgs_left: Vec<uuid::Uuid> =
