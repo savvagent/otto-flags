@@ -1,13 +1,11 @@
 package com.savvagent.ottoflags.sdk
 
 import kotlinx.coroutines.test.runTest
-import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.Assert.*
-import java.util.concurrent.TimeUnit
 
 /**
  * Flag keys are interpolated into the request URL, so a key outside the server's rule
@@ -78,19 +76,17 @@ class OttoFlagsClientFlagKeyTest {
         assertFalse(message, message.contains('\u0000'))
     }
 
+    // Checked on the URL builder directly: a network round trip would go through
+    // UserContext.toJson(), and org.json is a stub in local JVM unit tests.
     @Test
-    fun validKeyKeepsTheExistingEvaluatePath() = runTest {
-        mockWebServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{"enabled":true}""")
-                .addHeader("Content-Type", "application/json")
+    fun validKeyKeepsTheExistingPaths() {
+        assertEquals(
+            "/v1/flags/new-checkout.v2_b/evaluate",
+            client.flagUrl("new-checkout.v2_b", "evaluate").encodedPath
         )
-
-        client.evaluate("new-checkout.v2_b", UserContext(userId = "user-123"))
-
-        val request = mockWebServer.takeRequest(5, TimeUnit.SECONDS)
-        assertNotNull("no request reached the server", request)
-        assertEquals("/v1/flags/new-checkout.v2_b/evaluate", request!!.path)
+        assertEquals(
+            "/v1/flags/.../variation",
+            client.flagUrl("...", "variation").encodedPath
+        )
     }
 }

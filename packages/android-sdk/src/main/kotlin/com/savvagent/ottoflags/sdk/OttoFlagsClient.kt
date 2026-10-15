@@ -564,7 +564,7 @@ class OttoFlagsClient(
      * path segment. An unparsable `apiUrl` throws IllegalArgumentException, which the
      * callers' try blocks turn into their failure path.
      */
-    private fun flagUrl(flagKey: String, action: String): HttpUrl =
+    internal fun flagUrl(flagKey: String, action: String): HttpUrl =
         config.apiUrl.toHttpUrl().newBuilder()
             .addPathSegment("v1")
             .addPathSegment("flags")

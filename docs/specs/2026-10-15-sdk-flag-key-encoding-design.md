@@ -218,10 +218,10 @@ Per SDK, failing test first.
 | TypeScript | `packages/typescript/tests/client.test.ts`, mocking `global.fetch` | pnpm gate |
 | Node | `packages/node-server/src/client.test.ts`, existing fetch mock | pnpm gate |
 | Python | `packages/python-server/tests/test_client.py` and `test_async_client.py` with `respx`/`pytest-httpx` (whichever the file uses) | Python gate |
-| Go | `packages/go-server/client_test.go` with an `httptest.Server` that counts requests | not run (no toolchain; known red #17) |
-| Java | `FlagClientTest.java` with `MockWebServer` (`getRequestCount`, `takeRequest().getPath()`) | not run (no toolchain) |
-| iOS | `OttoFlagsClientNetworkTests.swift` with the existing `MockURLProtocol` | not run (no toolchain) |
-| Android | `OttoFlagsClientNetworkTest.kt` with `MockWebServer` | no gate |
+| Go | new `packages/go-server/flagkey_test.go` with an `httptest.Server` that counts requests | not run (no toolchain; known red #17) |
+| Java | new `FlagKeyTest.java` with `MockWebServer` (`getRequestCount`, `takeRequest().getPath()`) | not run (no toolchain) |
+| iOS | new `FlagKeyValidationTests.swift` with the existing `MockURLProtocol`, through the internal session initializer | not run (no toolchain) |
+| Android | new `OttoFlagsClientFlagKeyTest.kt`: `MockWebServer` request counts for invalid keys; the valid-key path through the internal `flagUrl` (a network round trip would reach `org.json`, a stub in local unit tests) | no gate |
 
 ## 12. Risks & open questions
 
