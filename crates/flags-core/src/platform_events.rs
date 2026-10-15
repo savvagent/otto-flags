@@ -188,7 +188,7 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
     // The audit trail is append-only to `otto_app`, so it goes through the
     // migrating role's guarded function (#21), inside the purge transaction so
     // it is removed atomically with the rest.
-    let audit = sqlx::query_scalar::<_, i64>("SELECT purge_deleted_org_audit($1)")
+    let audit = sqlx::query_scalar::<_, i64>(crate::audit_purge::PURGE)
         .bind(org)
         .fetch_one(tx.conn())
         .await?;

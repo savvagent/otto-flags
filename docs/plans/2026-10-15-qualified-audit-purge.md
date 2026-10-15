@@ -48,7 +48,7 @@ builds both `FUNCTION` (unchanged value) and a new `pub(crate) const PURGE`, whi
 
 **Model:** sonnet
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`:
+- [x] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`:
   `org_deleted_purges_through_public_whatever_the_search_path`, using
   `#[sqlx::test(migrator = "flags_core::MIGRATOR")]`. Copy the setup of
   `org_deleted_purges_the_audit_trail_as_otto_app`: two orgs with an app each, audit rows counted
@@ -60,18 +60,18 @@ builds both `FUNCTION` (unchanged value) and a new `pub(crate) const PURGE`, whi
   the `org.deleted` event through `app_db`. Assert `detail["audit_events"] == rows`, that
   `audit_rows(org)` is 0, and that the other org's rows are unchanged. Close `app_db.pool()`.
   Give the test a doc comment saying what it guards (#53).
-- [ ] **Step 2: Run it and see it fail.**
+- [x] **Step 2: Run it and see it fail.**
   `DATABASE_URL=… cargo test -p flags-core --test db org_deleted_purges_through_public`. It fails
   because `audit_events` is `-1` and the rows remain.
-- [ ] **Step 3: Implement** in `audit_purge.rs`: a private `macro_rules! purge_function` returning
+- [x] **Step 3: Implement** in `audit_purge.rs`: a private `macro_rules! purge_function` returning
   `"public.purge_deleted_org_audit"`, defined above its uses.
   `pub const FUNCTION: &str = concat!(purge_function!(), "(uuid)");` keeps the existing doc.
   Add `pub(crate) const PURGE: &str = concat!("SELECT ", purge_function!(), "($1)");` with a doc
   comment saying it names the function by schema so `search_path` cannot resolve it elsewhere
   (#53). In `platform_events.rs`, replace the literal `"SELECT purge_deleted_org_audit($1)"` with
   `crate::audit_purge::PURGE`. Change nothing else.
-- [ ] **Step 4: Run the test and see it pass.** Then run the full gates (Global Constraints).
-- [ ] **Step 5: Commit**
+- [x] **Step 4: Run the test and see it pass.** Then run the full gates (Global Constraints).
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core/src/audit_purge.rs crates/flags-core/src/platform_events.rs crates/flags-core/tests/db.rs
