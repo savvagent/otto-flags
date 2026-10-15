@@ -43,16 +43,16 @@ pub(crate) fn is_valid_flag_key(key: &str) -> bool {
 /// The most of an evaluate response the SDK reads; a larger body is a failed lookup.
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
-/// The largest evaluate request body the SDK sends. The server echoes the context, so a larger
-/// one could not fit in a response the SDK reads; it is refused before sending, as a failure of
-/// this request (no cooldown), rather than left to fail as a transport error mid-upload, which
-/// would pause every flag.
-const MAX_REQUEST_BYTES: usize = 512 * 1024;
+/// The largest evaluate request body the SDK sends, ample for user attributes. A larger one is
+/// refused before sending, as a failure of this request (no cooldown). Host code builds the
+/// context from end-user input, and the server echoes it, so a large one could otherwise fail
+/// mid-upload or time out as a transport error, which pauses every flag for every user.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 /// Why a lookup fell back, for the log and the cooldown.
 struct Failure {
     why: String,
-    /// The server refused the SDK key (401/403).
+    /// The server refused the SDK key (401).
     rejected_key: bool,
     /// Whom the cooldown after this failure covers.
     scope: Scope,
@@ -430,10 +430,9 @@ impl FlagClient {
             };
             return Err(Failure {
                 why: format!("status {status}"),
-                rejected_key: matches!(
-                    status,
-                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-                ),
+                // The server answers 401 for every key problem; a 403 comes from something in
+                // between and is logged as an ordinary failure.
+                rejected_key: status == reqwest::StatusCode::UNAUTHORIZED,
                 scope: failure_scope(status),
                 retry_after,
             });
