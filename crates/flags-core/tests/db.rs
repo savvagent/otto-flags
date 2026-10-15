@@ -1669,6 +1669,36 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
     let h = telemetry::health(&mut tx, &flag, None, 24).await.unwrap();
     assert_eq!(h.top_errors[0].count, 6);
     assert_eq!(h.top_errors[0].last_message, "other environment");
+
+    // A row stored before the reporter was recorded (NULL) is shown as a
+    // client report, its own group beside the server one.
+    sqlx::query(
+        "INSERT INTO flag_errors \
+           (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at) \
+         VALUES ($1, $2, 'production', true, 'TypeError', 'legacy', $3)",
+    )
+    .bind(org)
+    .bind(flag.id)
+    .bind(ago(3))
+    .execute(tx.conn())
+    .await
+    .unwrap();
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    let legacy: Vec<(KeyKind, i64, &str)> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.error_type == "TypeError")
+        .map(|g| (g.reporter, g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        legacy,
+        [
+            (KeyKind::Server, 5, "tied, stored last"),
+            (KeyKind::Client, 1, "legacy"),
+        ]
+    );
     tx.commit().await.unwrap();
 }
 

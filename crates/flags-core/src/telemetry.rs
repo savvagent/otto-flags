@@ -44,9 +44,9 @@ const MAX_VARIATION: usize = 64;
 /// The rest are summed in `Health::other_variations`.
 const SHOWN_VARIATIONS: usize = crate::eval::MAX_VARIATIONS;
 /// Raw groups `health` reads per list (for errors, per reporter) before
-/// cleaning and merging them. Wider
-/// than what is shown, because raw spellings that clean alike merge into one,
-/// and bounded, because a public client key chooses how many raw groups exist.
+/// cleaning and merging them. Wider than what is shown, because raw spellings
+/// that clean alike merge into one, and bounded, because a public client key
+/// chooses how many raw groups exist.
 const FETCHED_GROUPS: i64 = 100;
 /// How many error groups `flag_health` shows.
 const SHOWN_ERRORS: usize = 10;
