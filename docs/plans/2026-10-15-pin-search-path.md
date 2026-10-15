@@ -270,9 +270,7 @@ pub(crate) async fn begin_pinned(db: &Db, org: OrgId) -> Result<Tx<'static>> {
 Replace `db.begin((*org_id).into())` (team.deleted), and `db.begin(org)` in `org_deleted` and
 `member_removed`, with `begin_pinned(db, …)`. In `audit_purge.rs` `check`, replace
 `db.begin(OrgId::new()).await?` with `crate::platform_events::begin_pinned(db, OrgId::new()).await?`
-(check the `Result`/error type: `check` returns `crate::error::Result` — if it returns
-`sqlx::Result` instead, map with `?` only if a `From` exists; otherwise keep the types by
-returning the error as `check` already does for `db.begin`).
+(both return `crate::error::Result`, so `?` is unchanged).
 
 Unit tests: in `unpinned.rs` tests add
 
