@@ -5802,8 +5802,8 @@ async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
         .is_none());
 }
 
-/// A string that is not shaped like a key never reaches the database or the
-/// cache.
+/// A string that is not shaped like a key is not remembered (`looks_like_key`
+/// refuses it before any lookup).
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn malformed_keys_are_not_remembered(pool: PgPool) {
     let db = db(pool).await;
@@ -5812,6 +5812,18 @@ async fn malformed_keys_are_not_remembered(pool: PgPool) {
         .await
         .unwrap()
         .is_none());
+    assert!(unknown.is_empty());
+}
+
+/// A database error is not an answer about the key, so it is never
+/// remembered: once the database is back, the key resolves.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn errors_are_not_remembered(pool: PgPool) {
+    let db = db(pool).await;
+    let unknown = keys::UnknownKeys::new();
+    let key = keys::NewKey::mint(KeyKind::Client).key;
+    db.pool().close().await;
+    assert!(keys::resolve_cached(&db, &unknown, &key).await.is_err());
     assert!(unknown.is_empty());
 }
 

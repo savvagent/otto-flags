@@ -9,8 +9,9 @@ use http::{Request, StatusCode};
 use sqlx::PgPool;
 use tower::ServiceExt;
 
-/// Both requests are refused, and the key is remembered once: the extractor
-/// resolves through the state's unknown-key cache.
+/// The extractor resolves through the state's unknown-key cache: the first
+/// request looks the key up and remembers it, and the second is refused with
+/// the database closed, which would otherwise be a 503.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_repeated_unknown_key_is_refused_from_memory(pool: PgPool) {
     let state = AppState::new(
@@ -28,6 +29,7 @@ async fn a_repeated_unknown_key_is_refused_from_memory(pool: PgPool) {
             .expect("request");
         let status = app.clone().oneshot(req).await.expect("response").status();
         assert_eq!(status, StatusCode::UNAUTHORIZED, "attempt {attempt}");
+        assert_eq!(state.unknown_keys.len(), 1);
+        state.db.pool().close().await;
     }
-    assert_eq!(state.unknown_keys.len(), 1);
 }

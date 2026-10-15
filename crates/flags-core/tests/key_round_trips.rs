@@ -34,15 +34,20 @@ impl RoundTrips {
     /// first, after the caller already has its answer, so the release ping
     /// would otherwise land in the next measurement.
     async fn take(&self, db: &Db) -> usize {
-        while db.pool().num_idle() < db.pool().size() as usize {
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while db.pool().num_idle() < db.pool().size() as usize {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("the pool's connection was never returned");
         self.0.swap(0, Ordering::SeqCst)
     }
 }
 
 /// Forward the client's side of one connection to the server, counting each
-/// 'Q' and 'S' message after the untyped startup packets.
+/// 'Q' and 'S' message after the untyped startup packet (TLS is off, so
+/// there is no `SSLRequest` before it).
 async fn forward_client(
     mut client: tokio::net::tcp::OwnedReadHalf,
     mut server: tokio::net::tcp::OwnedWriteHalf,
@@ -78,11 +83,20 @@ async fn proxy(upstream: SocketAddr, trips: RoundTrips) -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
-            let (client, _) = listener.accept().await.unwrap();
-            let server = TcpStream::connect(upstream).await.unwrap();
+            let (client, _) = listener.accept().await.expect("proxy accept");
+            let server = TcpStream::connect(upstream)
+                .await
+                .expect("proxy connect upstream");
             let (client_r, mut client_w) = client.into_split();
             let (mut server_r, server_w) = server.into_split();
-            tokio::spawn(forward_client(client_r, server_w, trips.clone()));
+            let trips = trips.clone();
+            tokio::spawn(async move {
+                // A broken proxy shows up as an acquire timeout in the test;
+                // say why here.
+                if let Err(e) = forward_client(client_r, server_w, trips).await {
+                    eprintln!("counting proxy: {e}");
+                }
+            });
             tokio::spawn(async move { tokio::io::copy(&mut server_r, &mut client_w).await });
         }
     });

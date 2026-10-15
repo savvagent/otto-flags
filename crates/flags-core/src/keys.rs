@@ -16,9 +16,11 @@
 //! row-level security for that reason, and every statement here names the key
 //! hash explicitly.
 //!
-//! The SDK API resolves keys through [`resolve_cached`], which remembers keys
-//! that did not resolve for a minute ([`UnknownKeys`]), so a client repeating
-//! one stops costing a database lookup per request (#104).
+//! The SDK API's request extractor resolves keys through [`resolve_cached`],
+//! which remembers keys that did not resolve for [`UNKNOWN_KEY_TTL`]
+//! ([`UnknownKeys`]), so a client repeating one stops costing a database
+//! lookup per request (#104). The stream's periodic re-check of a key that
+//! resolved stays on [`resolve_hash`], so it notices revocation.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -98,7 +100,13 @@ impl NewKey {
 }
 
 pub fn hash(key: &str) -> Vec<u8> {
-    Sha256::digest(key.as_bytes()).to_vec()
+    digest(key).to_vec()
+}
+
+/// The SHA-256 of `key`: what `app_keys` stores, and what [`UnknownKeys`]
+/// remembers.
+fn digest(key: &str) -> [u8; 32] {
+    Sha256::digest(key.as_bytes()).into()
 }
 
 /// Whether a string is shaped like an SDK key at all. Lets the SDK surface
@@ -160,7 +168,7 @@ pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, key: &str) -> Result
     if !looks_like_key(key) {
         return Ok(None);
     }
-    let hash: [u8; 32] = Sha256::digest(key.as_bytes()).into();
+    let hash = digest(key);
     if unknown.contains(&hash, Instant::now()) {
         return Ok(None);
     }
@@ -175,7 +183,7 @@ pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, key: &str) -> Result
 pub const UNKNOWN_KEY_TTL: Duration = Duration::from_secs(60);
 
 /// The most unknown keys remembered at once: a 32-byte hash and an
-/// `Instant` each, about 256 KiB when full.
+/// `Instant` each, roughly 400 KiB when full counting the map's buckets.
 pub const UNKNOWN_KEY_CAPACITY: usize = 4096;
 
 /// How often a full cache may scan for expired entries.
@@ -194,7 +202,8 @@ const SWEEP_EVERY: Duration = Duration::from_secs(1);
 ///
 /// Bounded at [`UNKNOWN_KEY_CAPACITY`]: when full, expired entries are swept
 /// (at most every second) and, if it is still full, a new key is simply not
-/// remembered: its lookup still answers correctly.
+/// remembered: its lookup still answers correctly, and a warning (at most
+/// once a second, with the sweep) says the cache is saturated.
 #[derive(Debug, Default)]
 pub struct UnknownKeys {
     inner: Mutex<Inner>,
@@ -209,6 +218,7 @@ struct Inner {
 }
 
 impl UnknownKeys {
+    /// An empty cache.
     pub fn new() -> Self {
         Self::default()
     }
@@ -218,17 +228,20 @@ impl UnknownKeys {
         self.lock().expires.len()
     }
 
+    /// Whether no entries are held.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// The map is only a cache and every state of it is valid, so a panic
-    /// while it was held (it holds no await) loses nothing worth refusing for.
+    /// The guard is never held across an `.await`, and every state of the
+    /// map is a valid cache, so a poisoned lock is recovered rather than
+    /// propagated.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Whether `hash` did not resolve within the last TTL as of `now`.
+    /// Whether `hash` did not resolve within the last TTL as of `now`. An
+    /// expired entry for `hash` is removed.
     pub(crate) fn contains(&self, hash: &[u8; 32], now: Instant) -> bool {
         let mut inner = self.lock();
         match inner.expires.get(hash) {
@@ -251,6 +264,12 @@ impl UnknownKeys {
             inner.expires.retain(|_, until| now < *until);
             inner.next_sweep = Some(now + SWEEP_EVERY);
             if inner.expires.len() >= UNKNOWN_KEY_CAPACITY {
+                // At most once a second: the sweep that found it full is
+                // throttled the same way.
+                tracing::warn!(
+                    capacity = UNKNOWN_KEY_CAPACITY,
+                    "unknown sdk key cache is full; new unknown keys reach the database"
+                );
                 return;
             }
         }
