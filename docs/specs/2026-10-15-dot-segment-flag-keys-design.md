@@ -63,7 +63,7 @@ touching the database.
 ## 5. Scope
 
 **In:** `validate_key`, its unit test, one `flags-core` DB test through `create_flag`, the
-`CreateFlagArgs::key` doc comment.
+`CreateFlagArgs::key` doc comment, one note in `docs/SDK-DEVELOPER-GUIDE.md`.
 
 **Out:** any other charset change; app keys; variation names; SDK changes (the Rust SDK already
 refuses these keys, #95; other SDKs are covered by the server no longer creating them); any
@@ -77,6 +77,11 @@ change to stored data.
   key is the trimmed key.
 - `crates/flags-mcp/src/tools/flags.rs` `CreateFlagArgs::key` doc: add "not '.' or '..'". This
   changes the tool's JSON-schema description text only (no field, type, or name changes).
+- `docs/SDK-DEVELOPER-GUIDE.md`: one additive note under Flag Evaluation that a flag key is never
+  `.` or `..`, so an SDK may refuse them locally (as the Rust SDK does since #95).
+
+Both REST routes that carry the key as a path segment are affected the same way:
+`POST /api/flags/{key}/evaluate` and `POST /api/evaluate/{key}` (`crates/flags-api/src/lib.rs`).
 
 No public interface is added. The MCP contract change is a narrower accepted input, which is the
 point of the fix; the SDK REST contract is untouched.
@@ -88,8 +93,10 @@ point of the fix; the SDK REST contract is untouched.
   has none.
 - SDK REST contract: unchanged (no route, field, or response shape changes).
 - Database error text never reaches a tool response: the refusal is built in code before any SQL.
-- Metering: a refused `create_flag` fails before the usage insert in the same transaction, as every
-  other validation failure does today, so it is not billed.
+- Metering: the `create_flag` tool records its usage row before calling `FlagsExt::create_flag`
+  (`crates/flags-mcp/src/tools/flags.rs`), so a refused key's usage row is rolled back with the
+  tool's transaction, as for every other validation failure today: not billed. An over-quota
+  caller sees the quota error before the key error.
 
 ## 8. Existing data
 

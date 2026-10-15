@@ -21,7 +21,11 @@ test beside it, a DB test through `create_flag`, and one doc line on the `create
   (`mkdir -p target/tmp` first).
 - Gates:
   - test: `DATABASE_URL=postgres://flags:flags@localhost:15449/otto_flags cargo test --workspace`
-    (this run's dedicated Postgres on 15449, never 15434 or a Fly database)
+    (this run's dedicated Postgres container `otto-flags-pg-15449`, started with
+    `podman run -d --name otto-flags-pg-15449 -e POSTGRES_USER=flags -e POSTGRES_PASSWORD=flags
+    -e POSTGRES_DB=otto_flags -p 127.0.0.1:15449:5432 docker.io/library/postgres:16`, then
+    `CREATE ROLE otto_app NOLOGIN;` in it; never 15434, which parallel worktrees share, or a Fly
+    database)
   - lint: `cargo clippy --workspace --all-targets -- -D warnings`
   - format: `cargo fmt --all -- --check`
   - extra: `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'`
@@ -40,6 +44,7 @@ Files:
 - Modify: `crates/flags-core/src/flags.rs` (`validate_key`, `mod tests`)
 - Modify: `crates/flags-core/tests/db.rs` (new test)
 - Modify: `crates/flags-mcp/src/tools/flags.rs` (`CreateFlagArgs::key` doc)
+- Modify: `docs/SDK-DEVELOPER-GUIDE.md` (Flag Evaluation note)
 
 - [ ] **Step 1: Write the failing unit test** in `flags.rs` `mod tests`:
   `dot_segment_keys_are_refused`: `validate_key(".")`, `validate_key("..")`,
@@ -54,9 +59,11 @@ Files:
 - [ ] **Step 4: Implement**: in `validate_key`, after the charset check, return
   `Error::Invalid(format!("flag key {key:?} is a URL dot segment, which SDKs cannot evaluate over REST; choose another key"))`
   when `key == "." || key == ".."`. Add a short doc comment on `validate_key` giving the reason
-  (path segment in `POST /api/flags/{key}/evaluate`, #105).
+  (path segment in `POST /api/flags/{key}/evaluate` and `POST /api/evaluate/{key}`, #105).
 - [ ] **Step 5: Doc**: `CreateFlagArgs::key` doc becomes "Letters, digits, '-', '_', '.', but not
-  '.' or '..' alone; at most 128 characters. Cannot be changed later."
+  '.' or '..' alone; at most 128 characters. Cannot be changed later." In
+  `docs/SDK-DEVELOPER-GUIDE.md` under Flag Evaluation, note that a flag key is never `.` or `..`
+  (URL dot segments), so an SDK may refuse them locally.
 - [ ] **Step 6: Run** the targeted tests (pass), then all gates above.
 - [ ] **Step 7: Commit** `fix(core): refuse the flag keys "." and ".."` with a why-body ending
   `Fixes #105`.
