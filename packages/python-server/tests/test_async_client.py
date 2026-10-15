@@ -238,7 +238,7 @@ class TestAsyncOverrides:
     ) -> None:
         """Test an unserializable override raises ValueError chained to the TypeError."""
         async with AsyncFlagClient(async_config) as client:
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match="Invalid configuration for flag 'flag'") as exc_info:
                 client.set_config_override("flag", {"bad": object()})
             assert isinstance(exc_info.value.__cause__, TypeError)
 
