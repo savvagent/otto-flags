@@ -51,16 +51,16 @@ documents both.
 ### Task 1: Accept `srv_` keys
 
 **Model:** haiku
-- [ ] Failing test in `tests/integration_test.rs`: `FlagClient::new(Config::new("srv_x"))` is
+- [x] Failing test in `tests/integration_test.rs`: `FlagClient::new(Config::new("srv_x"))` is
   `Ok`; `InvalidApiKey.to_string()` contains `sdk_` and `srv_`. Run, see fail.
-- [ ] `client.rs`: `if !(key.starts_with("sdk_") || key.starts_with("srv_"))`; error text
+- [x] `client.rs`: `if !(key.starts_with("sdk_") || key.starts_with("srv_"))`; error text
   `"Invalid API key: must start with 'sdk_' (client key) or 'srv_' (server key)"`. Run, pass.
-- [ ] Commit `feat(sdk): accept server keys in the rust sdk`.
+- [x] Commit `feat(sdk): accept server keys in the rust sdk`.
 
 ### Task 2: Telemetry
 
 **Model:** sonnet
-- [ ] Failing tests in `tests/telemetry_test.rs` (each mounts `POST /api/telemetry/evaluations`
+- [x] Failing tests in `tests/telemetry_test.rs` (each mounts `POST /api/telemetry/evaluations`
   and/or `/errors` with `header("Authorization", "Bearer srv_test")` and inspects
   `server.received_requests()`):
   1. two answered lookups (one cached) + `flush()` → one request, 2 events with `flag_key`,
@@ -73,20 +73,20 @@ documents both.
   5. `with_telemetry(false)` + lookups + `flush()` → nothing;
   6. telemetry endpoint 500 → lookups unaffected, `flush()` returns.
   Run, see fail (missing methods → compile error counts).
-- [ ] Implement `src/telemetry.rs` per spec §6 (constants `FLUSH_INTERVAL = 5 s`,
+- [x] Implement `src/telemetry.rs` per spec §6 (constants `FLUSH_INTERVAL = 5 s`,
   `FLUSH_AT = 100`, `MAX_EVALUATIONS_PER_REQUEST = 1_000`, `MAX_ERRORS_PER_REQUEST = 100`,
   `MAX_QUEUED = 10_000`, text caps 200/2 000/8 000/64), `ErrorReport` in `types.rs`,
   `Config::with_telemetry`, client wiring, `lib.rs` re-export; unit tests for truncation on a
   char boundary and the queue bound. Run all gates.
-- [ ] README: keys (`srv_` recommended for servers), telemetry section (what is sent, batching,
+- [x] README: keys (`srv_` recommended for servers), telemetry section (what is sent, batching,
   `track_error`, `flush()` before shutdown, `with_telemetry(false)`).
-- [ ] Commit `feat(sdk): report rust sdk evaluations and errors as telemetry`.
+- [x] Commit `feat(sdk): report rust sdk evaluations and errors as telemetry`.
 
 ### Task 3: Example
 
 **Model:** haiku
-- [ ] `examples/rust-server`: `Settings` error text and docs say the key may be `srv_...`
+- [x] `examples/rust-server`: `Settings` error text and docs say the key may be `srv_...`
   (recommended) or `sdk_...`; a unit test that a `srv_` value is accepted; README env table,
   prerequisites, quick-start; remove the stale "Known limitations" items (#91, #93); call
   `flags.flush().await` on shutdown if the example has a shutdown hook, else document it.
-- [ ] Run the example gates; commit `docs(examples): use the server key in the rust example`.
+- [x] Run the example gates; commit `docs(examples): use the server key in the rust example`.

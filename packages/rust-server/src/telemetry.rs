@@ -7,8 +7,9 @@
 //! Events queue in memory and leave in batches: every [`FLUSH_INTERVAL`] from a background task,
 //! sooner once a queue holds a full request ([`FLUSH_AT`] events) but never less than
 //! [`MIN_SEND_GAP`] after the task's previous send, and on [`Telemetry::flush`]. So a process
-//! sends at most about one request per kind per second however busy it is (the database behind
-//! the API is small and shared). Telemetry never blocks or fails a lookup: a full queue drops new
+//! makes at most one send pass per kind per second, each request carrying up to 1 000 events:
+//! about one request per 1 000 lookups, the fewest the server's batch limit allows (the database
+//! behind the API is small and shared). Telemetry never blocks or fails a lookup: a full queue drops new
 //! events (counted and logged), and a failed send is logged and dropped, never retried.
 
 use crate::types::ErrorReport;

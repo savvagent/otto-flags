@@ -1,6 +1,6 @@
 # Rust SDK accepts server keys and reports telemetry
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#114)
 **Issue:** #93
 
 ## 1. Brief
@@ -132,8 +132,10 @@ its message changes.
   `user_id`/context; error text is the host's own and the server truncates and expires it.
 - Client keys public / server key secret: the key travels only in the `Authorization` header to
   `base_url`; it is never logged.
-- Small shared database: a process sends at most about one request per kind per second (the
-  1 s gap), and one per 5 s below 200 lookups a second; each request carries up to 1 000 events.
+- Small shared database: a process makes at most one send pass per kind per second (the 1 s
+  gap), one per 5 s below 200 lookups a second; each request carries up to 1 000 events, so
+  above 1 000 lookups a second it sends about one request per 1 000 lookups (up to 10 per pass,
+  the queue bound).
   A flush stops at the first transport error rather than waiting a timeout per batch.
 - Licensing: MIT; no server code.
 

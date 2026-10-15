@@ -116,8 +116,9 @@ Flag health compares the error rate with a flag on against the rate with it off,
 auto-rollback acts on it, so report errors from both code paths.
 
 Events are queued in memory and sent in batches every 5 seconds by a background task on the
-Tokio runtime, sooner when a full batch (1,000) is waiting, but at most about once a second per
-kind, however busy the process. Call `client.flush().await` before the process exits (it also
+Tokio runtime, sooner when a full batch (1,000) is waiting, but at most one send pass per kind a
+second; each request carries up to 1,000 events, so a busy process sends about one request per
+1,000 lookups. Call `client.flush().await` before the process exits (it also
 waits for a send already under way), or the last few seconds of events are lost.
 
 The error message and stack trace are stored by Otto Flags for 14 days and shown to the agents
