@@ -1,6 +1,6 @@
 # Keep flag_health's lists cheap and uncrowdable
 
-**Status:** DRAFT
+**Status:** APPROVED
 **Issues:** #69, #70
 
 ## 1. Brief

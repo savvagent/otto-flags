@@ -115,8 +115,9 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
         (Some("production"), "TypeError", "middle", ago(10)),
         // Newer, but in another environment.
         (Some("staging"), "TypeError", "other environment", ago(0)),
-        (None, "RangeError", "no environment, newest", ago(2)),
-        (Some("production"), "RangeError", "older", ago(5)),
+        (None, "RangeError", "no environment, newest", ago(2) + TimeDelta::microseconds(1)),
+        // A microsecond older but stored later: the time decides, not the id.
+        (Some("production"), "RangeError", "a microsecond older", ago(2)),
     ];
     for (environment, error_type, message, at) in rows {
         sqlx::query(
@@ -151,6 +152,10 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
         ]
     );
     assert_eq!(h.top_errors[0].last_seen, ago(1));
+    assert_eq!(
+        h.top_errors[1].last_seen,
+        ago(2) + TimeDelta::microseconds(1)
+    );
 
     // Across every environment, the staging report is the newest.
     let h = telemetry::health(&mut tx, flag.id, None, 24).await.unwrap();
@@ -406,7 +411,8 @@ Expected: compile errors (new signature) — that is the failing state.
     the remaining slots.
   - `Health.variations` doc: the flag's declared variations always (at 0 when none were
     evaluated), then the most evaluated other names up to `SHOWN_VARIATIONS` in all.
-  - `insight.rs`: `telemetry::health(&mut tx, &flag, ...)`; description: replace "the most
+  - `insight.rs`: `telemetry::health(&mut tx, &flag, ...)`; description (the phrase spans a `\`
+    line continuation, so edit both lines): replace "the most
     evaluated variations (the rest summed in otherVariations)" with "evaluations per variation
     (every declared variation, then the most evaluated other names reported; the rest summed in
     otherVariations)".
@@ -423,7 +429,7 @@ Expected: compile errors (new signature) — that is the failing state.
 - [ ] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
-Expected: all pass, none skipped. Then `cargo clippy --workspace --all-targets -- -D warnings` and
+Expected: all pass, none skipped. Run `cargo fmt --all` first. Then `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --all -- --check` clean.
 
 - [ ] **Step 5: Commit**
@@ -509,7 +515,7 @@ Fixes #70"
   }
 
   #[test]
-  fn slots_server_groups_do_not_need_go_by_count() {
+  fn server_slots_left_unused_go_by_count() {
       let mut groups: Vec<ErrorGroup> = (0..12)
           .map(|i| reported(&format!("C{i:02}"), true, KeyKind::Client, 100 + i, 100, "m"))
           .collect();
@@ -663,8 +669,9 @@ Expected: compile errors (`ErrorGroup` has no `reporter`).
     ```
     Update the comment above it: the fetch keeps `FETCHED_GROUPS` per reporter, so client groups
     cannot fill it.
-  - `merge_error_groups`: key `(String, bool, KeyKind)` (`KeyKind` derives `Eq`; add `Hash` to its
-    derive in `crates/flags-core/src/keys.rs` if needed); rank as today with
+  - `merge_error_groups`: remove the existing `ranked.truncate(SHOWN_ERRORS)` (it would cut
+    server groups before the slots apply); key `(String, bool, KeyKind)` (add `Hash` to `KeyKind`'s derive in
+    `crates/flags-core/src/keys.rs`); rank as today with
     `.then_with(|| (b.reporter == KeyKind::Server).cmp(&(a.reporter == KeyKind::Server)))` as the
     last tie-break; then:
     ```rust
@@ -695,7 +702,7 @@ Expected: compile errors (`ErrorGroup` has no `reporter`).
 - [ ] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
-Expected: all pass, none skipped. Then `cargo clippy --workspace --all-targets -- -D warnings`,
+Expected: all pass, none skipped. Run `cargo fmt --all` first. Then `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all -- --check`, the extra gate (prints nothing).
 
 - [ ] **Step 5: Commit**
@@ -720,5 +727,7 @@ Fixes #70"
 **Model:** orchestrator (no dispatch).
 
 - [ ] Full gates at HEAD: test, lint, format, extra, `podman build -t otto-flags:check .`.
+- [ ] Record pass counts per test binary as evidence.
 - [ ] After the PR is open and reviewed: spec `**Status:**` becomes `IMPLEMENTED (#<PR>)`, this
-  plan's boxes ticked, in a final commit on the branch before merge.
+  plan's boxes ticked, in a final commit on the branch before merge:
+  `docs: mark the flag_health crowding spec implemented`, body ending `Fixes #69` and `Fixes #70`.
