@@ -15,6 +15,7 @@ Acceptance criteria (#15):
 - `cargo fmt --check` passes in `packages/rust-server`.
 - `cargo clippy --locked --lib --tests -- -D warnings` passes for the lib and
   `tests/dynamic_config_test.rs`.
+  (The commands actually run, while #4's two files do not compile, are in section 2.)
 - No `#[allow(...)]` added just to pass the gate.
 - `set_config_override(key, cfg, None)` still validates the config
   (`ConfigOverrideOptions::default().validate == true`), and a unit test pins this.

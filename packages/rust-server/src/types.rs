@@ -265,5 +265,10 @@ mod tests {
         let opts = ConfigOverrideOptions::default();
         assert!(opts.validate);
         assert!(!opts.merge);
+        // Catches a field added to `new()` but not to `Default`.
+        assert_eq!(
+            format!("{opts:?}"),
+            format!("{:?}", ConfigOverrideOptions::new())
+        );
     }
 }
