@@ -13,6 +13,7 @@ use flags_core::rollback::{self, Mode, PolicyState, RollbackExt, Thresholds};
 use flags_core::telemetry::{
     self, ErrorEvent, EvalEvent, ERROR_RETENTION_DAYS, EVAL_RETENTION_DAYS,
 };
+use flags_core::usage;
 use flags_core::{eval, keys, Error};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -2345,6 +2346,18 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     .unwrap();
     tx.commit().await.unwrap();
 
+    // Each org has a rejected usage event; the purge takes only the org's own.
+    for o in [org, other] {
+        sqlx::query(
+            "INSERT INTO usage_outbox_rejected (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
+             VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'create_flag', true, now(), 'x')",
+        )
+        .bind(o)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
     let body = otto_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
@@ -2357,11 +2370,16 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     };
     assert_eq!(detail["rollback_policies"], 1, "{detail}");
     assert_eq!(detail["rollback_events"], 1, "{detail}");
+    assert_eq!(detail["usage_outbox_rejected"], 1, "{detail}");
     assert_eq!(
         platform_events::apply(&db, &event).await.unwrap(),
         Outcome::Duplicate
     );
-    for table in ["rollback_policies", "rollback_events"] {
+    for table in [
+        "rollback_policies",
+        "rollback_events",
+        "usage_outbox_rejected",
+    ] {
         let left: i64 =
             sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE org_id = $1"))
                 .bind(org)
@@ -2370,6 +2388,13 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
                 .unwrap();
         assert_eq!(left, 0, "{table}");
     }
+    let others: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM usage_outbox_rejected WHERE org_id = $1")
+            .bind(other)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(others, 1, "another org's rejected usage stays");
 
     assert!(keys::resolve(&db, &keys_issued[0]).await.unwrap().is_none());
     assert!(keys::resolve(&db, &keys_issued[1]).await.unwrap().is_some());
@@ -2967,6 +2992,53 @@ async fn sweeps_reach_every_org_on_the_superuser_pool(pool: PgPool) {
         let mut expected: Vec<uuid::Uuid> = orgs.iter().map(|o| o.as_uuid()).collect();
         expected.sort();
         assert_eq!(orgs_left, expected, "{table}: each org keeps its fresh row");
+    }
+}
+
+/// Rejected usage events are kept `usage::REJECTED_RETENTION_DAYS` days for
+/// operators, then swept across every org (#74), in a maintenance transaction
+/// (as `otto_app` even on this superuser pool; `maintenance`'s tests prove the
+/// role). A row a day inside the window pins the cutoff and its unit.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rejected_usage_is_swept_after_its_retention(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let orgs = [OrgId::new(), OrgId::new()];
+    for org in orgs {
+        for days in [
+            usage::REJECTED_RETENTION_DAYS + 1,
+            usage::REJECTED_RETENTION_DAYS - 1,
+            1,
+        ] {
+            sqlx::query(
+                "INSERT INTO usage_outbox_rejected \
+                 (event_id, org_id, user_id, tool, billable, occurred_at, reason, rejected_at) \
+                 VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'create_flag', true, now(), 'x', \
+                         now() - make_interval(days => $2))",
+            )
+            .bind(org)
+            .bind(days)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    assert_eq!(usage::sweep_rejected(&db).await.unwrap(), 2);
+    for org in orgs {
+        let (total, expired): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(*) FILTER (WHERE rejected_at < now() - make_interval(days => $2)) \
+             FROM usage_outbox_rejected WHERE org_id = $1",
+        )
+        .bind(org)
+        .bind(usage::REJECTED_RETENTION_DAYS)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (total, expired),
+            (2, 0),
+            "each org keeps its rows inside the window"
+        );
     }
 }
 

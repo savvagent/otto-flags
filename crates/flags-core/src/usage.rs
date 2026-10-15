@@ -11,6 +11,9 @@
 //!   runs in a maintenance transaction, and the writes after a claim are fenced
 //!   on the `(id, attempts)` it set, so a lapsed claim cannot touch a newer
 //!   one's rows.
+//! - **Refused events are kept, then swept.** An event the platform rejects
+//!   outright moves to `usage_outbox_rejected` with its reason, is kept for
+//!   [`REJECTED_RETENTION_DAYS`] days, and goes with its org on `org.deleted`.
 //! - **Enforcing** reads the platform's cached usage status (and counts this
 //!   org's unshipped rows on top). Off by default. If the platform cannot
 //!   answer, the call is allowed and still recorded.
@@ -54,6 +57,10 @@ pub fn is_billable(tool: &str) -> bool {
 const QUOTA_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 const FAIL_OPEN_FOR: Duration = Duration::from_secs(5);
 pub const WARN_AT: f64 = 0.8;
+/// How long `usage_outbox_rejected` keeps an event the platform refused, for
+/// operators reconciling usage with it (#44); [`sweep_rejected`] removes older
+/// ones (#74).
+pub const REJECTED_RETENTION_DAYS: i32 = 90;
 /// The platform's rejection reason is its text, kept for operators: this many
 /// characters are enough to read it, and bound the column.
 const MAX_REJECTED_REASON: usize = 500;
@@ -424,6 +431,24 @@ pub async fn ship_once(
         );
     }
     Ok(ids.len())
+}
+
+/// Delete rejected usage events older than [`REJECTED_RETENTION_DAYS`],
+/// across every org, in a maintenance transaction ([`crate::maintenance`]),
+/// which the table's unpinned policies require. Returns the number of rows
+/// deleted.
+pub async fn sweep_rejected(db: &Db) -> Result<u64> {
+    let mut tx = crate::maintenance::begin(db).await?;
+    let swept = sqlx::query(
+        "DELETE FROM usage_outbox_rejected \
+         WHERE rejected_at < now() - make_interval(days => $1)",
+    )
+    .bind(REJECTED_RETENTION_DAYS)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    tx.commit().await?;
+    Ok(swept)
 }
 
 /// Keep every row of a batch whose receipt cannot be trusted and retry it
