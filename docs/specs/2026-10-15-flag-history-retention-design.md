@@ -1,4 +1,4 @@
-# Keep a flag's newest 100 versions
+# Retain flag history for 90 days and at least 100 versions
 
 **Status:** DRAFT
 **Issue:** #123 (part 1 of 2: flag history retention; the SDK list bound is part 2)
@@ -26,158 +26,179 @@ closes #123.
 
 ## 2. Premise corrections
 
-None. `flag_versions` (`crates/flags-core/migrations/0001_baseline.sql:138`) has no retention:
-`record_version` (`crates/flags-core/src/flags.rs:672`) inserts one full snapshot per change and
-nothing deletes them except the `ON DELETE CASCADE` from `feature_flags`, which only an org
-deletion triggers (flags are archived, never deleted).
+1. `flag_versions` (`crates/flags-core/migrations/0001_baseline.sql:138`) has no retention:
+   `record_version` (`crates/flags-core/src/flags.rs:672`) inserts one full snapshot per change,
+   and only the `ON DELETE CASCADE` from `feature_flags` removes them (flags are archived, never
+   deleted).
+2. **`flag_versions` is the audit trail of flag changes**, not only rollback storage:
+   `crates/flags-core/src/audit.rs` leaves flag changes out of `audit_events` because each one is
+   recorded here with its actor and reason. So retention must not be something a caller can
+   drive. A count-only cap pruned on write (this spec's first draft) let anyone with
+   `flags:write` erase the record of a change by making 100 more, which is a repudiation hole.
+   Retention is therefore by age, in a background sweep.
 
 ## 3. Assumptions
 
-- **A per-flag count cap, not an age-based retention.** Keep the newest
-  `MAX_RETAINED_VERSIONS = 100` versions of each flag. A count cap bounds the table per flag
-  however fast it is written, which is the growth the issue describes (a loop of writes); an age
-  limit would not (a fast loop stays inside any window) and would empty the history of a flag
-  nobody has touched for a while, which is exactly the flag whose last known-good state matters.
-- **100.** `flag_history` returns at most 200 rows (`limit.clamp(1, 200)`) and defaults to 20;
-  agents roll back to the previous version or a recent one. 100 is five times the default view
-  and keeps any rollback an incident plausibly needs, while bounding one flag's history at 100
-  snapshots. A snapshot is the flag's name, description, status, environments, variations and
-  configuration. When this ships, the only size bound on a snapshot is #115's per-configuration
-  cap: a flag's configuration plus up to 20 variations' at 32 KiB each, about 672 KiB, plus its
-  rules. So the worst case at merge is about 66 MiB of history per flag before TOAST
-  compression, against unbounded today. Part 2 of #123 (next PR) adds a per-flag total cap; at
-  64 KiB the worst case becomes about 6.4 MiB per flag. Real flags are a few hundred bytes, so
-  100 versions of one are tens of KB.
-- **Pruned synchronously, in the writer's transaction.** `record_version` deletes the flag's
-  versions older than the newest 100 right after inserting the new one. It runs in the same
-  tenant transaction under the same flag row lock as the write, touches only that flag's rows
-  through the existing `UNIQUE (flag_id, version)` index, and at steady state deletes one row.
-  No background job, so no `flags_core::maintenance::begin` and no new cross-org access.
-- **Existing long histories are pruned on the flag's next write**, not by a sweep. The #115
-  production check (2026-10-15, SELECT-only) found 0 rows in `feature_flags` and
-  `flag_versions`, so there is nothing to backfill; a sweep would be code that never has work.
-- **No migration.** The retention is in code. The previous release, during rollout or after a
-  rollback, keeps inserting without pruning; the next write by this release prunes. Nothing the
-  previous release reads depends on old versions existing: its `rollback_flag` already reports
-  `version_not_found` for a missing version.
-- **Pruning also drops who made the pruned changes and why.** `flag_versions` is the audit
-  trail for flag changes (`crates/flags-core/src/audit.rs` leaves them out of `audit_events`
-  for that reason). Accepted: the trail of a flag becomes its newest 100 changes. Copying
-  pruned rows' actor and reason into `audit_events` would move the same unbounded growth to
-  another table. The `audit.rs` module doc is updated to say so.
-- **`rollback_events.flag_version` may name a pruned version.** It records which version an
-  auto-rollback created (no foreign key). After 100 further changes that version is gone from
-  `flag_history`; the event still says which version it was. Acceptable: the event is the
-  record of what happened, not a pointer that must resolve.
+- **A version is removed only when it is both older than `VERSION_RETENTION_DAYS = 90` days and
+  not among its flag's newest `MIN_RETAINED_VERSIONS = 100` versions.**
+  - The age condition is what makes the trail non-repudiable: no change younger than 90 days is
+    ever removed, however many writes follow it. 90 days is the retention of rollback events,
+    evaluation rollups, and rejected usage events (`telemetry::EVAL_RETENTION_DAYS`,
+    `usage::REJECTED_RETENTION_DAYS`), and `flag_health`'s longest window, so a change and the
+    health data it can be judged by age out together.
+  - The count condition keeps rollback depth on quiet flags: a flag changed rarely keeps its
+    newest 100 versions however old they are, so its last known-good state is never swept.
+  - Removing old versions also removes their actor and reason. Accepted: older than 90 days and
+    more than 100 changes back. `audit.rs`'s module doc says so.
+- **Pruned by the hourly background sweep, never on a request path.** `flags::sweep_versions`
+  runs in `flags-server`'s existing `sweep_loop` beside the telemetry and usage sweeps, through
+  `flags_core::maintenance::begin` (unpinned, as `otto_app`, with the `app.maintenance` marker).
+  No tool or SDK request deletes history.
+- **Bounded batches.** Each maintenance transaction deletes at most 1 000 rows (chosen by `id`
+  through a subquery with `LIMIT`); the sweep repeats until a batch is short. Short transactions
+  on the small shared database; a backlog drains in one sweep run.
+- **The growth bound this gives.** A flag's history is at most its newest 100 versions plus the
+  versions of the last 90 days (plus up to an hour until the next sweep). Each version costs a
+  billed MCP write, and part 2 of #123 (next PR) caps a flag's size at 64 KiB, so the table's
+  growth is bounded by what writers pay for over 90 days, like the other retention tables.
+  Until part 2 ships, a snapshot can be about 672 KiB (#115's 32 KiB per configuration, 21
+  configurations) plus rules. Real flags are a few hundred bytes.
+- **A migration is needed, and it is policy-only and additive.** `flag_versions` has only its
+  tenant policy (`org_id = current_org()`), so an unpinned maintenance transaction sees no rows.
+  `0006_flag_versions_retention.sql` adds, as 0003 did for the telemetry tables, a `FOR SELECT`
+  and a `FOR DELETE` policy granting access only when no org is pinned **and** the transaction
+  carries `app.maintenance = 'on'` (#27). Pinned transactions are unaffected; an unpinned
+  transaction without the marker (a request path that forgot to pin) still sees nothing. The
+  previous release never touches `flag_versions` unpinned, so during rollout and after a
+  rollback it behaves as before (and simply does not sweep). `SET LOCAL lock_timeout = '3s'` as
+  in 0003 and 0005.
+- **Existing data:** the #115 production check (2026-10-15, SELECT-only) found 0 rows in
+  `feature_flags` and `flag_versions`, so the first sweep deletes nothing.
 
 ## 4. Goal & success criteria
 
-A flag's history is bounded at its newest 100 versions, and `rollback_flag` and `flag_history`
-behave predictably at the bound.
+`flag_versions` is bounded by a documented, time-based retention that no caller can drive, and
+`rollback_flag` and `flag_history` behave predictably at the bound.
 
-- After any write, a flag has at most 100 rows in `flag_versions`: versions
-  `current - 99 ..= current` (fewer for a flag with fewer versions).
-- `flag_history` returns the retained versions, newest first; its tool description states that
-  only the newest 100 are kept.
-- `rollback_flag` to a retained version works as before; to a pruned version it fails with
-  `version_not_found`, whose message says only the newest 100 versions are kept and points to
-  `flag_history`.
-- The default rollback (previous version) always works for a flag with at least two versions.
-- No migration file is added or changed.
+- After a sweep, a flag keeps every version younger than 90 days and at least its newest 100;
+  nothing else of it remains.
+- A flag with more than 100 recent versions keeps all of them (writes cannot push out recent
+  history).
+- The sweep deletes across every org through `maintenance::begin`; an unpinned transaction
+  without the marker can neither see nor delete `flag_versions` rows.
+- `rollback_flag` to a removed version fails with `version_not_found`, whose message states the
+  retention; `flag_history` and `rollback_flag` tool descriptions state it.
+- One new migration, `0006`, policy-only; no existing migration changes.
 
 ## 5. Scope
 
-**In:** `crates/flags-core/src/flags.rs` (constant, prune in `record_version`, module docs),
-`crates/flags-core/src/audit.rs` (module doc: flag changes are recorded in the newest 100
-versions),
-`crates/flags-core/src/error.rs` (`VersionNotFound` message), the `flag_history` and
-`rollback_flag` tool descriptions (`crates/flags-mcp/src/tools/insight.rs`,
-`crates/flags-mcp/src/tools/flags.rs`), DB tests.
+**In:** `crates/flags-core/migrations/0006_flag_versions_retention.sql` (new);
+`crates/flags-core/src/flags.rs` (constants, `sweep_versions`, module docs);
+`crates/flags-core/src/error.rs` (`VersionNotFound` message); `crates/flags-core/src/audit.rs`
+and `crates/flags-core/src/maintenance.rs` (module docs); `crates/flags-server/src/main.rs`
+(`sweep_loop`); the `flag_history` and `rollback_flag` tool descriptions
+(`crates/flags-mcp/src/tools/insight.rs`, `crates/flags-mcp/src/tools/flags.rs`); DB tests.
 
-**Out:** the SDK list bound and per-flag size cap (part 2); age-based retention; retention of
-`rollback_events` or any other table; a configurable retention.
+**Out:** the SDK list bound and per-flag size cap (part 2); pruning on write; retention of
+`audit_events`; configurable retention.
 
 ## 6. Architecture
 
-- `flags.rs`: `pub const MAX_RETAINED_VERSIONS: i32 = 100;` with a doc comment giving the
-  reasoning above.
-- `record_version`, after its `INSERT`:
+- `flags.rs`:
+  - `pub const VERSION_RETENTION_DAYS: i32 = 90;` and `pub const MIN_RETAINED_VERSIONS: i32 =
+    100;`, documented with the reasoning in section 3.
+  - `pub async fn sweep_versions(db: &Db) -> Result<u64>`: loop
+    ```sql
+    DELETE FROM flag_versions WHERE id IN (
+      SELECT v.id FROM flag_versions v
+       WHERE v.created_at < now() - make_interval(days => $1)
+         AND v.version <= (SELECT max(w.version) FROM flag_versions w
+                            WHERE w.flag_id = v.flag_id) - $2
+       LIMIT $3)
+    ```
+    with `VERSION_RETENTION_DAYS`, `MIN_RETAINED_VERSIONS`, `SWEEP_BATCH = 1000`, each batch in
+    its own `maintenance::begin` transaction, committed; stop when a batch deletes fewer than
+    the batch size; return the total. The newest version always equals the flag's current
+    version (every change records one), so `max(version)` needs no read of `feature_flags`; it is
+    served by `UNIQUE (flag_id, version)`.
+- `0006_flag_versions_retention.sql`:
   ```sql
-  DELETE FROM flag_versions
-   WHERE org_id = $1 AND flag_id = $2 AND version <= $3 - MAX_RETAINED_VERSIONS
+  SET LOCAL lock_timeout = '3s';
+  CREATE POLICY flag_versions_retention_read ON flag_versions
+    FOR SELECT USING (current_org() IS NULL
+                      AND current_setting('app.maintenance', true) = 'on');
+  CREATE POLICY flag_versions_retention ON flag_versions
+    FOR DELETE USING (current_org() IS NULL
+                      AND current_setting('app.maintenance', true) = 'on');
   ```
-  bound with the org, the flag id, and the version just recorded (the constant is bound as a
-  parameter, not interpolated). Both `create_flag` (version 1, deletes nothing) and
-  `commit_change` (every other change, including `rollback` and `auto_rollback`) go through
-  `record_version`, so every write path prunes. The statement uses the
-  `UNIQUE (flag_id, version)` index; `org_id` keeps it a tenant query under RLS.
-- `rollback_flag` is unchanged: it looks up the target snapshot and returns `VersionNotFound`
-  when the row is absent, which is now also the pruned case. Its range check (`1 ..= current -
-  1`) stays: a legacy flag whose history has not yet been pruned can still be rolled back to an
-  old version until its next write.
-- `error.rs`: `VersionNotFound`'s message becomes
-  `flag {key:?} has no version {version}; only the newest 100 versions of a flag are kept. Call
-  flag_history to see them`, the number formatted from the constant.
-- Tool descriptions: `flag_history` "The newest versions of a flag (up to the 100 kept), newest
-  first: ..."; `rollback_flag` mentions it can restore any version `flag_history` shows.
-- Module docs of `flags.rs` state the retention.
+  Both permissive; they OR with the tenant policy, so pinned access is unchanged. No restrictive
+  policy is needed: unlike 0001's telemetry retention policies, these already require the
+  marker.
+- `main.rs` `sweep_loop`: call `flags_core::flags::sweep_versions(&db)` with the same logging
+  shape as its siblings (`"swept expired flag versions"`, `"flag-version sweep failed"`).
+- `rollback_flag` is unchanged: a removed version is `VersionNotFound`, as any absent version
+  was. `error.rs`: the message becomes `flag {key:?} has no version {version}; versions older
+  than 90 days are removed once a flag has 100 newer ones. Call flag_history to see the
+  versions kept`, numbers formatted from the constants.
+- Tool descriptions: `flag_history` and `rollback_flag` state the retention in one sentence.
 
-No interface is added and no shape changes, but it is a behavior narrowing of the MCP
-contract (not additive): `rollback_flag` to a version more than 100 changes old, which succeeded
-before, now returns `version_not_found`; `flag_history` returns at most 100 rows where it could
-return 200. The SDK REST contract is untouched.
+Interfaces: no new tool, route, field, or scope. Behavior narrowing of the MCP contract (not
+additive): a version older than 90 days with 100 newer ones, which `rollback_flag` could restore
+before, is now `version_not_found`. The SDK REST contract is untouched.
 
 ## 7. Invariants impact
 
-- **Every flag change is versioned:** still exactly one new version per change, written with
-  the change; pruning removes only versions at least 100 older than it.
-- **The database is small and shared / no unbounded tables:** `flag_versions` becomes bounded
-  per flag. One indexed `DELETE` per write; no fan-out, no extra connection.
-- **Tenant isolation:** the `DELETE` runs in the caller's tenant `Tx` with `org_id` in the
-  predicate; RLS applies. No new table.
-- **Append-only / rollout-compatible migrations:** no migration.
-- **Request paths use `begin_live`; background code uses `maintenance::begin`:** no new
-  transaction is opened; pruning rides the write's existing transaction.
-- **Metering:** unchanged; no new billable action.
+- **Append-only, rollout-compatible migrations:** one new file, `0006`, additive policies only;
+  the previous release does not read `flag_versions` unpinned, so nothing it does changes.
+- **Tenant isolation:** the new policies admit only unpinned transactions with the maintenance
+  marker, which only `maintenance::begin` sets; `tenant_isolation_is_enforced_on_every_tenant_
+  table` and the boot isolation check stay green; a test proves an unmarked unpinned
+  transaction sees and deletes nothing.
+- **Background code uses `maintenance::begin`; request paths `begin_live`:** the sweep is the
+  only deleter and runs in `sweep_loop`.
+- **Every flag change is versioned:** unchanged; the sweep removes only versions past both
+  bounds, never the current one (it is always among the newest 100).
+- **The database is small and shared:** batches of 1 000 rows per short transaction, hourly; one
+  pool connection at a time; the table becomes bounded by time and billed writes.
+- **No SQL outside flags-core; runtime queries only:** the sweep is in `flags-core`;
+  `main.rs` only calls it.
 
 ## 8. Out-of-band
 
-None.
+- Migration `0006` applies at boot under the advisory lock (agent: confirm `applying migrations`
+  in the boot logs after deploy). No secret, scope, or config key.
 
 ## 9. Error handling & edge cases
 
-- A write that fails after `record_version` rolls back the prune too (same transaction).
-- `version - 100 <= 0` for the first 100 versions: the `DELETE` matches nothing.
-- A rollback to version `v` where `v` is still retained but becomes pruned by the rollback's own
-  new version (`v = current - 99`): the snapshot is read before the new version is recorded, so
-  the rollback succeeds; afterwards `v` is gone from the history, and the new version holds the
-  same state.
-- Concurrent writers to one flag are serialized by the flag row lock, so the prune never races
-  an insert of the same flag.
+- A sweep failure is logged by `sweep_loop` and retried next hour, as its siblings.
+- A flag with fewer than 101 versions: `max - 100 < every version`, nothing matches.
+- A rollback concurrent with a sweep: the sweep never removes a version within the newest 100,
+  and the rollback's target is either retained (it reads it) or already gone
+  (`version_not_found`).
+- The 3 s lock timeout on `CREATE POLICY`: if a long transaction holds `flag_versions`, the
+  migration fails, rolls back, and the machine crash-loops until it applies (the documented
+  migration failure path, `docs/deploy/fly.md`).
 
 ## 10. Testing
 
 DB tests in `crates/flags-core/tests/db.rs`:
 
-- `flag_history_keeps_the_newest_100_versions`: create a flag and make 104 further changes
-  (version 105); `flag_versions` holds exactly 100 rows for it, versions 6..=105; `flag_history`
-  with limit 200 returns 100 rows, first 105, last 6.
-- `rollback_to_a_pruned_version_is_version_not_found`: on that flag, `rollback_flag` to 5 fails
-  with `version_not_found` and a message naming the 100-version bound; rollback to 6 (the oldest
-  retained) succeeds and restores version 6's state as version 106, after which version 6 is
-  pruned and 7..=106 remain; the default rollback works.
-- In the same test, a second flag `g` in the same app with a few versions keeps all of them:
-  pruning touches only the written flag.
-- An existing test that counts `flag_versions` rows stays green (fewer than 100 versions).
+- `flag_versions_are_swept_by_age_beyond_the_newest_100`: org A, flag `f` with 105 versions,
+  backdated (superuser pool) to 91 days for versions 1..=103; flag `recent` with 105 versions,
+  all current; org B, flag `b` with 3 versions all backdated. `sweep_versions` returns 5: `f`
+  keeps 6..=105 (version 6 is old but among the newest 100), `recent` keeps all 105, `b` keeps
+  all 3. `rollback_flag` on `f` to 5 is `version_not_found` naming 90 and 100; to 6 succeeds.
+  A second sweep returns 0.
+- `flag_versions_need_the_maintenance_marker_unpinned`: as `otto_app` unpinned without the
+  marker, `SELECT count(*)` sees 0 and `DELETE FROM flag_versions` deletes 0; with the marker
+  it sees every org's rows; pinned still sees only its own.
 
-Gates: workspace test (dedicated Postgres), clippy, fmt, migrations-unchanged check,
-`podman build`.
+Gates: workspace test (dedicated Postgres), clippy, fmt, migrations append-only check (prints
+nothing: 0006 is an addition), `podman build`.
 
 ## 11. Risks & open questions
 
-- An agent that wants to restore a state more than 100 changes old cannot. That state is in no
-  agent's working view (`flag_history` defaults to 20), and the constant is one line to raise.
-- Until part 2 ships, a snapshot can be about 672 KiB, so 100 versions of a maximal flag are
-  about 66 MiB (see section 3). Part 2 follows directly.
-- The prune makes each write slightly heavier (one indexed `DELETE`); negligible next to the
-  write's own `UPDATE`, `INSERT`, and `pg_notify`.
+- History grows with writes for 90 days. Writes are billed, and part 2 caps a flag at 64 KiB;
+  a hard per-flag ceiling would reintroduce caller-driven erasure, so none is set.
+- An agent cannot restore a state older than 90 days that has 100 newer versions; the constants
+  are one line each to raise.
