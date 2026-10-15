@@ -47,6 +47,16 @@ const BUCKETS: u64 = 10_000;
 const MAX_RULES: usize = 50;
 const MAX_RULE_VALUES: usize = 500;
 pub(crate) const MAX_VARIATIONS: usize = 20;
+/// The largest configuration, a flag's or a variation's, a write may store:
+/// its compact JSON in bytes. Every SDK evaluate response carries one
+/// configuration, and SDKs bound the response they read (the Rust SDK reads
+/// at most 1 MiB), so an unbounded one would cost every lookup and make some
+/// SDKs fall back to their default (#115). Only writes are checked: a
+/// configuration stored before the cap still evaluates and rolls back.
+/// Documented in `docs/SDK-DEVELOPER-GUIDE.md`.
+/// `limits_are_documented` pins the value: the MCP tool argument docs
+/// (`crates/flags-mcp/src/tools/flags.rs`) and the guide state it in prose.
+pub const MAX_CONFIGURATION_BYTES: usize = 32 * 1024;
 
 /// One environment's state for a flag.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -454,6 +464,43 @@ pub(crate) fn contains_nul(v: &Value) -> bool {
     }
 }
 
+/// The length in bytes of `v` as compact JSON, the form the server sends it
+/// in, counted without building the text. A failure to serialize (which a
+/// `Value` never has) counts as `usize::MAX`, so a size check fails closed.
+pub(crate) fn json_len(v: &Value) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match serde_json::to_writer(&mut count, v) {
+        Ok(()) => count.0,
+        Err(_) => usize::MAX,
+    }
+}
+
+/// Refuses a configuration over [`MAX_CONFIGURATION_BYTES`]; `what` names it
+/// in the message.
+pub(crate) fn check_configuration_size(
+    what: impl FnOnce() -> String,
+    c: &Value,
+) -> Result<(), String> {
+    let n = json_len(c);
+    if n > MAX_CONFIGURATION_BYTES {
+        return Err(format!(
+            "{} is {n} bytes as JSON; the limit is {MAX_CONFIGURATION_BYTES} bytes",
+            what()
+        ));
+    }
+    Ok(())
+}
+
 /// Validate a flag's variations, returning the canonical JSON to store.
 pub fn validate_variations(v: &Value) -> Result<Value, String> {
     if v.is_null() {
@@ -473,8 +520,11 @@ pub fn validate_variations(v: &Value) -> Result<Value, String> {
             "a flag may have at most {MAX_VARIATIONS} variations"
         ));
     }
-    for name in parsed.keys() {
+    for (name, variation) in &parsed {
         validate_name("variation name", name)?;
+        if let Some(c) = &variation.configuration {
+            check_configuration_size(|| format!("variation {name:?} configuration"), c)?;
+        }
     }
     serde_json::to_value(&parsed).map_err(|e| e.to_string())
 }
@@ -855,5 +905,41 @@ mod tests {
         let envs = json!({"production": {"enabled": true, "default_variation": "control"}});
         assert!(validate_all_envs(&envs, &json!({"treatment": {}})).is_err());
         assert!(validate_all_envs(&envs, &vars).is_ok());
+    }
+
+    #[test]
+    fn json_len_matches_serialized_length() {
+        for v in [
+            Value::Null,
+            json!("é\n\u{1}\"\\"),
+            json!({"a": [1, 2.5, -3e10, true, null], "b": {"c": "d"}}),
+            json!(12345678901234567890u64),
+        ] {
+            assert_eq!(json_len(&v), serde_json::to_vec(&v).unwrap().len(), "{v}");
+        }
+    }
+
+    #[test]
+    fn variation_configuration_size_is_capped() {
+        // A JSON string of n characters serializes to n + 2 bytes.
+        let at_limit = "x".repeat(MAX_CONFIGURATION_BYTES - 2);
+        assert!(validate_variations(&json!({"on": {"configuration": at_limit}})).is_ok());
+        let over = "x".repeat(MAX_CONFIGURATION_BYTES - 1);
+        let e =
+            validate_variations(&json!({"off": {}, "on": {"configuration": over}})).unwrap_err();
+        assert!(e.contains("\"on\""), "{e}");
+        assert!(e.contains(&MAX_CONFIGURATION_BYTES.to_string()), "{e}");
+        assert!(
+            e.contains(&(MAX_CONFIGURATION_BYTES + 1).to_string()),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn limits_are_documented() {
+        // "32 KiB" is written out in the create_flag and update_flag argument
+        // docs (crates/flags-mcp/src/tools/flags.rs) and in
+        // docs/SDK-DEVELOPER-GUIDE.md; change them with this constant.
+        assert_eq!(MAX_CONFIGURATION_BYTES, 32 * 1024);
     }
 }

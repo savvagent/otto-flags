@@ -60,6 +60,16 @@ server refuses them at creation). Build the URL from path segments, never by str
 concatenation, and treat a key outside that set, or `.` or `..`, as a failed lookup: return the
 default without a request.
 
+A `configuration`, the flag's or a variation's, is at most 32 KiB (32 768 bytes) of compact JSON
+when written; the server refuses a larger one. An evaluate response carries one configuration
+(the matched variation's, else the flag's), so size its read cap well above the limit (the Rust
+SDK reads up to 1 MiB) and treat a response over the cap as a failed lookup. Flags stored before
+the limit existed may carry more, so do not reject a configuration for exceeding it. The limit
+does not bound the [list](#list-all-flags-for-local-overrides) response or a
+[stream](#real-time-updates-sse) event the same way: each flag there carries its configuration and
+every variation's (up to 20), and the list has no limit on the number of flags, so do not apply
+the evaluate cap to them.
+
 #### Request
 
 ```http
