@@ -89,6 +89,8 @@ async fn still_valid(state: &AppState, sdk: &Sdk) -> bool {
     // configuration error: the lookup refused to run exempt from row-level
     // security, which persists until the roles are fixed, so the key can no
     // longer be re-checked at all.
+    // Uncached on purpose (`keys::resolve_cached` remembers only keys that did
+    // not resolve): this re-checks a key that did, to notice its revocation.
     match keys::resolve_hash(&state.db, &sdk.1).await {
         Ok(owner) => owner.is_some(),
         Err(e) => e.failure_reason().reason != "configuration",

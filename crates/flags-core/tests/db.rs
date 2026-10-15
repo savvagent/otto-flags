@@ -5739,6 +5739,94 @@ async fn member_removed_ignores_a_shadowing_schema(pool: PgPool) {
     .await;
 }
 
+/// Rotating a client key stops it on the very next lookup through the
+/// unknown-key cache: a key that resolved is never remembered (#104).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn rotation_stops_a_key_through_the_cache(pool: PgPool) {
+    let db = db(pool).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let unknown = keys::UnknownKeys::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, issued) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let old = issued.client_key.unwrap();
+    assert!(keys::resolve_cached(&db, &unknown, &old)
+        .await
+        .unwrap()
+        .is_some());
+
+    let mut tx = db.begin(org).await.unwrap();
+    let (_, rotated) = tx.rotate_keys(&app, Rotate::Client, actor).await.unwrap();
+    tx.commit().await.unwrap();
+    let new = rotated.client_key.unwrap();
+
+    assert!(keys::resolve_cached(&db, &unknown, &old)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(keys::resolve_cached(&db, &unknown, &new)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(unknown.len(), 1, "only the rotated-away key is remembered");
+}
+
+/// A deleted org's key stops on the very next lookup through the cache.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let org = OrgId::new();
+    let unknown = keys::UnknownKeys::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (_, issued) = tx
+        .create_app("web", &["production".into()], UserId::new())
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    let key = issued.client_key.unwrap();
+    assert!(keys::resolve_cached(&db, &unknown, &key)
+        .await
+        .unwrap()
+        .is_some());
+    sqlx::query("INSERT INTO deleted_orgs (org_id) VALUES ($1)")
+        .bind(org)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(keys::resolve_cached(&db, &unknown, &key)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// A string that is not shaped like a key is not remembered (`looks_like_key`
+/// refuses it before any lookup).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn malformed_keys_are_not_remembered(pool: PgPool) {
+    let db = db(pool).await;
+    let unknown = keys::UnknownKeys::new();
+    assert!(keys::resolve_cached(&db, &unknown, "sdk_xyz")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(unknown.is_empty());
+}
+
+/// A database error is not an answer about the key, so it is never
+/// remembered: once the database is back, the key resolves.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn errors_are_not_remembered(pool: PgPool) {
+    let db = db(pool).await;
+    let unknown = keys::UnknownKeys::new();
+    let key = keys::NewKey::mint(KeyKind::Client).key;
+    db.pool().close().await;
+    assert!(keys::resolve_cached(&db, &unknown, &key).await.is_err());
+    assert!(unknown.is_empty());
+}
+
 /// Every query on the pool's own role, outside a pinned (`begin_live`),
 /// maintenance (`maintenance::begin`), or unpinned (`unpinned::begin`)
 /// transaction, runs as whatever role the pool connects as. In production that

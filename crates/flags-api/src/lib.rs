@@ -24,10 +24,12 @@ mod sdk;
 mod stream;
 mod telemetry;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::routing::{get, post};
 use axum::Router;
+use flags_core::keys::UnknownKeys;
 use flags_core::notify::Listener;
 use flags_core::rollback::Hints;
 use http::{header, HeaderName, Method};
@@ -46,6 +48,9 @@ pub struct AppState {
     pub platform_webhook_secret: String,
     /// How often an idle stream is sent a heartbeat.
     pub heartbeat: Duration,
+    /// SDK keys that recently did not resolve, shared by every request, so a
+    /// client repeating one stops costing a database lookup (#104).
+    pub unknown_keys: Arc<UnknownKeys>,
 }
 
 impl AppState {
@@ -61,6 +66,7 @@ impl AppState {
             hints,
             platform_webhook_secret: platform_webhook_secret.into(),
             heartbeat: Duration::from_secs(30),
+            unknown_keys: Arc::new(UnknownKeys::new()),
         }
     }
 }
