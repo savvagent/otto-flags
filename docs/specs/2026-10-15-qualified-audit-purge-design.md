@@ -85,7 +85,7 @@ behave exactly as before. `PURGE` is `pub(crate)`: only `platform_events` uses i
 interface gains nothing.
 
 `crates/flags-core/src/platform_events.rs` (`org_deleted`, the purge call at about line 191):
-`sqlx::query_scalar::<_, i64>(audit_purge::PURGE)`, which replaces the literal. No other line
+`sqlx::query_scalar::<_, i64>(crate::audit_purge::PURGE)` (a full path, so no new import), which replaces the literal. No other line
 changes, so #80's edits in this file do not conflict.
 
 ## 7. Invariants impact
@@ -109,8 +109,10 @@ None. No config, secret, scope, or platform registration, and no recurring-cost 
 
 - The function is missing from `public`: the startup check already refuses to serve. At call time
   the qualified call fails just as the unqualified one did (`42883`).
-- A deployment where `public` is not where 0004 created the function: impossible, because 0004
-  creates it in `public` explicitly, and `FUNCTION` already assumed that.
+- A deployment where 0004 created the function outside `public`: 0004 creates it unqualified,
+  which lands in `public` unless the migrating role had a schema of its own name on its
+  `search_path`. In that case the startup check reports the function missing and the server
+  refuses to serve. The qualified call agrees with the check, so the failure is closed either way.
 
 ## 11. Testing approach
 
@@ -133,4 +135,4 @@ check, and `podman build` (`crates/**`).
 
 ## 12. Risks and open questions
 
-- #80 also edits `platform_events.rs`. This change touches one line there plus an import.
+- #80 also edits `platform_events.rs`. This change touches one line there.

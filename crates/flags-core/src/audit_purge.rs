@@ -35,8 +35,9 @@ macro_rules! purge_function {
 }
 
 /// The function `org.deleted` purges a deleted org's audit trail through
-/// (migration 0004, #21). Schema-qualified because 0004 creates it in
-/// `public`, where everything this database owns lives.
+/// (migration 0004, #21). Schema-qualified because everything this database
+/// owns lives in `public`; 0004 creates it unqualified, so if it landed
+/// anywhere else the startup check reports it missing.
 pub const FUNCTION: &str = concat!(purge_function!(), "(uuid)");
 
 /// The statement `org.deleted` purges through: [`FUNCTION`], named by schema

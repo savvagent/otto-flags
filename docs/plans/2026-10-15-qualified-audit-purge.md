@@ -40,7 +40,7 @@ builds both `FUNCTION` (unchanged value) and a new `pub(crate) const PURGE`, whi
 **Files:**
 - Modify: `crates/flags-core/tests/db.rs` (new test after `org_deleted_purges_the_audit_trail_as_otto_app`)
 - Modify: `crates/flags-core/src/audit_purge.rs` (the `FUNCTION` constant)
-- Modify: `crates/flags-core/src/platform_events.rs` (the purge call in `org_deleted`, and imports)
+- Modify: `crates/flags-core/src/platform_events.rs` (the purge call in `org_deleted`, one line)
 
 **Interfaces:** `audit_purge::FUNCTION` keeps its value. New `pub(crate) const audit_purge::PURGE: &str`.
 
