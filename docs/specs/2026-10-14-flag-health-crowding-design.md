@@ -145,7 +145,7 @@ declared names are the protection there).
 
 - `pub async fn health(tx, flag: &FeatureFlag, environment, window_hours)` (was `flag: FlagId`).
   Declared names: `flag.variations.as_object()` keys (empty when not an object).
-- Variations query (`health`, now line ~366):
+- Variations query (`health`):
   `SELECT variation, sum(count)::bigint, (sum(sum(count)) OVER ())::bigint FROM flag_eval_hourly
   WHERE <filter> AND enabled AND variation <> '' GROUP BY variation
   ORDER BY (variation = ANY($6)) DESC, 2 DESC, variation LIMIT $5`, `$6` the declared names
@@ -172,13 +172,19 @@ declared names are the protection there).
   ), kept AS (
     SELECT * FROM r WHERE rn <= $5
   )
-  SELECT k.error_type, k.flag_enabled, k.server, k.count, e.error_message, k.last_seen
-  FROM kept k JOIN flag_errors e ON e.org_id = $1 AND e.id = k.last_id
+  SELECT k.error_type, k.flag_enabled, k.server, k.count,
+         (SELECT e.error_message FROM flag_errors e
+          WHERE e.id = k.last_id AND e.org_id = $1 AND e.flag_id = $2) AS last_message,
+         k.last_seen
+  FROM kept k
   ORDER BY k.server DESC, k.rn
   ```
 
-  `last_id` names a row the aggregate read in the same statement snapshot, so the join drops
-  nothing. Task order: #69's rewrite lands first without the `server` column and partition
+  `last_id` names a row the aggregate read in the same statement snapshot, so the subquery
+  always finds it. It is a scalar subquery, not a join, because the planner cannot see that
+  `kept` is capped and chose merge and hash joins over the whole table in custom plans; the
+  subquery is at most one primary-key probe per kept group. The outer `ORDER BY` only makes the
+  fetch deterministic; `merge_error_groups` decides the order shown. Task order: #69's rewrite lands first without the `server` column and partition
   (`GROUP BY error_type, flag_enabled ... ORDER BY count DESC, error_type, flag_enabled LIMIT $5`),
   then #70 adds them.
 - `ErrorGroup` gains `pub reporter: KeyKind` (serialized `"server"` / `"client"`), after
@@ -194,9 +200,9 @@ are always listed and each error group names the kind of key that reported it.
 `crates/flags-mcp/src/tools/out.rs` `HEALTH_PROVENANCE`: adds that a group marked `server` came
 through the app's secret server key.
 
-**Public interface (MCP `flag_health` output), additive:** `topErrors[].reporter` is new; a type
-reported by both kinds of key shows as two groups; `variations` now also lists declared
-variations with no evaluations (as `0`). `health`'s Rust signature changes (crate-internal
+**Public interface (MCP `flag_health` output), an additive field plus behaviour changes:** `topErrors[].reporter` is new; a type
+reported by both kinds of key shows as two groups; some slots are kept for server groups;
+`variations` now also lists declared variations with no evaluations (as `0`). `health`'s Rust signature changes (crate-internal
 callers only: the tool and tests). The SDK REST contract is untouched.
 
 ## 7. Invariants impact

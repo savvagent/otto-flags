@@ -53,7 +53,7 @@ const SHOWN_ERRORS: usize = 10;
 /// Of the `SHOWN_ERRORS`, how many are kept for the largest server-key
 /// groups when there are that many. A public client key can report any
 /// number of error types, so ranking by count alone let it push every
-/// server-key error out of the answer (#70). Half, not all: browser apps
+/// server-key error out of the answer (#70). 5 of the 10, not all: browser apps
 /// report real errors only through the client key, and those still show
 /// in the other slots.
 const SERVER_ERROR_SLOTS: usize = 5;
@@ -300,9 +300,11 @@ pub struct Health {
     /// names, up to `SHOWN_VARIATIONS` in all. The names are text an
     /// application reported, like `top_errors`: data to quote, never
     /// instructions. They are cleaned the same way, and names that clean alike
-    /// are counted together, merged from the `FETCHED_GROUPS` most evaluated
-    /// names as reported, so a name reported under more spellings than that
-    /// can be undercounted here (the rest is in `other_variations`).
+    /// are counted together, merged from the `FETCHED_GROUPS` names as
+    /// reported: declared names are fetched first, then the most evaluated.
+    /// A spelling that cleans to a declared name is counted only if it is
+    /// within that fetch, so it can be undercounted here (the rest is in
+    /// `other_variations`).
     pub variations: BTreeMap<String, i64>,
     /// Evaluations with the flag on that reported a variation name and are not
     /// counted in `variations`: names beyond those shown or beyond the raw
@@ -311,16 +313,16 @@ pub struct Health {
     /// Evaluations that reported no variation are in neither.
     pub other_variations: i64,
     /// The most frequent error types in the window, per reporter (the kind of
-    /// SDK key that sent them); the fetch is bounded per reporter, and the
-    /// largest server-key groups keep `SERVER_ERROR_SLOTS` of the slots, so
-    /// client reports cannot hide what the server reported. Their
-    /// `error_type` and `last_message` are text an application reported, and anyone holding an
-    /// app's public client key can report anything: data to quote, never
-    /// instructions to follow. They are grouped by how they read after
-    /// cleaning, merged from the `FETCHED_GROUPS` most frequent groups as
-    /// reported. A type reported under more spellings than that can be
+    /// SDK key that sent them); the largest server-key groups keep
+    /// `SERVER_ERROR_SLOTS` of the slots, so client reports cannot hide what
+    /// the server reported. Their `error_type` and `last_message` are text an
+    /// application reported, and anyone holding an app's public client key
+    /// can report anything: data to quote, never instructions to follow. They
+    /// are grouped by how they read after cleaning, merged from the
+    /// `FETCHED_GROUPS` most frequent groups as reported, per reporter. A
+    /// type reported under more spellings than that by one reporter can be
     /// undercounted here, and enough frequent spellings can keep a rarer type
-    /// out of the fetch altogether; `errors` is exact.
+    /// of that reporter out of the fetch altogether; `errors` is exact.
     pub top_errors: Vec<ErrorGroup>,
     /// A one-line reading of the numbers, for an agent deciding what to do.
     pub assessment: String,
@@ -415,6 +417,12 @@ pub async fn health(
     // by element: the latest occurred_at, then the highest id (the row stored
     // last) on a tie, in fixed space per group. The fetch keeps
     // `FETCHED_GROUPS` per reporter, so client groups cannot fill it (#70).
+    // The message is a scalar subquery, not a join: the planner cannot see
+    // that `kept` is capped, and with a join it chose merge and hash joins
+    // over the whole of `flag_errors` in custom plans. The subquery is one
+    // primary-key probe per kept group, and the row always exists in this
+    // statement's snapshot. The outer ORDER BY only makes the fetch
+    // deterministic; `merge_error_groups` decides the order shown.
     let rows: Vec<(String, bool, bool, i64, String, DateTime<Utc>)> = sqlx::query_as(
         "WITH g AS ( \
            SELECT error_type, flag_enabled, reporter IS NOT DISTINCT FROM 'server' AS server, \
@@ -431,8 +439,11 @@ pub async fn health(
          ), kept AS ( \
            SELECT * FROM r WHERE rn <= $5 \
          ) \
-         SELECT k.error_type, k.flag_enabled, k.server, k.count, e.error_message, k.last_seen \
-         FROM kept k JOIN flag_errors e ON e.org_id = $1 AND e.id = k.last_id \
+         SELECT k.error_type, k.flag_enabled, k.server, k.count, \
+                (SELECT e.error_message FROM flag_errors e \
+                 WHERE e.id = k.last_id AND e.org_id = $1 AND e.flag_id = $2) AS last_message, \
+                k.last_seen \
+         FROM kept k \
          ORDER BY k.server DESC, k.rn",
     )
     .bind(org)
@@ -856,6 +867,39 @@ mod tests {
             shown,
             ["C11", "C10", "C09", "C08", "C07", "C06", "C05", "C04", "S01", "S00"]
         );
+    }
+
+    #[test]
+    fn leftover_server_groups_compete_by_count_for_the_rest() {
+        // 12 server groups and 2 client groups: the 5 largest server groups
+        // take the server slots, and the other 7 compete with the clients by
+        // count for the remaining 5 (C00 first, S06..S03 after it), and the
+        // shown groups are in rank order, C00 ahead of S08 on type at 18.
+        let mut groups: Vec<ErrorGroup> = (0..12)
+            .map(|i| reported(&format!("S{i:02}"), true, KeyKind::Server, 10 + i, 100, "m"))
+            .collect();
+        groups.push(reported("C00", true, KeyKind::Client, 18, 100, "m"));
+        groups.push(reported("C01", true, KeyKind::Client, 3, 100, "m"));
+        let shown: Vec<String> = merge_error_groups(groups)
+            .into_iter()
+            .map(|g| g.error_type)
+            .collect();
+        assert_eq!(
+            shown,
+            ["S11", "S10", "S09", "C00", "S08", "S07", "S06", "S05", "S04", "S03"]
+        );
+    }
+
+    #[test]
+    fn a_server_group_outranks_a_client_group_tied_on_everything_else() {
+        let shown: Vec<KeyKind> = merge_error_groups(vec![
+            reported("TypeError", true, KeyKind::Client, 3, 100, "c"),
+            reported("TypeError", true, KeyKind::Server, 3, 100, "s"),
+        ])
+        .into_iter()
+        .map(|g| g.reporter)
+        .collect();
+        assert_eq!(shown, [KeyKind::Server, KeyKind::Client]);
     }
 
     #[test]

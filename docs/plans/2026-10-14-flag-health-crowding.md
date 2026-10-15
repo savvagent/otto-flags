@@ -649,8 +649,11 @@ Expected: compile errors (`ErrorGroup` has no `reporter`).
          ), kept AS ( \
            SELECT * FROM r WHERE rn <= $5 \
          ) \
-         SELECT k.error_type, k.flag_enabled, k.server, k.count, e.error_message, k.last_seen \
-         FROM kept k JOIN flag_errors e ON e.org_id = $1 AND e.id = k.last_id \
+         SELECT k.error_type, k.flag_enabled, k.server, k.count, \
+                (SELECT e.error_message FROM flag_errors e \
+                 WHERE e.id = k.last_id AND e.org_id = $1 AND e.flag_id = $2) AS last_message, \
+                k.last_seen \
+         FROM kept k \
          ORDER BY k.server DESC, k.rn",
     )
     // same five binds

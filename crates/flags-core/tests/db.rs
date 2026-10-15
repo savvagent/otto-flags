@@ -1482,11 +1482,13 @@ async fn health_always_shows_declared_variations(pool: PgPool) {
         environment: "production".into(),
         at: now,
     };
-    // control 2, treatment 3; junk00..junk24 evaluated 10..=34 times.
+    // control 2, treatment 3; junk000..junk119 evaluated 5..=124 times, so
+    // every junk name is louder than a declared one and the 120 of them
+    // exceed the 100 raw names fetched.
     let mut events: Vec<EvalEvent> = (0..2).map(|_| event("control".into())).collect();
     events.extend((0..3).map(|_| event("treatment".into())));
-    for i in 0..25 {
-        events.extend((0..(10 + i)).map(|_| event(format!("junk{i:02}"))));
+    for i in 0..120 {
+        events.extend((0..(5 + i)).map(|_| event(format!("junk{i:03}"))));
     }
     telemetry::record_evaluations(&mut tx, app.id, KeyKind::Client, events)
         .await
@@ -1499,11 +1501,11 @@ async fn health_always_shows_declared_variations(pool: PgPool) {
     assert_eq!(h.variations.get("control"), Some(&2));
     assert_eq!(h.variations.get("treatment"), Some(&3));
     assert_eq!(h.variations.get("unused"), Some(&0));
-    // The 17 most evaluated junk names (junk08..junk24) take the other slots.
-    assert!(h.variations.contains_key("junk08"));
-    assert!(!h.variations.contains_key("junk07"));
-    // junk00..junk07: 10 + 11 + ... + 17.
-    assert_eq!(h.other_variations, (10..=17).sum::<i64>());
+    // The 17 most evaluated junk names (junk103..junk119) take the other slots.
+    assert!(h.variations.contains_key("junk103"));
+    assert!(!h.variations.contains_key("junk102"));
+    // The rest, fetched or not: junk000..junk102.
+    assert_eq!(h.other_variations, (0..=102).map(|i| 5 + i).sum::<i64>());
     tx.commit().await.unwrap();
 }
 
@@ -1697,6 +1699,57 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
         [
             (KeyKind::Server, 5, "tied, stored last"),
             (KeyKind::Client, 1, "legacy"),
+        ]
+    );
+
+    // A flag-off group of the same type is its own group with its own latest
+    // message, and a row of another flag in the same org (higher id, later
+    // time) is never chosen as a message.
+    let other = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "g".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    for (flag_id, enabled, message, at) in [
+        (flag.id, false, "flag off", ago(5)),
+        (other.id, true, "another flag", ago(0)),
+    ] {
+        sqlx::query(
+            "INSERT INTO flag_errors \
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at, reporter) \
+             VALUES ($1, $2, 'production', $3, 'TypeError', $4, $5, 'server')",
+        )
+        .bind(org)
+        .bind(flag_id)
+        .bind(enabled)
+        .bind(message)
+        .bind(at)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+    let h = telemetry::health(&mut tx, &flag, Some("production"), 24)
+        .await
+        .unwrap();
+    let typed: Vec<(bool, KeyKind, i64, &str)> = h
+        .top_errors
+        .iter()
+        .filter(|g| g.error_type == "TypeError")
+        .map(|g| (g.flag_enabled, g.reporter, g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        typed,
+        [
+            (true, KeyKind::Server, 5, "tied, stored last"),
+            (true, KeyKind::Client, 1, "legacy"),
+            (false, KeyKind::Server, 1, "flag off"),
         ]
     );
     tx.commit().await.unwrap();

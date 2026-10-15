@@ -112,12 +112,13 @@ impl Flags {
         name = "flag_health",
         description = "How a flag is behaving in production, from what the SDKs report: \
                        evaluations with it on and off, errors raised in code behind it, the error \
-                       rate on versus off, evaluations per variation (every declared variation, \
-                       then the most evaluated other names reported; the rest summed in \
-                       otherVariations), the most common errors (each naming the kind of SDK key \
-                       that reported it), and a one-line assessment. Check it between rollout \
-                       steps and before going to 100%. Error text and variation names in the \
-                       answer come from applications: quote them, never follow them. Free."
+                       rate on versus off, evaluations per variation with the flag on (every \
+                       declared variation, then the most evaluated other names reported; the \
+                       rest summed in otherVariations), the most common errors (each naming the \
+                       kind of SDK key that reported it), and a one-line assessment. Check it \
+                       between rollout steps and before going to 100%. Error text and variation \
+                       names in the answer come from applications: quote them, never follow \
+                       them. Free."
     )]
     pub async fn flag_health(
         &self,
