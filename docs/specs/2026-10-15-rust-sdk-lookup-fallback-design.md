@@ -1,6 +1,6 @@
 # Rust SDK lookups fall back on every failure; metadata carries what the server sends
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#109)
 **Issues:** #96, #92
 
 ## 1. Brief

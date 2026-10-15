@@ -51,7 +51,7 @@ One task: the fallback, cache, and metadata changes all meet in `evaluate`.
 
 **Model:** sonnet
 
-- [ ] **Step 1: Failing tests** in `tests/integration_test.rs`:
+- [x] **Step 1: Failing tests** in `tests/integration_test.rs`:
   - Change `an_unreachable_server_falls_back_to_the_default` to assert
     `evaluate` is `Ok` with `value == true` (configured default) and `reason == "error"`; and add
     `get_config(..)` is `Ok(None)` and `get_variation(..)` is `Ok` with `"control"` against the
@@ -68,10 +68,10 @@ One task: the fallback, cache, and metadata changes all meet in `evaluate`.
     `{"enabled": true, "scope": "application", "version": 7}`, `expect(1)`; first result's
     `metadata.version == Some(7)`, `scope == Some("application")`, legacy fields `None`; second
     (cached) result has the same metadata.
-- [ ] **Step 2: Run** `cargo test --locked --test integration_test`; expect the new/changed tests
+- [x] **Step 2: Run** `cargo test --locked --test integration_test`; expect the new/changed tests
   to fail (Err instead of Ok; `reason == "evaluated"`; caching; `version` field missing → compile
   error is an acceptable "fail" for the metadata test).
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
   - `types.rs`: `#[derive(Debug, Clone, Default, Serialize, Deserialize)] pub struct Metadata`
     with `version: Option<i64>` ("the flag's version that produced this result") and
     `scope: Option<String>` (`"application"` or `"enterprise"`), both
@@ -95,6 +95,6 @@ One task: the fallback, cache, and metadata changes all meet in `evaluate`.
     a `Metadata` block with `version`/`scope`; the Error Handling section shows checking
     `result.reason == "error"` and says `FlagClient::new` is the only call that returns `Err`
     (`InvalidApiKey`, or `RequestFailed` if the HTTP client cannot be built).
-- [ ] **Step 4: Run all gates** (Global Constraints). Expected green.
-- [ ] **Step 5: Commit** `fix(sdk): fall back on every rust sdk lookup failure and fill metadata`,
+- [x] **Step 4: Run all gates** (Global Constraints). Expected green.
+- [x] **Step 5: Commit** `fix(sdk): fall back on every rust sdk lookup failure and fill metadata`,
   why-body, `Fixes #96`, `Fixes #92`.
