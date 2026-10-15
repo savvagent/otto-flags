@@ -44,8 +44,8 @@ From #77:
 
 ## 3. Assumptions
 
-- **`idempotent_hint` only where a repeat has no further effect the caller can see.** Every tool,
-  reads included, records a usage row (`Meter::charge`, `crates/flags-core/src/usage.rs`); a
+- **`idempotent_hint` only where a repeat has no further effect the caller can see.** Every tool but
+  `propose_rollback`, reads included, records a usage row (`Meter::charge`, `crates/flags-core/src/usage.rs`); a
   non-billable row is internal metering, not an effect, or no read could be read-only. A repeat of
   a billable tool (`flags_core::usage::BILLABLE`) is billed again, and most of them also add a flag
   version or an audit row, so they get `idempotent_hint = false`. `remove_rollback_policy` is not

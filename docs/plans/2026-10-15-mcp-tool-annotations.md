@@ -62,7 +62,7 @@
 
   In the `tests` module add:
   1. `every_tool_is_annotated`: for each `router().list_all()` tool, `annotations` is `Some`
-     (`panic!("{name} has no annotations")`); `read_only_hint` is `Some`; if `Some(false)`,
+     (`panic!("{name} has no annotations")`; never a bare `unwrap()`, here or in test 2); `read_only_hint` is `Some`; if `Some(false)`,
      `destructive_hint.is_some()` and `idempotent_hint.is_some()` with the tool name in the
      message.
   2. `annotations_match_the_pinned_sets`: for each tool, `read_only_hint == Some(READ_ONLY.contains(name))`;
@@ -74,8 +74,9 @@
      Then a source scan over `include_str!("org.rs")`, `"apps.rs"`, `"flags.rs"`, `"insight.rs"`,
      `"rollback.rs"`; for each name in `NAMES`, take the body from
      `format!("pub async fn {name}(")` to the first `"\n    }\n"` after it (the method's closing
-     brace at impl indentation; rustfmt guarantees the shape), panicking if the function or its
-     end is not found. A `READ_ONLY` body must contain none of `FLAGS_WRITE`, `APPS_ADMIN`, `require_admin`,
+     brace at impl indentation; rustfmt guarantees the shape), panicking with the tool and file
+     names if the function or its end is not found, or if the body is empty or contains a second
+     `pub async fn` (a layout change that would let one body run into the next). A `READ_ONLY` body must contain none of `FLAGS_WRITE`, `APPS_ADMIN`, `require_admin`,
      `set_archived` (reads do call `self.charge`: every tool meters a non-billable usage row); every other body must contain at least one of `FLAGS_WRITE`,
      `APPS_ADMIN`, `set_archived` (archive/restore delegate their `FLAGS_WRITE` check to
      `Flags::set_archived`).
