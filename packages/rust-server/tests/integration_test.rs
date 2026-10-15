@@ -4,6 +4,7 @@
 
 use otto_flags::{Config, Context, FlagClient, OttoFlagsError, VariationResult};
 use serde_json::json;
+use std::time::Duration;
 use wiremock::matchers::{any, body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -191,6 +192,8 @@ async fn an_unreachable_server_falls_back_to_the_default() {
     let client = FlagClient::new(
         Config::new(KEY)
             .with_base_url(uri)
+            // Zero cooldown: the later calls must reach the server (the cooldown is #111).
+            .with_failure_cooldown(Duration::ZERO)
             .with_default("test-flag", true),
     )
     .unwrap();
@@ -226,6 +229,8 @@ async fn unknown_flag_falls_back_to_the_default() {
     let client = FlagClient::new(
         Config::new(KEY)
             .with_base_url(server.uri())
+            // Zero cooldown: the later calls must reach the server (the cooldown is #111).
+            .with_failure_cooldown(Duration::ZERO)
             .with_default("missing-flag", true),
     )
     .unwrap();
@@ -248,6 +253,8 @@ async fn server_error_falls_back_to_the_default() {
     let client = FlagClient::new(
         Config::new(KEY)
             .with_base_url(server.uri())
+            // Zero cooldown: the later calls must reach the server (the cooldown is #111).
+            .with_failure_cooldown(Duration::ZERO)
             .with_default("test-flag", true),
     )
     .unwrap();
@@ -593,6 +600,8 @@ async fn falls_back_uncached_on(response: ResponseTemplate) {
     let client = FlagClient::new(
         Config::new(KEY)
             .with_base_url(server.uri())
+            // Zero cooldown: the later calls must reach the server (the cooldown is #111).
+            .with_failure_cooldown(Duration::ZERO)
             .with_default("test-flag", true),
     )
     .unwrap();
