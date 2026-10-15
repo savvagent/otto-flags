@@ -69,7 +69,7 @@ FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
     .applicationId("your-app-id")
     .baseUrl("https://otto-flags.savvagent.com") // optional
     .enableRealtime(true) // default: true
-    .cacheTtl(60000L) // default: 60 seconds
+    .cacheTtl(60000L) // default: 60 seconds; results are cached per flag and per context
     .enableTelemetry(true) // default: true
     .timeout(5000) // request timeout in ms, default: 5000
     .defaults(Map.of(
