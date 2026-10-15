@@ -245,12 +245,13 @@ public class OttoFlagsClient {
         if let contextKey {
             let entry = CacheEntry(value: enabled, configuration: configuration, variation: variation)
             queue.sync {
-                var contexts = flagCache[flagKey] ?? [:]
-                if contexts.count >= Self.maxContextsPerFlag && contexts[contextKey] == nil {
-                    contexts.removeAll()
+                // Mutate in place: copying the inner dictionary out and back would copy up to
+                // maxContextsPerFlag entries on every miss.
+                if (flagCache[flagKey]?.count ?? 0) >= Self.maxContextsPerFlag
+                    && flagCache[flagKey]?[contextKey] == nil {
+                    flagCache[flagKey] = [:]
                 }
-                contexts[contextKey] = entry
-                flagCache[flagKey] = contexts
+                flagCache[flagKey, default: [:]][contextKey] = entry
             }
         }
 
