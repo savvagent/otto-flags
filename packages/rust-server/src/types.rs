@@ -223,7 +223,11 @@ pub struct Metadata {
 /// An error the host raised while a flag was in play, reported with
 /// `FlagClient::track_error`. Text is truncated to the server's limits (type 200, message
 /// 2 000, stack trace 8 000 characters).
+///
+/// The message and stack trace are stored by Otto Flags (14 days) and shown to the agents that
+/// manage your flags: keep end-user data (emails, ids, query values) out of them.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ErrorReport {
     /// The flag in play when the error happened
     pub flag_key: String,
@@ -240,6 +244,8 @@ pub struct ErrorReport {
 }
 
 impl ErrorReport {
+    /// A report with a type and message; add a stack trace or environment with the `with_`
+    /// methods.
     pub fn new(
         flag_key: impl Into<String>,
         flag_enabled: bool,
@@ -256,25 +262,29 @@ impl ErrorReport {
         }
     }
 
-    /// A report for a Rust error: its type name and its `Display` text.
+    /// A report for a Rust error: the last segment of its type name (e.g. `ParseIntError`) and
+    /// its `Display` text, which may carry end-user data (see the type docs). A type-erased
+    /// error (`dyn Error`, `Box<dyn Error>`, `anyhow::Error`) has no useful type name here; use
+    /// `ErrorReport::new` with a type of your choosing for those.
     pub fn from_error<E: std::error::Error + ?Sized>(
         flag_key: impl Into<String>,
         flag_enabled: bool,
         error: &E,
     ) -> Self {
-        Self::new(
-            flag_key,
-            flag_enabled,
-            std::any::type_name::<E>(),
-            error.to_string(),
-        )
+        let full = std::any::type_name::<E>();
+        // Drop the module path (not stable across compiler versions) but keep generics whole.
+        let base = full.split('<').next().unwrap_or(full);
+        let start = base.rfind("::").map_or(0, |i| i + 2);
+        Self::new(flag_key, flag_enabled, &full[start..], error.to_string())
     }
 
+    /// Attach a stack trace or backtrace.
     pub fn with_stack_trace(mut self, stack_trace: impl Into<String>) -> Self {
         self.stack_trace = Some(stack_trace.into());
         self
     }
 
+    /// Attach the environment, e.g. `"production"`.
     pub fn with_environment(mut self, environment: impl Into<String>) -> Self {
         self.environment = Some(environment.into());
         self

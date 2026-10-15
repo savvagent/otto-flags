@@ -5,30 +5,36 @@
 //! reports; by default it counts only reports sent with the server key (`srv_`) (#93).
 //!
 //! Events queue in memory and leave in batches: every [`FLUSH_INTERVAL`] from a background task,
-//! as soon as a queue holds [`FLUSH_AT`] events, and on [`Telemetry::flush`]. Telemetry never
-//! blocks or fails a lookup: a full queue drops new events (counted and logged), and a failed
-//! send is logged and dropped, never retried.
+//! sooner once a queue holds a full request ([`FLUSH_AT`] events) but never less than
+//! [`MIN_SEND_GAP`] after the task's previous send, and on [`Telemetry::flush`]. So a process
+//! sends at most about one request per kind per second however busy it is (the database behind
+//! the API is small and shared). Telemetry never blocks or fails a lookup: a full queue drops new
+//! events (counted and logged), and a failed send is logged and dropped, never retried.
 
 use crate::types::ErrorReport;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
 /// How often the background task sends what is queued.
 const FLUSH_INTERVAL: Duration = Duration::from_secs(5);
-/// A queue this long is sent without waiting for the interval.
-const FLUSH_AT: usize = 100;
+/// The least time between two sends by the background task.
+const MIN_SEND_GAP: Duration = Duration::from_secs(1);
 /// The server refuses batches above 1 000 events (`flags_core::telemetry::MAX_BATCH`).
 const MAX_EVENTS_PER_REQUEST: usize = 1_000;
+/// A queue holding a full request is sent without waiting for the interval.
+const FLUSH_AT: usize = MAX_EVENTS_PER_REQUEST;
 /// Well under the server's 2 MB JSON body limit, whatever the text in the events.
 const MAX_REQUEST_BYTES: usize = 1 << 20;
 /// Events kept per kind while waiting to be sent; more are dropped and counted.
 const MAX_QUEUED: usize = 10_000;
 
-// The server truncates to these lengths (characters) anyway; truncating first keeps requests
-// small and the byte budget predictable.
+// The server truncates to these lengths (characters) anyway (`MAX_ERROR_TYPE`,
+// `MAX_ERROR_MESSAGE`, `MAX_STACK`, `MAX_VARIATION`, `MAX_ENVIRONMENT` in
+// `crates/flags-core/src/telemetry.rs`); truncating first keeps requests small and the byte
+// budget predictable.
 const MAX_ERROR_TYPE: usize = 200;
 const MAX_ERROR_MESSAGE: usize = 2_000;
 const MAX_STACK: usize = 8_000;
@@ -73,6 +79,10 @@ struct Inner {
     api_key: String,
     enabled: bool,
     queues: Mutex<Queues>,
+    /// Held for a whole flush, so `flush()` also waits for a send the background task started.
+    sending: tokio::sync::Mutex<()>,
+    flush_interval: Duration,
+    min_send_gap: Duration,
     /// Shared with the background task, which must not keep `Inner` alive while it waits.
     wake: Arc<Notify>,
     /// Whether a background task is running; reset when it ends, so a later event in another
@@ -100,6 +110,11 @@ impl Drop for ResetOnDrop {
 #[derive(Clone)]
 pub(crate) struct Telemetry {
     inner: Arc<Inner>,
+}
+
+/// Nothing done under the queue lock can panic; a poisoned lock is still consistent.
+fn lock(queues: &Mutex<Queues>) -> MutexGuard<'_, Queues> {
+    queues.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn truncated(s: &str, max_chars: usize) -> String {
@@ -145,6 +160,24 @@ fn batches(events: Vec<Value>) -> Vec<Vec<Value>> {
 
 impl Telemetry {
     pub fn new(http: reqwest::Client, base_url: String, api_key: String, enabled: bool) -> Self {
+        Self::with_timing(
+            http,
+            base_url,
+            api_key,
+            enabled,
+            FLUSH_INTERVAL,
+            MIN_SEND_GAP,
+        )
+    }
+
+    fn with_timing(
+        http: reqwest::Client,
+        base_url: String,
+        api_key: String,
+        enabled: bool,
+        flush_interval: Duration,
+        min_send_gap: Duration,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 http,
@@ -152,6 +185,9 @@ impl Telemetry {
                 api_key,
                 enabled,
                 queues: Mutex::new(Queues::default()),
+                sending: tokio::sync::Mutex::new(()),
+                flush_interval,
+                min_send_gap,
                 wake: Arc::new(Notify::new()),
                 running: Arc::new(AtomicBool::new(false)),
             }),
@@ -186,9 +222,14 @@ impl Telemetry {
         self.push(Kind::Evaluations, event);
     }
 
-    /// Queue an error the host raised behind a flag.
+    /// Queue an error the host raised behind a flag. A report naming a key no flag can have
+    /// is dropped: the server could not match it to a flag.
     pub fn track_error(&self, report: ErrorReport) {
         if !self.inner.enabled {
+            return;
+        }
+        if !crate::client::is_valid_flag_key(&report.flag_key) {
+            tracing::debug!("Otto Flags telemetry: error report for an invalid flag key dropped");
             return;
         }
         let mut event = json!({
@@ -214,17 +255,15 @@ impl Telemetry {
     }
 
     fn push(&self, kind: Kind, event: Value) {
-        let full = match self.inner.queues.lock() {
-            Ok(mut queues) => {
-                if queues.of(kind).len() >= MAX_QUEUED {
-                    queues.dropped += 1;
-                    return;
-                }
-                let queue = queues.of(kind);
-                queue.push(event);
-                queue.len() >= FLUSH_AT
+        let full = {
+            let mut queues = lock(&self.inner.queues);
+            if queues.of(kind).len() >= MAX_QUEUED {
+                queues.dropped += 1;
+                return;
             }
-            Err(_) => return,
+            let queue = queues.of(kind);
+            queue.push(event);
+            queue.len() >= FLUSH_AT
         };
         self.ensure_flusher();
         if full {
@@ -243,6 +282,7 @@ impl Telemetry {
         }
         let client: Weak<Inner> = Arc::downgrade(&self.inner);
         let wake = Arc::clone(&self.inner.wake);
+        let (flush_interval, min_send_gap) = (self.inner.flush_interval, self.inner.min_send_gap);
         // Built outside the task so it also runs if the task is dropped before its first poll.
         let reset = ResetOnDrop(Arc::clone(&self.inner.running));
         runtime.spawn(async move {
@@ -250,7 +290,7 @@ impl Telemetry {
             loop {
                 // `sleep`, not `interval`: an interval's first tick is immediate.
                 tokio::select! {
-                    _ = tokio::time::sleep(FLUSH_INTERVAL) => {}
+                    _ = tokio::time::sleep(flush_interval) => {}
                     _ = wake.notified() => {}
                 }
                 // Hold the client only while sending, so dropping every clone ends the task.
@@ -258,19 +298,24 @@ impl Telemetry {
                     break;
                 };
                 Telemetry { inner }.flush().await;
+                // A busy process refills a full request quickly; space the sends out. A wake
+                // during the gap is kept by `Notify` and handled after it.
+                tokio::time::sleep(min_send_gap).await;
             }
         });
     }
 
-    /// Send everything queued now. Failures are logged and the events dropped.
+    /// Send everything queued now, after any send already under way. Failures are logged and
+    /// the events dropped.
     pub async fn flush(&self) {
-        let (evaluations, errors, dropped) = match self.inner.queues.lock() {
-            Ok(mut queues) => (
+        let _sending = self.inner.sending.lock().await;
+        let (evaluations, errors, dropped) = {
+            let mut queues = lock(&self.inner.queues);
+            (
                 std::mem::take(&mut queues.evaluations),
                 std::mem::take(&mut queues.errors),
                 std::mem::take(&mut queues.dropped),
-            ),
-            Err(_) => return,
+            )
         };
         if dropped > 0 {
             tracing::warn!(
@@ -290,7 +335,8 @@ impl Telemetry {
             tracing::warn!("Otto Flags telemetry not sent: invalid base_url");
             return;
         };
-        for batch in batches(events) {
+        let mut batches = batches(events).into_iter();
+        while let Some(batch) = batches.next() {
             let count = batch.len();
             let body = json!({ kind.name(): batch });
             let sent = self
@@ -301,18 +347,25 @@ impl Telemetry {
                 .json(&body)
                 .send()
                 .await;
-            let failure = match sent {
-                Ok(response) if response.status().is_success() => None,
-                Ok(response) => Some(format!("status {}", response.status())),
-                Err(e) => Some(e.without_url().to_string()),
-            };
-            if let Some(why) = failure {
-                tracing::warn!(
-                    "Otto Flags telemetry: {} {} not sent ({})",
+            match sent {
+                Ok(response) if response.status().is_success() => {}
+                Ok(response) => tracing::warn!(
+                    "Otto Flags telemetry: {} {} not sent (status {})",
                     count,
                     kind.name(),
-                    why
-                );
+                    response.status()
+                ),
+                Err(e) => {
+                    // The server is unreachable or slow: don't wait a timeout per batch.
+                    let rest: usize = batches.by_ref().map(|b| b.len()).sum();
+                    tracing::warn!(
+                        "Otto Flags telemetry: {} {} not sent ({})",
+                        count + rest,
+                        kind.name(),
+                        e.without_url()
+                    );
+                    return;
+                }
             }
         }
     }
@@ -328,7 +381,7 @@ impl Telemetry {
 
     #[cfg(test)]
     fn queued(&self) -> (usize, usize, u64) {
-        let queues = self.inner.queues.lock().unwrap();
+        let queues = lock(&self.inner.queues);
         (
             queues.evaluations.len(),
             queues.errors.len(),
@@ -415,6 +468,52 @@ mod tests {
         })
         .await;
         assert!(ended.is_ok(), "the background task kept running");
+    }
+
+    #[test]
+    fn an_error_report_for_an_invalid_flag_key_is_dropped() {
+        let t = telemetry(true);
+        t.track_error(ErrorReport::new("a/b", true, "E", "m"));
+        t.track_error(ErrorReport::new("ok", true, "E", "m"));
+        assert_eq!(t.queued(), (0, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn the_background_task_sends_on_its_interval() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/telemetry/evaluations"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let t = Telemetry::with_timing(
+            reqwest::Client::new(),
+            server.uri(),
+            "srv_test".into(),
+            true,
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+        );
+        // One event: far below a full request, so only the interval sends it.
+        t.track_evaluation("f", true, None, None);
+
+        let sent = tokio::time::timeout(Duration::from_secs(2), async {
+            while server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(sent.is_ok(), "the interval never sent the event");
+        assert_eq!(t.queued(), (0, 0, 0));
     }
 
     #[test]

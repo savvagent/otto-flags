@@ -49,7 +49,10 @@ Acceptance criteria (#93):
   `ErrorReport::from_error(flag_key, flag_enabled, &error)` (type from `std::any::type_name`,
   message from `Display`). The SDK cannot see host errors on its own.
 - **Delivery.** Events queue in memory and are sent in batches: every 5 s by a background task,
-  as soon as either queue reaches 100 events, and on `FlagClient::flush().await`. A request
+  sooner once a queue holds a full request (1 000 events) but never less than 1 s after the
+  task's previous send, and on `FlagClient::flush().await`, which also waits for a send already
+  under way. (Review of #114 found the first draft's wake-at-100 let a busy process send about
+  one request per round trip; the full-request trigger plus the 1 s gap bound it.) A request
   carries at most 1 000 events and about 1 MiB of serialized JSON (measured per event, so
   multi-byte or escape-heavy text cannot push a batch past the server's 2 MB body limit; a
   character cap alone would not). The queue is bounded at
@@ -76,7 +79,8 @@ Acceptance criteria (#93):
   client's bearer key and one event per answered lookup (`flag_key`, `result`, `variation`,
   `environment`, `timestamp`, no `user_id`/`context`); fallbacks send nothing.
 - `track_error` + `flush()` posts `/api/telemetry/errors` with the report, text truncated.
-- 100 queued events trigger a send without `flush()`.
+- A full request (1 000 queued events) triggers a send without `flush()`; one event is sent on
+  the interval.
 - `with_telemetry(false)` sends nothing.
 - A telemetry endpoint answering 500, or unreachable, changes no lookup result and `flush()`
   completes.
@@ -128,8 +132,9 @@ its message changes.
   `user_id`/context; error text is the host's own and the server truncates and expires it.
 - Client keys public / server key secret: the key travels only in the `Authorization` header to
   `base_url`; it is never logged.
-- Small shared database: batching (5 s / 100 events / 1 000 per request) keeps request volume to
-  about one request per kind per 5 s per process.
+- Small shared database: a process sends at most about one request per kind per second (the
+  1 s gap), and one per 5 s below 200 lookups a second; each request carries up to 1 000 events.
+  A flush stops at the first transport error rather than waiting a timeout per batch.
 - Licensing: MIT; no server code.
 
 ## 8. Migration
@@ -147,6 +152,10 @@ None. SDK-only plus its example: post-merge verification is server health only; 
 - Lock poisoned: events are dropped silently (as the cache does).
 - Shutdown without `flush()`: up to 5 s of events lost; documented.
 - Text truncation keeps whole UTF-8 characters.
+- An error report naming an invalid flag key is dropped (no flag can match it).
+- A `srv_` key with a non-`https`, non-loopback `base_url` logs a warning at construction.
+- `ErrorReport` is `#[non_exhaustive]` (new type, so free now); its docs warn that message and
+  stack trace are stored and shown to agents, so end-user data stays out.
 
 ## 11. Testing approach
 

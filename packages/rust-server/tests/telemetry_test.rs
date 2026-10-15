@@ -4,6 +4,7 @@
 
 use otto_flags::{Config, Context, ErrorReport, FlagClient};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::time::Duration;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -34,6 +35,7 @@ fn client(server: &MockServer) -> FlagClient {
     FlagClient::new(Config::new(KEY).with_base_url(server.uri())).unwrap()
 }
 
+/// The bodies of the telemetry requests of one kind, each checked to carry the client's key.
 async fn bodies(server: &MockServer, kind: &str) -> Vec<Value> {
     let suffix = format!("/api/telemetry/{kind}");
     server
@@ -42,7 +44,20 @@ async fn bodies(server: &MockServer, kind: &str) -> Vec<Value> {
         .unwrap_or_default()
         .iter()
         .filter(|r: &&Request| r.url.path() == suffix)
-        .map(|r| serde_json::from_slice(&r.body).unwrap())
+        .map(|r| {
+            let auth = r.headers.get("authorization").map(|v| v.to_str().unwrap());
+            assert_eq!(auth, Some(format!("Bearer {KEY}").as_str()));
+            serde_json::from_slice(&r.body).unwrap()
+        })
+        .collect()
+}
+
+fn keys(event: &Value) -> BTreeSet<&str> {
+    event
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
         .collect()
 }
 
@@ -69,14 +84,42 @@ async fn answered_lookups_are_reported_without_user_data() {
     let events = sent[0]["evaluations"].as_array().unwrap();
     assert_eq!(events.len(), 2);
     for event in events {
+        // Exactly these fields: nothing about the user leaves the process.
+        assert_eq!(
+            keys(event),
+            BTreeSet::from([
+                "environment",
+                "flag_key",
+                "result",
+                "timestamp",
+                "variation"
+            ])
+        );
         assert_eq!(event["flag_key"], "test-flag");
         assert_eq!(event["result"], true);
         assert_eq!(event["variation"], "blue");
         assert_eq!(event["environment"], "staging");
         assert!(event["timestamp"].is_u64());
-        assert!(event.get("user_id").is_none());
-        assert!(event.get("context").is_none());
     }
+    let raw = sent[0].to_string();
+    assert!(!raw.contains("user-1") && !raw.contains("a@example.com"));
+}
+
+#[tokio::test]
+async fn the_servers_answer_is_reported_not_an_override() {
+    let server = server_with(true, 202).await;
+    let client = client(&server);
+    client.set_variation_override("test-flag", "green");
+
+    let result = client.evaluate("test-flag", None).await.unwrap();
+    assert_eq!(result.variation.as_deref(), Some("green"));
+    client.flush().await;
+
+    let sent = bodies(&server, "evaluations").await;
+    let event = &sent[0]["evaluations"][0];
+    assert_eq!(event["variation"], "blue");
+    // No environment in the context: the field is absent, not null.
+    assert!(event.get("environment").is_none());
 }
 
 #[tokio::test]
@@ -118,6 +161,18 @@ async fn errors_are_reported_with_their_text_truncated() {
     let sent = bodies(&server, "errors").await;
     assert_eq!(sent.len(), 1);
     let event = &sent[0]["errors"][0];
+    assert_eq!(
+        keys(event),
+        BTreeSet::from([
+            "environment",
+            "error_message",
+            "error_type",
+            "flag_enabled",
+            "flag_key",
+            "stack_trace",
+            "timestamp"
+        ])
+    );
     assert_eq!(event["flag_key"], "test-flag");
     assert_eq!(event["flag_enabled"], true);
     assert_eq!(event["error_type"], "TypeError");
@@ -142,18 +197,16 @@ async fn an_error_built_from_a_rust_error_names_its_type() {
     let sent = bodies(&server, "errors").await;
     let event = &sent[0]["errors"][0];
     assert_eq!(event["flag_enabled"], false);
-    assert!(event["error_type"]
-        .as_str()
-        .unwrap()
-        .ends_with("ParseIntError"));
+    assert_eq!(event["error_type"], "ParseIntError");
+    assert!(event.get("stack_trace").is_none());
     assert_eq!(event["error_message"], error.to_string());
 }
 
 #[tokio::test]
-async fn a_hundred_lookups_are_sent_without_waiting_for_flush() {
+async fn a_full_request_is_sent_without_waiting_for_flush() {
     let server = server_with(true, 202).await;
     let client = client(&server);
-    for _ in 0..100 {
+    for _ in 0..1_000 {
         client.evaluate("test-flag", None).await.unwrap();
     }
 
@@ -165,7 +218,11 @@ async fn a_hundred_lookups_are_sent_without_waiting_for_flush() {
     .await;
     assert!(arrived.is_ok(), "no evaluations were sent");
     let sent = bodies(&server, "evaluations").await;
-    assert_eq!(sent[0]["evaluations"].as_array().unwrap().len(), 100);
+    let total: usize = sent
+        .iter()
+        .map(|b| b["evaluations"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(total, 1_000);
 }
 
 #[tokio::test]
@@ -201,4 +258,36 @@ async fn a_failing_telemetry_endpoint_changes_no_lookup() {
         .await
         .expect("flush finished");
     assert!(client.is_enabled("test-flag", None).await);
+
+    // The failed batches were dropped, not kept for a retry: only the lookup above is new.
+    client.flush().await;
+    let evaluations: usize = bodies(&server, "evaluations")
+        .await
+        .iter()
+        .map(|b| b["evaluations"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(evaluations, 2);
+    assert_eq!(bodies(&server, "errors").await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_unreachable_telemetry_server_does_not_stall_flush() {
+    // Bind a port, then free it, so nothing is listening there.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(format!("http://127.0.0.1:{port}"))
+            .with_timeout(Duration::from_millis(500)),
+    )
+    .unwrap();
+    for _ in 0..5 {
+        client.track_error(ErrorReport::new("test-flag", true, "E", "m"));
+    }
+    tokio::time::timeout(Duration::from_secs(3), client.flush())
+        .await
+        .expect("flush finished");
 }

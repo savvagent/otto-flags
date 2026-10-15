@@ -29,7 +29,7 @@ pub enum OttoFlagsError {
 /// `crates/flags-core/src/flags.rs`), so refusing anything else loses no flag. `.` and `..` pass
 /// that rule but no URL can carry them as a path segment (the `url` crate drops them, and
 /// WHATWG parsing treats `%2e` as a dot segment), so they would reach another endpoint (#95).
-fn is_valid_flag_key(key: &str) -> bool {
+pub(crate) fn is_valid_flag_key(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 128
         && key != "."
@@ -73,6 +73,19 @@ impl FlagClient {
         // guide recommends for server-side SDKs (and whose telemetry drives auto-rollback).
         if !(config.api_key.starts_with("sdk_") || config.api_key.starts_with("srv_")) {
             return Err(OttoFlagsError::InvalidApiKey);
+        }
+
+        // The server key is a secret: warn when it would cross the network in clear text.
+        if config.api_key.starts_with("srv_") {
+            if let Ok(url) = reqwest::Url::parse(&config.base_url) {
+                let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+                if url.scheme() != "https" && !loopback {
+                    tracing::warn!(
+                        "Otto Flags: the server key will be sent over {}; use an https base_url",
+                        url.scheme()
+                    );
+                }
+            }
         }
 
         let http_client = HttpClient::builder()

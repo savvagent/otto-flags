@@ -115,9 +115,14 @@ client.track_error(
 Flag health compares the error rate with a flag on against the rate with it off, and
 auto-rollback acts on it, so report errors from both code paths.
 
-Events are queued in memory and sent in batches every 5 seconds, or as soon as 100 are waiting,
-by a background task on the Tokio runtime. Call `client.flush().await` before the process exits,
-or the last few seconds of events are lost. Telemetry never blocks or fails a lookup: if the
+Events are queued in memory and sent in batches every 5 seconds by a background task on the
+Tokio runtime, sooner when a full batch (1,000) is waiting, but at most about once a second per
+kind, however busy the process. Call `client.flush().await` before the process exits (it also
+waits for a send already under way), or the last few seconds of events are lost.
+
+The error message and stack trace are stored by Otto Flags for 14 days and shown to the agents
+that manage your flags: keep end-user data (emails, ids, query values) out of them. A `srv_` key
+is secret: use an `https` `base_url` (the SDK warns otherwise). Telemetry never blocks or fails a lookup: if the
 queue is full (10,000 events per kind) new events are dropped, and a batch that cannot be sent is
 logged at `warn` and dropped, not retried. Turn it off with `Config::with_telemetry(false)`.
 
