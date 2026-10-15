@@ -72,8 +72,10 @@ Out of scope (ticket): server changes; other SDKs.
   (YAGNI).
 - Cooldown uses `std::time::Instant` (monotonic); the logic takes `now` as a parameter so it is
   unit-tested without sleeping.
-- A success does not clear a cooldown early; nothing needs it (a success can only happen outside
-  the window).
+- `record` is called only on a failure; a success never touches a window (a request already in
+  flight when another lookup opened a window may still succeed, and is used as usual).
+- There is no single-probe state: every lookup that arrives after a window ends, before a new
+  failure is recorded, sends a request.
 - The cooldown is per `FlagClient` and shared by its clones (it lives behind an `Arc`, like the
   cache).
 
@@ -152,7 +154,10 @@ server code: post-merge verification is health only.
 - A `Retry-After` of `0` gives the configured cooldown (the max rule).
 - Body exactly at the cap is accepted; one byte over is refused.
 - A rejected key (401/403) still logs at `error`, once per window.
-- Overrides and cache hits are unaffected by cooldowns.
+- Cache hits are still served during a cooldown; a skipped lookup is the same un-overridden
+  default as any other failure.
+- The `std::sync::Mutex` in `Backoff` is only locked inside the sync `remaining` and `record`,
+  never across an `.await`.
 
 ## 11. Testing approach
 
