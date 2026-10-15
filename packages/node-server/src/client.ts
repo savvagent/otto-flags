@@ -19,7 +19,7 @@ import {
  * flag can have those keys. Checking before the request keeps an invalid key,
  * and the SDK key sent with it, from steering the request elsewhere (#107).
  */
-function isValidFlagKey(key: unknown): key is string {
+function isValidFlagKey(key: unknown): boolean {
   return (
     typeof key === 'string' &&
     key !== '.' &&
@@ -93,17 +93,18 @@ export class FlagClient {
    */
   async evaluate(flagKey: string, context?: FlagContext): Promise<FlagEvaluationResult> {
     if (!isValidFlagKey(flagKey)) {
+      // Untyped callers can pass anything here.
+      const key: unknown = flagKey;
       const described =
-        typeof flagKey === 'string'
-          ? `${JSON.stringify((flagKey as string).slice(0, 64))} (length ${(flagKey as string).length})`
-          : `non-string value of type ${typeof flagKey}`;
+        typeof key === 'string'
+          ? `${JSON.stringify(key.slice(0, 64))} (length ${key.length})`
+          : `non-string value of type ${typeof key}`;
       this.config.onError(
         new Error(`Invalid flag key ${described}: keys are 1-128 characters of [A-Za-z0-9._-] and not "." or ".."`)
       );
-      const fallbackKey = flagKey as unknown;
       return {
-        key: typeof fallbackKey === 'string' ? fallbackKey : String(fallbackKey),
-        value: (typeof fallbackKey === 'string' && this.config.defaults[fallbackKey]) || false,
+        key: String(key),
+        value: (typeof key === 'string' && this.config.defaults[key]) || false,
         reason: 'error',
       };
     }
