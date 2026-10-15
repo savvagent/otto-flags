@@ -642,3 +642,28 @@ async fn metadata_carries_the_version_and_scope_the_server_sends() {
         assert!(metadata.variant.is_none());
     }
 }
+
+#[tokio::test]
+async fn a_timeout_falls_back() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/test-flag/evaluate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "enabled": false }))
+                .set_delay(std::time::Duration::from_millis(500)),
+        )
+        .mount(&server)
+        .await;
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_timeout(std::time::Duration::from_millis(50))
+            .with_default("test-flag", true),
+    )
+    .unwrap();
+
+    let result = client.evaluate("test-flag", None).await.unwrap();
+    assert!(result.value);
+    assert_eq!(result.reason, "error");
+}

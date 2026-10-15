@@ -342,7 +342,10 @@ A flag lookup never fails your request. `evaluate`, `is_enabled`, `get_config`, 
 `get_variation` fall back to the flag's configured default (`with_default`, else `false`) when the
 key is invalid, the server is unreachable or slow (`with_timeout`), it answers with an error
 status, or the response is not an evaluate response. The fallback has `reason: "error"`, is logged
-at `warn` through `tracing`, and is not cached, so the next lookup asks the server again. The
+through `tracing` (at `error` when the server refuses the SDK key, else `warn`), and is not cached,
+so the next lookup asks the server again. Config and variation overrides are not applied to a
+fallback; `get_config` gives `None` and `get_variation` gives `"control"`, so use `evaluate` when
+you need to tell a fallback from a real answer. The
 lookup methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
 
 ```rust

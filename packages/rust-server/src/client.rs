@@ -38,6 +38,22 @@ fn is_valid_flag_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
+/// Why a lookup fell back, for the log.
+struct Failure {
+    why: String,
+    /// The server refused the SDK key (401/403).
+    rejected_key: bool,
+}
+
+impl Failure {
+    fn new(why: impl Into<String>) -> Self {
+        Self {
+            why: why.into(),
+            rejected_key: false,
+        }
+    }
+}
+
 /// Otto Flags FlagClient for server-side feature flag evaluation
 #[derive(Clone)]
 pub struct FlagClient {
@@ -80,10 +96,12 @@ impl FlagClient {
     /// context as sent, after `application_id` is filled in): a different context, such as
     /// another user or other attributes, is evaluated by the server.
     ///
-    /// A lookup does not return `Err`. Any failure (an invalid key or `base_url`, the server
-    /// unreachable or timing out, a non-2xx status, a response that is not the evaluate
-    /// response) gives the flag's configured default with `reason: "error"`, is logged at
-    /// `warn`, and is not cached. The `Result` is kept for compatibility.
+    /// A lookup does not return `Err`. Any failure (an invalid flag key or `base_url`, the
+    /// server unreachable or timing out, a non-2xx status, a response that is not the evaluate
+    /// response) gives the flag's configured default with `reason: "error"`, is logged (at
+    /// `error` when the server refuses the SDK key, else `warn`), and is not cached. Config and
+    /// variation overrides are not applied to such a fallback. The `Result` is kept for
+    /// compatibility.
     pub async fn evaluate(
         &self,
         flag_key: &str,
@@ -157,12 +175,21 @@ impl FlagClient {
 
         let data = match self.fetch(flag_key, &ctx).await {
             Ok(data) => data,
-            Err(why) => {
-                tracing::warn!(
-                    "Flag {:?} lookup failed ({}); using its default",
-                    flag_key,
-                    why
-                );
+            Err(failure) => {
+                // A rejected key is a misconfiguration that will not heal by itself.
+                if failure.rejected_key {
+                    tracing::error!(
+                        "Flag {:?} lookup failed ({}): check the SDK key; using its default",
+                        flag_key,
+                        failure.why
+                    );
+                } else {
+                    tracing::warn!(
+                        "Flag {:?} lookup failed ({}); using its default",
+                        flag_key,
+                        failure.why
+                    );
+                }
                 return self.get_default_result(flag_key);
             }
         };
@@ -226,9 +253,11 @@ impl FlagClient {
     }
 
     /// POST the evaluate request and return the response body, which is known to carry a
-    /// boolean `enabled`; or a short description of why not, for the log.
-    async fn fetch(&self, flag_key: &str, ctx: &Context) -> Result<serde_json::Value, String> {
-        let url = self.evaluate_url(flag_key).map_err(|e| e.to_string())?;
+    /// boolean `enabled`; or why not, for the log.
+    async fn fetch(&self, flag_key: &str, ctx: &Context) -> Result<serde_json::Value, Failure> {
+        let url = self
+            .evaluate_url(flag_key)
+            .map_err(|e| Failure::new(e.to_string()))?;
         let response = self
             .http_client
             .post(url)
@@ -237,16 +266,27 @@ impl FlagClient {
             .send()
             .await
             // The URL is already in the log line's context; drop it from the error text.
-            .map_err(|e| format!("request failed: {}", e.without_url()))?;
-        if !response.status().is_success() {
-            return Err(format!("status {}", response.status()));
+            .map_err(|e| Failure::new(format!("request failed: {}", e.without_url())))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Failure {
+                why: format!("status {status}"),
+                rejected_key: matches!(
+                    status,
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                ),
+            });
         }
-        let data: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|_| "the body is not JSON".to_string())?;
+        let data: serde_json::Value = response.json().await.map_err(|e| {
+            Failure::new(if e.is_decode() {
+                "the body is not JSON".to_string()
+            } else {
+                // A timeout or reset while reading the body, not a malformed one.
+                format!("reading the body failed: {}", e.without_url())
+            })
+        })?;
         if !data["enabled"].is_boolean() {
-            return Err("the body has no boolean `enabled`".to_string());
+            return Err(Failure::new("the body has no boolean `enabled`"));
         }
         Ok(data)
     }

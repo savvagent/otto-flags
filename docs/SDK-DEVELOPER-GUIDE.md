@@ -91,6 +91,7 @@ Authorization: Bearer sdk_xxx
     "contrast": "high"
   },
   "timestamp": 1700000000,
+  "version": 3,
   "context": { ... }
 }
 ```
@@ -105,6 +106,7 @@ Authorization: Bearer sdk_xxx
 | `variation` | string? | The allocated variation name (if A/B testing) |
 | `configuration` | object? | Dynamic configuration attached to the flag/variation |
 | `timestamp` | number | Unix timestamp of evaluation |
+| `version` | number | Flag version that produced this result |
 
 #### Context Fields
 
