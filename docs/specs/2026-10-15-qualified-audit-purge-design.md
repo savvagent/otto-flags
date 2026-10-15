@@ -1,6 +1,6 @@
 # Call the audit purge function by schema
 
-**Status:** DRAFT
+**Status:** APPROVED
 **Issue:** #53
 
 ## 1. Brief
@@ -103,7 +103,7 @@ None.
 
 ## 9. Out-of-band
 
-None. No config, secret, scope, or platform registration.
+None. No config, secret, scope, or platform registration, and no recurring-cost impact.
 
 ## 10. Error handling and edge cases
 
@@ -121,8 +121,10 @@ New `#[sqlx::test(migrator = "flags_core::MIGRATOR")]` in `crates/flags-core/tes
 2. As the pool role: `CREATE SCHEMA otto_app`, then
    `CREATE FUNCTION otto_app.purge_deleted_org_audit(uuid) RETURNS bigint LANGUAGE sql AS 'SELECT -1::bigint'`
    and `GRANT USAGE ON SCHEMA otto_app TO otto_app`. Functions are executable by `PUBLIC` by
-   default. The test asserts that `otto_app` resolves the unqualified name to the decoy, so the
-   test cannot pass vacuously.
+   default. Through `otto_app_db` (whose connections `SET ROLE otto_app`, so `"$user"` is
+   `otto_app`), the test asserts that the unqualified name resolves to the decoy, so the test
+   cannot pass vacuously. The test sits beside `org_deleted_purges_the_audit_trail_as_otto_app`
+   and reuses its fixture shape.
 3. Apply `org.deleted` through `otto_app_db`. Assert `detail["audit_events"]` equals the org's
    row count, its audit rows are gone, and the other org's rows remain.
 
