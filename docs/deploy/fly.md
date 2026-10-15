@@ -37,15 +37,21 @@ database alone, so a platform outage does not affect flag evaluation.
   the `org.deleted` purge can remove a deleted org's append-only audit trail. Under an owner
   that is not exempt, the function refuses (SQLSTATE `55000`), so `flags-server` checks the
   owner at boot, next to the isolation proof (#40): a healthy boot logs `audit purge ready:
-  purge_deleted_org_audit(uuid) is owned by "…" (superuser) and executable by "otto_app"`, and
+  public.purge_deleted_org_audit(uuid) is owned by "…" (superuser) and executable by "otto_app"`, and
   any other state ends the boot with `refusing to serve: an org.deleted could not purge the
   org's audit trail: …`, naming the fix (the deploy fails; check `fly status` as under When a migration fails). The same check refuses a
-  missing function, or a tenant role without `EXECUTE` on it. Before moving off the superuser
+  missing function, or a tenant role without `EXECUTE` on it. If it reports the function missing while
+  `_sqlx_migrations` records `0004` as applied, migrations will not re-run it: `0004` creates it
+  unqualified, so it landed in the first schema on the migrating role's `search_path`, or it was
+  dropped. The refusal names the catalog query that finds it; then, as a superuser and
+  human-only, either move 0004's function back (`ALTER FUNCTION
+  <schema>.purge_deleted_org_audit(uuid) SET SCHEMA public`) or re-run `0004_audit_purge.sql`
+  with `SET search_path = public` first. Before moving off the superuser
   attach role (for example onto a dedicated instance), either give the new migrating role
   `BYPASSRLS` (only when tenant transactions still drop into `otto_app`; where `otto_app`
   cannot be assumed, the migrating role is also the tenant role and the isolation proof refuses
   it), or reassign the function to a role that has it (`ALTER FUNCTION
-  purge_deleted_org_audit(uuid) OWNER TO …`, human-only), or run migrations separately as such
+  public.purge_deleted_org_audit(uuid) OWNER TO …`, human-only), or run migrations separately as such
   a role (`FLAGS_RUN_MIGRATIONS=false`; the serving role then needs table privileges, which
   migrations grant only to `otto_app`, so in practice it must be a member of the migrating
   role). A non-exempt owner is not supported; see

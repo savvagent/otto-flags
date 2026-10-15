@@ -26,11 +26,19 @@ use sqlx::PgConnection;
 
 use crate::error::Result;
 
+/// The purge function's unqualified name: the one literal every name below,
+/// and every statement the check suggests, is built from (#53, #98).
+macro_rules! purge_name {
+    () => {
+        "purge_deleted_org_audit"
+    };
+}
+
 /// The purge function's schema-qualified name: the one source for
 /// [`FUNCTION`] and [`PURGE`], so the check and the call cannot drift (#53).
 macro_rules! purge_function {
     () => {
-        "public.purge_deleted_org_audit"
+        concat!("public.", purge_name!())
     };
 }
 
@@ -39,6 +47,10 @@ macro_rules! purge_function {
 /// owns lives in `public`; 0004 creates it unqualified, so if it landed
 /// anywhere else the startup check reports it missing.
 pub const FUNCTION: &str = concat!(purge_function!(), "(uuid)");
+
+/// The function's bare name, for the catalog query and the `SET SCHEMA`
+/// statement the missing-function problem suggests.
+const NAME: &str = purge_name!();
 
 /// The statement `org.deleted` purges through: [`FUNCTION`], named by schema
 /// so `search_path` cannot resolve it to a same-named function elsewhere
@@ -79,20 +91,36 @@ impl PurgeReport {
     /// ```
     pub fn problems(&self) -> Vec<String> {
         let Some(owner) = &self.owner else {
-            return vec![String::from(
-                "purge_deleted_org_audit(uuid) does not exist, so every org.deleted would \
-                 fail: run migrations (0004) against this database before serving (with \
-                 FLAGS_RUN_MIGRATIONS=false, migrate separately first)",
+            // Migrations will not re-run 0004 once it is recorded as applied,
+            // so "run migrations" alone is wrong when 0004 ran but created the
+            // function elsewhere (unqualified, it lands in the first schema on
+            // the migrating role's search_path) or the function was dropped.
+            // Moving it is safe: 0004 pins the function's own search_path and
+            // names every table by schema, and owner and grants move with it.
+            return vec![format!(
+                "{FUNCTION} does not exist, so every org.deleted would fail. If migration \
+                 0004 has not run, run migrations against this database before serving \
+                 (with FLAGS_RUN_MIGRATIONS=false, migrate separately first). If 0004 is \
+                 recorded as applied (version 4 in _sqlx_migrations), migrations will not \
+                 re-run it. Find the function (SELECT quote_ident(n.nspname), \
+                 pg_get_function_identity_arguments(p.oid), p.prosecdef FROM \
+                 pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = \
+                 p.pronamespace WHERE p.proname = '{NAME}'). If a row is 0004's (arguments \
+                 purge_org uuid, SECURITY DEFINER, and a pg_get_functiondef(p.oid) body \
+                 matching crates/flags-core/migrations/0004_audit_purge.sql), move it into public as \
+                 a superuser (ALTER FUNCTION <schema>.{NAME}(uuid) SET SCHEMA public); \
+                 otherwise run that file as a superuser with SET search_path = public \
+                 first, so it does not land elsewhere again; see docs/deploy/fly.md"
             )];
         };
         let mut problems = Vec::new();
         // The same test the function body applies to its owner in 0004.
         if !self.owner_is_superuser && !self.owner_bypasses_rls {
             let mut message = format!(
-                "purge_deleted_org_audit(uuid) is owned by {owner:?}, which is neither a \
+                "{FUNCTION} is owned by {owner:?}, which is neither a \
                  superuser nor BYPASSRLS, so it cannot see the audit trail it purges and every \
                  org.deleted would fail (SQLSTATE 55000). Hand the function to a role that is \
-                 exempt (ALTER FUNCTION purge_deleted_org_audit(uuid) OWNER TO <exempt role>), \
+                 exempt (ALTER FUNCTION {FUNCTION} OWNER TO <exempt role>), \
                  or run migrations as one and serve with FLAGS_RUN_MIGRATIONS=false"
             );
             // BYPASSRLS on the tenant role itself would fail the tenant
@@ -109,9 +137,8 @@ impl PurgeReport {
         if !self.executable {
             let role = &self.tenant_role;
             problems.push(format!(
-                "{role:?}, the role tenant transactions run as, may not execute \
-                 purge_deleted_org_audit(uuid), so every org.deleted would fail: GRANT EXECUTE \
-                 ON FUNCTION purge_deleted_org_audit(uuid) TO {}",
+                "{role:?}, the role tenant transactions run as, may not execute {FUNCTION}, \
+                 so every org.deleted would fail: GRANT EXECUTE ON FUNCTION {FUNCTION} TO {}",
                 quote_ident(role)
             ));
         }
@@ -144,7 +171,7 @@ impl PurgeReport {
             "not executable"
         };
         format!(
-            "audit purge {state}: purge_deleted_org_audit(uuid) is owned by {owner} \
+            "audit purge {state}: {FUNCTION} is owned by {owner} \
              ({exemption}) and {executable} by {:?}",
             self.tenant_role
         )
@@ -275,6 +302,43 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_function_explains_an_applied_migration() {
+        let report = PurgeReport {
+            owner: None,
+            ..ready()
+        };
+        let problems = report.problems();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        for needle in [
+            FUNCTION,
+            "recorded as applied",
+            "proname = 'purge_deleted_org_audit'",
+            "_sqlx_migrations",
+            "0004_audit_purge.sql",
+            "SET search_path = public",
+        ] {
+            assert!(problems[0].contains(needle), "{needle}: {problems:?}");
+        }
+        let advice = format!("ALTER FUNCTION <schema>.{NAME}(uuid) SET SCHEMA public");
+        assert!(problems[0].contains(&advice), "{problems:?}");
+    }
+
+    #[test]
+    fn suggested_statements_name_the_function_by_schema() {
+        assert!(FUNCTION.starts_with("public."), "{FUNCTION}");
+        let report = PurgeReport {
+            executable: false,
+            ..non_exempt("migrator")
+        };
+        let problems = report.problems();
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        let alter = format!("ALTER FUNCTION {FUNCTION} OWNER TO");
+        assert!(problems[0].contains(&alter), "{problems:?}");
+        let grant = format!("GRANT EXECUTE ON FUNCTION {FUNCTION} TO");
+        assert!(problems[1].contains(&grant), "{problems:?}");
+    }
+
+    #[test]
     fn a_tenant_role_without_execute_is_reported() {
         let report = PurgeReport {
             executable: false,
@@ -339,7 +403,12 @@ mod tests {
     fn the_summary_names_owner_exemption_and_role() {
         let summary = ready().summary();
         assert!(summary.starts_with("audit purge ready: "), "{summary}");
-        for needle in ["\"postgres\"", "(superuser)", "executable by \"otto_app\""] {
+        for needle in [
+            FUNCTION,
+            "\"postgres\"",
+            "(superuser)",
+            "executable by \"otto_app\"",
+        ] {
             assert!(summary.contains(needle), "{needle}: {summary}");
         }
     }
