@@ -5478,3 +5478,118 @@ async fn audit_purge_check_reports_a_function_outside_public(pool: PgPool) {
     tx.rollback().await.unwrap();
     assert_eq!(report.problems(), Vec::<String>::new());
 }
+
+/// Every query on the pool's own role, outside a pinned (`begin_live`),
+/// maintenance (`maintenance::begin`), or unpinned (`unpinned::begin`)
+/// transaction, runs as whatever role the pool connects as. In production that
+/// is the superuser attach role, which row-level security does not apply to,
+/// so a raw pool query that named a tenant table would read every org's rows
+/// (#80). Only the sites below may reach the pool directly; each says why. A
+/// new one fails here: route it through `unpinned::begin` (flags-core), or add
+/// it with its reason if it touches no table a tenant role is constrained on.
+///
+/// Textual, over each workspace crate's non-test `src`: comment lines and the
+/// trailing `#[cfg(test)] mod tests` are skipped (it must be the file's last
+/// item). It counts the ways to an unconstrained connection: `otto_tenant::Db`'s
+/// `.pool()` and `begin_unpinned`, its audit helpers that run on the pool
+/// (`audit_global`, `audit_for_org`, `audit_trail_for_user`), any `PgPool`
+/// (`PgPoolOptions` included) held or built outside a `Db`, and a connection
+/// opened beside the pool. It cannot see an alias or a reformatted call such as
+/// `Db::pool(&db)`.
+#[test]
+fn no_raw_pool_queries_outside_the_allowed_sites() {
+    // `Connection::connect` also covers `PgConnection::connect`.
+    const PATTERNS: [&str; 8] = [
+        ".pool()",
+        "begin_unpinned",
+        "audit_global(",
+        "audit_for_org(",
+        "audit_trail_for_user(",
+        "PgPool",
+        "PgListener::connect(",
+        "Connection::connect",
+    ];
+    let allowed: BTreeMap<&str, usize> = BTreeMap::from([
+        // The helper itself: opens the transaction it then drops into the
+        // tenant role.
+        ("flags-core/src/unpinned.rs", 1),
+        // Migrations run as the migrating role: DDL, grants, and the
+        // security-definer purge function's owner.
+        ("flags-core/src/migrate.rs", 1),
+        // The flag-change listener (`use sqlx::PgPool` and `spawn`'s
+        // parameter): its dedicated connection only `LISTEN`s.
+        ("flags-core/src/notify.rs", 2),
+        // `/readyz` runs `SELECT 1`: asks about the connection, touches no
+        // table, and must not depend on the tenant role being assumable.
+        ("flags-server/src/health.rs", 1),
+        // Builds the pool (`PgPoolOptions`) that becomes the `Db`, and hands
+        // the notify listener its clone.
+        ("flags-server/src/main.rs", 2),
+    ]);
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut dirs = vec![crates.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(crates).unwrap();
+            let name = rel.to_string_lossy().replace('\\', "/");
+            if path.is_dir() {
+                // Every crate's `src`, at any depth below it; never `tests`,
+                // `target`, or `migrations`.
+                let in_src = rel
+                    .components()
+                    .nth(1)
+                    .is_none_or(|c| c.as_os_str() == "src");
+                if in_src {
+                    dirs.push(path);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\r\n", "\n");
+            let code = match text
+                .find("#[cfg(test)]\nmod tests {")
+                .or_else(|| text.find("#[cfg(test)]\npub(crate) mod tests {"))
+            {
+                Some(start) => {
+                    // The test module must be the file's last item, so
+                    // nothing after it escapes the scan. rustfmt (a gate)
+                    // indents its body, so the only line at column 0 after
+                    // its header is its closing brace, at the end.
+                    let tail: Vec<&str> = text[start..]
+                        .lines()
+                        .skip(2)
+                        .filter(|l| !l.is_empty() && !l.starts_with(char::is_whitespace))
+                        .collect();
+                    assert_eq!(
+                        tail,
+                        ["}"],
+                        "{name}: code after the test module would escape this check"
+                    );
+                    &text[..start]
+                }
+                None => text.as_str(),
+            };
+            let n: usize = code
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| PATTERNS.iter().map(|p| l.matches(p).count()).sum::<usize>())
+                .sum();
+            if n > 0 {
+                found.insert(name, n);
+            }
+        }
+    }
+    let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        found, allowed,
+        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+    );
+}

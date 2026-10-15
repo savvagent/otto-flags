@@ -85,8 +85,14 @@ pub async fn stream(
 
 async fn still_valid(state: &AppState, sdk: &Sdk) -> bool {
     // A database error keeps the stream open: an outage should not disconnect
-    // every SDK at once. Only a definite "this key is gone" ends it.
-    !matches!(keys::resolve_hash(&state.db, &sdk.1).await, Ok(None))
+    // every SDK at once. Only a definite "this key is gone" ends it, or a
+    // configuration error: the lookup refused to run exempt from row-level
+    // security, which persists until the roles are fixed, so the key can no
+    // longer be re-checked at all.
+    match keys::resolve_hash(&state.db, &sdk.1).await {
+        Ok(owner) => owner.is_some(),
+        Err(e) => e.failure_reason().reason != "configuration",
+    }
 }
 
 async fn notification(state: &AppState, sdk: &Sdk, change: &FlagChange) -> Option<Event> {

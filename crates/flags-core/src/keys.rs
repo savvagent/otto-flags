@@ -11,9 +11,10 @@
 //! not yield a usable server key. The key is high-entropy random, so a plain
 //! hash is enough; there is nothing for a slow KDF to protect.
 //!
-//! Resolution runs on the pool, unpinned, because the org is exactly what the
-//! key is being resolved to. `app_keys` is outside row-level security for that
-//! reason, and every statement here names the key hash explicitly.
+//! Resolution runs unpinned, as the tenant role (`crate::unpinned`), because
+//! the org is exactly what the key is being resolved to. `app_keys` is outside
+//! row-level security for that reason, and every statement here names the key
+//! hash explicitly.
 
 use otto_tenant::ids::OrgId;
 use otto_tenant::Db;
@@ -122,14 +123,18 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 /// [`resolve`] by the key's hash, for re-checking a key that is no longer held
 /// in clear (a long-lived stream).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+    // No org yet: finding it is the point. Unpinned, as the tenant role
+    // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
+    let mut tx = crate::unpinned::begin(db).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
            AND NOT EXISTS (SELECT 1 FROM deleted_orgs d WHERE d.org_id = k.org_id)",
     )
     .bind(key_hash)
-    .fetch_optional(db.pool())
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(row.and_then(|(org, app, kind)| {
         Some(KeyOwner {
             org_id: org.into(),

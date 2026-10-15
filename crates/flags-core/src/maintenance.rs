@@ -18,8 +18,9 @@
 //!
 //! The policies bind only a role row-level security applies to, and the pool
 //! may connect as one it does not (production's attach role is a superuser).
-//! So [`begin`] drops into the tenant role with `SET LOCAL ROLE`, as
-//! `otto_tenant::Db::begin` does for pinned transactions, and refuses to run
+//! So [`begin`] drops into the tenant role for the transaction
+//! (`crate::unpinned::begin_as_tenant_role`), as `otto_tenant::Db::begin` does
+//! for pinned transactions, and refuses to run
 //! as a role row-level security does not apply to (#73): the unpinned policies
 //! are then what let maintenance code see across orgs.
 
@@ -28,69 +29,11 @@ use sqlx::{Postgres, Transaction};
 
 /// Open an unpinned transaction on `db`'s pool, as the tenant role
 /// (`db.tenant_role()`) when the pool's role can assume it, with the
-/// maintenance marker set. Both are transaction-local (`SET LOCAL ROLE`,
-/// `set_config(…, true)`), so they end with the transaction and never leak to
-/// the next user of the connection.
-///
-/// Whether the role can be assumed is the question `otto_tenant::Db::begin`
-/// asks before its own `SET LOCAL ROLE`, with the same catalog query: its
-/// answer is private to otto-tenant, so it is asked again here, once per
-/// transaction. Where it cannot be assumed the role is left alone, as
-/// `Db::begin` leaves it, which is only safe when the pool's own role is
-/// subject to row-level security (a managed Postgres role with no CREATEROLE).
-/// `Db::verify_tenant_isolation` checks that once at startup; this checks it
-/// on every transaction, for the role the transaction will actually run as: a
-/// pool role exempt from row-level security (superuser or BYPASSRLS) that
-/// cannot assume the tenant role, say after its membership was revoked at
-/// runtime, or a tenant role that is itself exempt, fails the transaction
-/// instead of quietly running unconstrained. The failure is
-/// `sqlx::Error::Configuration`, logged with reason `configuration`.
+/// maintenance marker set. The role rules, and the refusal to run exempt from
+/// row-level security, are [`crate::unpinned::begin_as_tenant_role`]'s, shared
+/// with the unpinned lookups that set no marker.
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>> {
-    let mut tx = db.pool().begin().await?;
-    // One round trip for the marker and the probes. `set_config` runs as its
-    // own select-list column, so the marker is set whatever the probes return;
-    // inside one boolean expression Postgres could skip it. Exemption is a
-    // role attribute, never inherited through membership, so each role is
-    // checked by name.
-    let (_, assumable, pool_exempt, tenant_exempt): (String, bool, bool, bool) = sqlx::query_as(
-        "SELECT set_config('app.maintenance', 'on', true), \
-                    EXISTS ( \
-                      SELECT 1 FROM pg_catalog.pg_roles r \
-                      WHERE r.rolname = $1 \
-                        AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')), \
-                    EXISTS ( \
-                      SELECT 1 FROM pg_catalog.pg_roles r \
-                      WHERE r.rolname = current_user AND (r.rolsuper OR r.rolbypassrls)), \
-                    EXISTS ( \
-                      SELECT 1 FROM pg_catalog.pg_roles r \
-                      WHERE r.rolname = $1 AND (r.rolsuper OR r.rolbypassrls))",
-    )
-    .bind(db.tenant_role())
-    .fetch_one(&mut *tx)
-    .await?;
-    let runs_exempt = if assumable {
-        tenant_exempt
-    } else {
-        pool_exempt
-    };
-    if runs_exempt {
-        return Err(sqlx::Error::Configuration(
-            format!(
-                "maintenance transactions must be subject to row-level security, but they \
-                 would run exempt from it (tenant role {:?}, assumable: {assumable})",
-                db.tenant_role()
-            )
-            .into(),
-        ));
-    }
-    if assumable {
-        // `tenant_role` is validated by otto-tenant (`^[a-z_][a-z0-9_]*$`)
-        // before it can be set; `SET ROLE` takes no bind parameter.
-        sqlx::query(&format!("SET LOCAL ROLE {}", db.tenant_role()))
-            .execute(&mut *tx)
-            .await?;
-    }
-    Ok(tx)
+    crate::unpinned::begin_as_tenant_role(db, true).await
 }
 
 #[cfg(test)]
@@ -132,30 +75,12 @@ mod tests {
         assert_eq!(code.as_deref(), Some("42501"), "{err}");
     }
 
-    /// A pool whose sessions already run as `otto_app`: a role row-level
-    /// security applies to, like a managed Postgres role with no CREATEROLE.
-    /// Close `.pool()` before the test returns so sqlx can drop the database.
-    async fn non_exempt_db(pool: &PgPool) -> Db {
-        let app_pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .after_connect(|conn, _meta| {
-                Box::pin(async move {
-                    sqlx::query("SET ROLE otto_app").execute(conn).await?;
-                    Ok(())
-                })
-            })
-            .connect_with(pool.connect_options().as_ref().clone())
-            .await
-            .unwrap();
-        Db::from_pool(app_pool)
-    }
-
     /// Where the tenant role cannot be assumed but the pool's role is subject
     /// to row-level security, `begin` keeps that role, as `Db::begin` does,
     /// instead of failing every maintenance transaction.
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn begin_keeps_a_non_exempt_role_that_cannot_assume_the_tenant_role(pool: PgPool) {
-        let db = non_exempt_db(&pool)
+        let db = crate::unpinned::tests::non_exempt_db(&pool)
             .await
             .with_tenant_role("flags_no_such_role")
             .unwrap();
@@ -177,6 +102,10 @@ mod tests {
             .unwrap();
         let err = begin(&db).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Configuration(_)), "{err}");
+        assert!(
+            err.to_string().contains("maintenance transactions"),
+            "{err}"
+        );
     }
 
     /// A tenant role that is itself exempt from row-level security would let
@@ -194,6 +123,10 @@ mod tests {
             .unwrap();
         let err = begin(&db).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Configuration(_)), "{err}");
+        assert!(
+            err.to_string().contains("maintenance transactions"),
+            "{err}"
+        );
     }
 
     /// The role and the marker end with the transaction, committed or rolled
