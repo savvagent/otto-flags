@@ -61,7 +61,7 @@ stays, as before.
 - The three codes go in the one list, `TRANSIENT_SQLSTATES`, rather than a separate one: they
   share its meaning ("a later attempt can avoid it"), and `db_is_transient` is unchanged.
 - The `rollback.rs` module doc's parenthetical list of transient failures gains "a database
-  restart", so it does not read as exhaustive and wrong. One doc line; no code there changes.
+  restart", so it does not read as exhaustive and wrong. Doc only (one parenthetical, reflowed); no code there changes.
 - Run Profile: every value comes from `CLAUDE.md` > Development Workflow; nothing assumed. Tests
   run against a dedicated local Postgres on port 15442 (the parallel-agent protocol), not 15434.
 
@@ -78,7 +78,7 @@ A Postgres restart no longer makes the auto-rollback checker give up on a flag f
 ## 6. Scope
 
 In: `crates/flags-core/src/error.rs` (`TRANSIENT_SQLSTATES`, its doc comment, the `is_transient`
-doc comment, the unit test); one doc line in `crates/flags-core/src/rollback.rs`.
+doc comment, the unit test); the module doc's transient-failure parenthetical in `crates/flags-core/src/rollback.rs`.
 
 Out: reason names and log fields (#43); `retriable`; the `08xxx` class; any change to how the
 checker schedules retries.
