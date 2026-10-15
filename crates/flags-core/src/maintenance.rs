@@ -1,5 +1,5 @@
-//! Background maintenance transactions: the only way to read or sweep tenant
-//! tables across every org.
+//! Background maintenance transactions: the only way for background code to
+//! read or sweep tenant tables across every org.
 //!
 //! The unpinned row-level policies (`rollback_policies_checker`, the
 //! `*_retention_read` policies, `rollback_events_retention`) grant access only
@@ -19,8 +19,9 @@
 //! The policies bind only a role row-level security applies to, and the pool
 //! may connect as one it does not (production's attach role is a superuser).
 //! So [`begin`] drops into the tenant role with `SET LOCAL ROLE`, as
-//! `otto_tenant::Db::begin` does for pinned transactions (#73): the unpinned
-//! policies are then what let maintenance code see across orgs.
+//! `otto_tenant::Db::begin` does for pinned transactions, and refuses to run
+//! as a role row-level security does not apply to (#73): the unpinned policies
+//! are then what let maintenance code see across orgs.
 
 use otto_tenant::Db;
 use sqlx::{Postgres, Transaction};
@@ -35,22 +36,41 @@ use sqlx::{Postgres, Transaction};
 /// asks before its own `SET LOCAL ROLE`, with the same catalog query: its
 /// answer is private to otto-tenant, so it is asked again here, once per
 /// transaction. Where it cannot be assumed the role is left alone, as
-/// `Db::begin` leaves it; the server only starts when
-/// `Db::verify_tenant_isolation` has shown the pool's own role is then subject
-/// to row-level security.
+/// `Db::begin` leaves it, which is only safe when the pool's own role is
+/// subject to row-level security (a managed Postgres role with no CREATEROLE).
+/// `Db::verify_tenant_isolation` checks that once at startup; this checks it
+/// on every transaction, so a role exempt from row-level security (superuser
+/// or BYPASSRLS) that cannot assume the tenant role, say after its membership
+/// was revoked at runtime, fails the transaction instead of quietly running
+/// unconstrained.
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>> {
     let mut tx = db.pool().begin().await?;
-    // Two columns, not one `AND`: Postgres may skip either side of an `AND`,
-    // and the marker must be set either way.
-    let (_, assumable): (String, bool) = sqlx::query_as(
-        "SELECT set_config('app.maintenance', 'on', true), EXISTS ( \
-           SELECT 1 FROM pg_catalog.pg_roles r \
-           WHERE r.rolname = $1 \
-             AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE'))",
+    // One round trip for the marker and both probes. `set_config` runs as its
+    // own select-list column, so the marker is set whatever the probes return;
+    // inside one boolean expression Postgres could skip it.
+    let (_, assumable, exempt): (String, bool, bool) = sqlx::query_as(
+        "SELECT set_config('app.maintenance', 'on', true), \
+                EXISTS ( \
+                  SELECT 1 FROM pg_catalog.pg_roles r \
+                  WHERE r.rolname = $1 \
+                    AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')), \
+                EXISTS ( \
+                  SELECT 1 FROM pg_catalog.pg_roles r \
+                  WHERE r.rolname = current_user AND (r.rolsuper OR r.rolbypassrls))",
     )
     .bind(db.tenant_role())
     .fetch_one(&mut *tx)
     .await?;
+    if !assumable && exempt {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "maintenance transactions must be subject to row-level security, but the \
+                 pool's role is exempt from it and cannot assume the tenant role {:?}",
+                db.tenant_role()
+            )
+            .into(),
+        ));
+    }
     if assumable {
         // `tenant_role` is validated by otto-tenant (`^[a-z_][a-z0-9_]*$`)
         // before it can be set; `SET ROLE` takes no bind parameter.
@@ -78,8 +98,7 @@ mod tests {
 
     /// The test pool connects as a superuser, as production's attach role
     /// does, which row-level security does not apply to. A maintenance
-    /// transaction must drop into the tenant role so the marker policies are
-    /// what let it through (#73).
+    /// transaction runs as the tenant role and carries the marker (#73).
     #[sqlx::test(migrator = "crate::MIGRATOR")]
     async fn begin_runs_as_the_tenant_role_with_the_marker(pool: PgPool) {
         let db = Db::from_pool(pool);
@@ -101,21 +120,86 @@ mod tests {
         assert_eq!(code.as_deref(), Some("42501"), "{err}");
     }
 
-    /// Where the tenant role cannot be assumed, `begin` skips the role change,
-    /// as `Db::begin` does, instead of failing every maintenance transaction.
-    #[sqlx::test(migrator = "crate::MIGRATOR")]
-    async fn begin_keeps_the_pool_role_when_the_tenant_role_is_not_assumable(pool: PgPool) {
-        let pool_role: String = sqlx::query_scalar("SELECT current_user::text")
-            .fetch_one(&pool)
+    /// A pool whose sessions already run as `otto_app`: a role row-level
+    /// security applies to, like a managed Postgres role with no CREATEROLE.
+    /// Close `.pool()` before the test returns so sqlx can drop the database.
+    async fn non_exempt_db(pool: &PgPool) -> Db {
+        let app_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET ROLE otto_app").execute(conn).await?;
+                    Ok(())
+                })
+            })
+            .connect_with(pool.connect_options().as_ref().clone())
             .await
             .unwrap();
-        let db = Db::from_pool(pool)
+        Db::from_pool(app_pool)
+    }
+
+    /// Where the tenant role cannot be assumed but the pool's role is subject
+    /// to row-level security, `begin` keeps that role, as `Db::begin` does,
+    /// instead of failing every maintenance transaction.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_keeps_a_non_exempt_role_that_cannot_assume_the_tenant_role(pool: PgPool) {
+        let db = non_exempt_db(&pool)
+            .await
             .with_tenant_role("flags_no_such_role")
             .unwrap();
         let mut tx = begin(&db).await.unwrap();
         assert_eq!(
             role_and_marker(&mut tx).await,
-            (pool_role, "on".to_string())
+            ("otto_app".to_string(), "on".to_string())
         );
+        tx.rollback().await.unwrap();
+        db.pool().close().await;
+    }
+
+    /// A role exempt from row-level security that cannot assume the tenant
+    /// role would run the maintenance transaction unconstrained: refused.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_refuses_an_exempt_role_that_cannot_assume_the_tenant_role(pool: PgPool) {
+        let db = Db::from_pool(pool)
+            .with_tenant_role("flags_no_such_role")
+            .unwrap();
+        let err = begin(&db).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Configuration(_)), "{err}");
+    }
+
+    /// The role and the marker end with the transaction, committed or rolled
+    /// back, so the next user of the pooled connection gets neither.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn the_role_and_marker_end_with_the_transaction(pool: PgPool) {
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(pool.connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        let pool_role: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&one)
+            .await
+            .unwrap();
+        let db = Db::from_pool(one);
+        for commit in [true, false] {
+            let tx = begin(&db).await.unwrap();
+            if commit {
+                tx.commit().await.unwrap();
+            } else {
+                tx.rollback().await.unwrap();
+            }
+            let after: (String, String) = sqlx::query_as(
+                "SELECT current_user::text, coalesce(current_setting('app.maintenance', true), '')",
+            )
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+            assert_eq!(
+                after,
+                (pool_role.clone(), String::new()),
+                "commit: {commit}"
+            );
+        }
+        db.pool().close().await;
     }
 }
