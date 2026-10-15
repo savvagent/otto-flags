@@ -17,6 +17,7 @@ from urllib.parse import quote
 import httpx
 
 from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
+from ._response import evaluate_payload
 from .cache import AsyncFlagCache
 from .exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 from .realtime import AsyncRealtimeService
@@ -209,8 +210,7 @@ class AsyncFlagClient:
             )
             response.raise_for_status()
 
-            data = response.json()
-            value = data.get("value", self._config.defaults.get(flag_key, False))
+            data, value = evaluate_payload(response.json())
 
             # Cache the result (including configuration and variation)
             await self._cache.set(
