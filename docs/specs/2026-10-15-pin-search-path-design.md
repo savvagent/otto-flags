@@ -35,8 +35,9 @@ trips, because #104 is about the SDK key path's round-trip count.
   transaction, whether or not the role switch happened.
 - Pinned transactions are opened by `otto_tenant::Db::begin` (an otto-platform crate, pinned by
   rev). This repo cannot change that function, so the setting is applied in flags-core right after
-  it, before any caller query runs. `Db::begin` itself runs only `SET LOCAL ROLE` and
-  `pg_catalog.set_config`, neither of which resolves a relation through `search_path`.
+  it, before any caller query runs. `Db::begin` itself runs only `SET LOCAL ROLE` and an
+  unqualified `set_config`, which resolves in the implicitly-first `pg_catalog` before any
+  `"$user"` schema; neither resolves a relation through `search_path`.
 - `pg_temp` is searched before every listed schema for relations unless it is listed explicitly.
   The value chosen lists it last, as migration `0004_audit_purge.sql` does for the purge
   function's own `search_path`.
@@ -107,14 +108,18 @@ pub(crate) const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
    Result<Tx<'static>>` in `platform_events.rs` runs `db.begin(org)` then
    `SELECT set_config('search_path', $1, true)`. The three webhook handlers (`team.deleted`,
    `org_deleted`, `member_removed`; `platform_events.rs:148, 192, 267`) and
-   `audit_purge::check` (`audit_purge.rs:218`) call it instead of `db.begin`. `begin_live` keeps
+   `audit_purge::check` (`audit_purge.rs:218`) call it instead of `db.begin`. The boot check only
+   reads qualified catalog names and the `public.`-qualified function, so routing it through the
+   helper is for uniformity (one statement, once per boot), not need. `begin_live` keeps
    its own `db.begin` (it folds the setting).
 4. **Guard**: a new source-scan test in `crates/flags-core/tests/db.rs`,
    `no_pinned_begin_outside_the_search_path_helpers`, counts `db.begin(` in every crate's
    non-test `src` (same walker as `no_raw_pool_queries_outside_the_allowed_sites`, factored into a
    shared function) and allows exactly `flags-core/src/platform_events.rs: 2` (`begin_live` and
    `begin_pinned`). The pool-begin site in `unpinned.rs` is already pinned to one by the existing
-   scan.
+   scan. Limit: the scan matches the text `db.begin(`, so a `Db` held under another name
+   (`state.flags.begin(`) would escape it; every `Db` in the workspace is named `db` today, and
+   the test's doc comment says so.
 
 No public interface changes: `begin_pinned` and `SEARCH_PATH` are `pub(crate)`; `begin_live`'s
 signature is unchanged. No wire, MCP, or SDK change.
@@ -155,7 +160,8 @@ role change for Rob.)
 
 ## 11. Testing approach
 
-Gates: `DATABASE_URL=postgres://flags:flags@localhost:<port>/otto_flags cargo test --workspace`,
+Gates: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
+(run here against a dedicated container on 15448, so parallel worktrees do not collide),
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, the
 migrations-unchanged check, and `podman build -t otto-flags:check .` (crates changed).
 
@@ -164,7 +170,8 @@ New tests:
   `current_setting('search_path') = SEARCH_PATH`; it ends with the transaction (extend
   `the_role_and_marker_end_with_the_transaction`).
 - `tests/db.rs`, shared fixture `shadow_schema(pool, tables)`: as the superuser test role,
-  `CREATE SCHEMA otto_app AUTHORIZATION otto_app` and `CREATE TABLE otto_app.<t> (LIKE public.<t>)`
+  `CREATE SCHEMA otto_app AUTHORIZATION otto_app` and `CREATE TABLE otto_app.<t> (LIKE public.<t> INCLUDING ALL)` (defaults and unique
+  constraints too, so a pre-fix run fails by reaching the wrong table, not on `ON CONFLICT`)
   owned by `otto_app`, with planted rows. Then:
   - `unpinned_lookups_ignore_a_shadowing_schema`: planted `otto_app.deleted_orgs` row for org X;
     `platform_events::revoked(X, user)` is false; planted `otto_app.app_keys` row for a fresh key;
