@@ -19,11 +19,16 @@
 //! The SDK API's request extractor resolves keys through [`resolve_cached`],
 //! which remembers keys that did not resolve for [`UNKNOWN_KEY_TTL`]
 //! ([`UnknownKeys`]), so a client repeating one stops costing a database
-//! lookup per request (#104). The stream's periodic re-check of a key that
-//! resolved stays on [`resolve_hash`], so it notices revocation.
+//! lookup per request (#104). Behind that cache, [`KeyLookups`] caps how many
+//! lookups hold a pool connection at once, so a flood of distinct well-formed
+//! unknown keys cannot take the whole small pool; a lookup that cannot start
+//! within [`KEY_LOOKUP_WAIT`] is refused with [`Error::Busy`] (#120). The
+//! stream's periodic re-check of a key that resolved stays on [`resolve_hash`],
+//! ungated and uncached, so it notices revocation and a flood cannot end an
+//! authenticated stream.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use otto_tenant::ids::OrgId;
@@ -31,8 +36,10 @@ use otto_tenant::Db;
 use rand::RngCore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use sqlx::PgConnection;
+use tokio::sync::Semaphore;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::ids::FlagAppId;
 
 pub const CLIENT_PREFIX: &str = "sdk_";
@@ -138,10 +145,26 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 
 /// [`resolve`] by the key's hash, for re-checking a key that is no longer held
 /// in clear (a long-lived stream).
+///
+/// Returns only once its connection is back in the pool, release ping
+/// included, so a caller holding a [`KeyLookups`] permit across this call
+/// covers the connection's whole checkout (#120).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+    let mut conn = crate::unpinned::acquire(db).await?;
+    // No `?` and no early return between the acquire and `return_to_pool`:
+    // dropping a `PoolConnection` hands its release (rolling back an open
+    // transaction, the ping) to a task sqlx spawns, so this would return, and
+    // its caller free its permit, while the connection is still checked out.
+    let owner = lookup(db, &mut conn, key_hash).await;
+    conn.return_to_pool().await;
+    owner
+}
+
+/// [`resolve_hash`]'s query, on the connection it holds.
+async fn lookup(db: &Db, conn: &mut PgConnection, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
     // No org yet: finding it is the point. Unpinned, as the tenant role
     // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
-    let mut tx = crate::unpinned::begin(db).await?;
+    let mut tx = crate::unpinned::begin_on(db, conn).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
@@ -161,10 +184,23 @@ pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> 
 }
 
 /// [`resolve`], answering a key that did not resolve within the last
-/// [`UNKNOWN_KEY_TTL`] from `unknown` instead of the database (#104). Only
+/// [`UNKNOWN_KEY_TTL`] from `unknown` instead of the database (#104), and
+/// otherwise looking it up under one of `limit`'s permits (#120). Only
 /// `Ok(None)` is remembered: a key that resolves, and an error, go to the
 /// database every time, so revocation is exactly as prompt as [`resolve`]'s.
-pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, key: &str) -> Result<Option<KeyOwner>> {
+///
+/// A malformed key and a remembered one take no permit. Any other waits up to
+/// the limit's wait for one, then fails with [`Error::Busy`]. The lookup runs
+/// in a task that owns the permit and frees it only after its connection is
+/// back in the pool, so a caller dropped mid-lookup (a client that hung up)
+/// neither frees the permit early nor loses the answer: the task still
+/// remembers an unknown key.
+pub async fn resolve_cached(
+    db: &Db,
+    unknown: &Arc<UnknownKeys>,
+    limit: &KeyLookups,
+    key: &str,
+) -> Result<Option<KeyOwner>> {
     if !looks_like_key(key) {
         return Ok(None);
     }
@@ -172,11 +208,106 @@ pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, key: &str) -> Result
     if unknown.contains(&hash, Instant::now()) {
         return Ok(None);
     }
-    let owner = resolve_hash(db, &hash).await?;
-    if owner.is_none() {
-        unknown.insert(hash, Instant::now());
+    let permit = match tokio::time::timeout(limit.wait, limit.permits.clone().acquire_owned()).await
+    {
+        Ok(Ok(permit)) => permit,
+        // A timeout, or a closed semaphore, which nothing here ever closes.
+        Ok(Err(_)) | Err(_) => return Err(Error::Busy),
+    };
+    let (db, unknown) = (db.clone(), Arc::clone(unknown));
+    let task = tokio::spawn(async move {
+        let owner = resolve_hash(&db, &hash).await;
+        if matches!(owner, Ok(None)) {
+            unknown.insert(hash, Instant::now());
+        }
+        drop(permit);
+        owner
+    });
+    match task.await {
+        Ok(owner) => owner,
+        Err(join) => match join.try_into_panic() {
+            // Panic as the lookup would have inline.
+            Ok(panic) => std::panic::resume_unwind(panic),
+            // Cancelled: the runtime is shutting down.
+            Err(_) => Err(Error::Busy),
+        },
     }
-    Ok(owner)
+}
+
+/// How long an SDK key lookup waits for a [`KeyLookups`] permit before it is
+/// refused with [`Error::Busy`] (#120). Under the pool's 5 s acquire timeout,
+/// so a refused request answers before a pool timeout would.
+pub const KEY_LOOKUP_WAIT: Duration = Duration::from_secs(2);
+
+/// Caps how many SDK key lookups ([`resolve_cached`]) hold a pool connection
+/// at once (#120).
+///
+/// SDK keys are presented before anything is proven about the caller, and
+/// [`UnknownKeys`] only helps with a key that repeats: a flood of distinct
+/// well-formed random keys costs one lookup each. Without a cap those lookups
+/// could take every connection in the small shared pool, starving evaluation,
+/// MCP tools, `/readyz`, and background work. [`KeyLookups::for_pool`] sizes
+/// the cap at half of what the flag-change listener (which holds one pool
+/// connection for the life of the process) leaves, so on the production pool
+/// of 5 a flood holds at most 2 and 2 stay free.
+///
+/// A permit covers the connection's whole checkout, which takes two things.
+/// sqlx returns a dropped `PoolConnection` to the pool in a task it spawns,
+/// after a release ping, so a permit freed when the query returned would be
+/// free while the connection is still out: [`resolve_hash`] awaits the return
+/// itself. And a request future dropped mid-lookup would drop its permit at
+/// once: [`resolve_cached`] runs the lookup in a task that owns the permit.
+#[derive(Debug)]
+pub struct KeyLookups {
+    permits: Arc<Semaphore>,
+    size: usize,
+    wait: Duration,
+}
+
+impl KeyLookups {
+    /// At most `permits` lookups at once, each waiting up to `wait` for its
+    /// turn.
+    ///
+    /// # Panics
+    ///
+    /// If `permits` is 0: no lookup could ever run.
+    pub fn new(permits: usize, wait: Duration) -> Self {
+        assert!(permits >= 1, "a key lookup limit needs at least one permit");
+        Self {
+            permits: Arc::new(Semaphore::new(permits)),
+            size: permits,
+            wait,
+        }
+    }
+
+    /// The limit for a pool of `max_connections`: half of what the listener's
+    /// one connection leaves, rounded down, never fewer than one, with
+    /// [`KEY_LOOKUP_WAIT`].
+    ///
+    /// ```
+    /// use flags_core::keys::KeyLookups;
+    /// assert_eq!(KeyLookups::for_pool(5).permits(), 2);
+    /// assert_eq!(KeyLookups::for_pool(2).permits(), 1);
+    /// ```
+    pub fn for_pool(max_connections: u32) -> Self {
+        let permits = (max_connections.saturating_sub(1) / 2).max(1);
+        Self::new(permits as usize, KEY_LOOKUP_WAIT)
+    }
+
+    /// [`KeyLookups::for_pool`] for `db`'s pool.
+    pub fn for_db(db: &Db) -> Self {
+        Self::for_pool(crate::unpinned::max_connections(db))
+    }
+
+    /// The cap: how many lookups may hold a connection at once.
+    pub fn permits(&self) -> usize {
+        self.size
+    }
+
+    /// Permits free right now.
+    pub fn available(&self) -> usize {
+        self.permits.available_permits()
+    }
 }
 
 /// How long a key that did not resolve is answered from memory (#104).
@@ -338,6 +469,17 @@ mod tests {
         cache.insert(h(u32::MAX), after);
         assert_eq!(cache.len(), 1);
         assert!(cache.contains(&h(u32::MAX), after));
+    }
+
+    /// The listener holds one connection; key lookups get half of the rest,
+    /// rounded down, and never fewer than one (#120).
+    #[test]
+    fn key_lookups_take_half_of_what_the_listener_leaves() {
+        for (pool, permits) in [(0, 1), (1, 1), (2, 1), (3, 1), (5, 2), (10, 4)] {
+            assert_eq!(KeyLookups::for_pool(pool).permits(), permits, "pool {pool}");
+        }
+        let fresh = KeyLookups::for_pool(5);
+        assert_eq!(fresh.available(), fresh.permits());
     }
 
     #[test]

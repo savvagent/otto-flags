@@ -7,7 +7,8 @@
 //! touch only the tables deliberately left outside row-level security
 //! (`app_keys`, `deleted_orgs`, `removed_members`).
 //!
-//! They still go through [`begin`], never a bare query on the pool: the pool
+//! They still go through [`begin`] (or [`begin_on`], on a connection the key
+//! lookup takes with [`acquire`]), never a bare query on the pool: the pool
 //! may connect as a role row-level security does not apply to (production's
 //! attach role is a superuser), and a later query on that connection that
 //! named a tenant table by mistake would read every org's rows (#80). Inside
@@ -18,7 +19,8 @@
 //! raw pool query anywhere else.
 
 use otto_tenant::Db;
-use sqlx::{Postgres, Transaction};
+use sqlx::pool::PoolConnection;
+use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
 /// The `search_path` every tenant, unpinned, and maintenance transaction runs
 /// with (#97): unqualified names resolve in `public` after the built-ins,
@@ -62,7 +64,40 @@ pub(crate) async fn begin_as_tenant_role(
     db: &Db,
     maintenance: bool,
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
-    let mut tx = db.pool().begin().await?;
+    enter(db.pool().begin().await?, db, maintenance).await
+}
+
+/// [`begin`] on a connection the caller already holds, rather than one taken
+/// from the pool for the transaction: the same probe, role switch, search
+/// path, and refusal, with no maintenance marker. For the key lookup
+/// ([`crate::keys::resolve_hash`]), which must await its connection's return
+/// to the pool itself (#120).
+pub(crate) async fn begin_on<'c>(
+    db: &Db,
+    conn: &'c mut PgConnection,
+) -> sqlx::Result<Transaction<'c, Postgres>> {
+    enter(conn.begin().await?, db, false).await
+}
+
+/// A connection from `db`'s pool, held by the caller. Only for
+/// [`begin_on`]: nothing may query on it outside that transaction.
+pub(crate) async fn acquire(db: &Db) -> sqlx::Result<PoolConnection<Postgres>> {
+    db.pool().acquire().await
+}
+
+/// The most connections `db`'s pool opens. Reads the pool's options; touches
+/// no table.
+pub(crate) fn max_connections(db: &Db) -> u32 {
+    db.pool().options().get_max_connections()
+}
+
+/// Run the role probe in the freshly opened `tx` and switch it into the
+/// tenant role, or refuse it; see [`begin_as_tenant_role`].
+async fn enter<'c>(
+    mut tx: Transaction<'c, Postgres>,
+    db: &Db,
+    maintenance: bool,
+) -> sqlx::Result<Transaction<'c, Postgres>> {
     // One round trip for the probes, the marker, the role switch, and the
     // search path (these run on every SDK key lookup). The probes are a
     // MATERIALIZED CTE so they read `current_user` before the outer select
@@ -139,7 +174,7 @@ pub(crate) mod tests {
     use sqlx::PgPool;
 
     /// The current role and the maintenance marker inside `tx`.
-    async fn role_and_marker(tx: &mut Transaction<'static, Postgres>) -> (String, String) {
+    async fn role_and_marker(tx: &mut Transaction<'_, Postgres>) -> (String, String) {
         sqlx::query_as(
             "SELECT current_user::text, coalesce(current_setting('app.maintenance', true), '')",
         )
@@ -159,6 +194,24 @@ pub(crate) mod tests {
             role_and_marker(&mut tx).await,
             (db.tenant_role().to_string(), String::new())
         );
+    }
+
+    /// The same on a connection the caller holds (`begin_on`, #120): the
+    /// tenant role, no marker, the pinned search path.
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_on_runs_as_the_tenant_role_without_the_marker(pool: PgPool) {
+        let db = Db::from_pool(pool);
+        let mut conn = acquire(&db).await.unwrap();
+        let mut tx = begin_on(&db, &mut conn).await.unwrap();
+        assert_eq!(
+            role_and_marker(&mut tx).await,
+            (db.tenant_role().to_string(), String::new())
+        );
+        let path: String = sqlx::query_scalar("SELECT current_setting('search_path')")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert_eq!(path, SEARCH_PATH);
     }
 
     /// Every unpinned transaction resolves names in `public` only (#97).

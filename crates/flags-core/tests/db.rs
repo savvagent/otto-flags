@@ -23,6 +23,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{Connection, PgPool, Postgres};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 fn meta(actor: UserId) -> ChangeMeta {
     ChangeMeta {
@@ -5745,7 +5746,8 @@ async fn member_removed_ignores_a_shadowing_schema(pool: PgPool) {
 async fn rotation_stops_a_key_through_the_cache(pool: PgPool) {
     let db = db(pool).await;
     let (org, actor) = (OrgId::new(), UserId::new());
-    let unknown = keys::UnknownKeys::new();
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
     let mut tx = db.begin(org).await.unwrap();
     let (app, issued) = tx
         .create_app("web", &["production".into()], actor)
@@ -5753,7 +5755,7 @@ async fn rotation_stops_a_key_through_the_cache(pool: PgPool) {
         .unwrap();
     tx.commit().await.unwrap();
     let old = issued.client_key.unwrap();
-    assert!(keys::resolve_cached(&db, &unknown, &old)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &old)
         .await
         .unwrap()
         .is_some());
@@ -5763,11 +5765,11 @@ async fn rotation_stops_a_key_through_the_cache(pool: PgPool) {
     tx.commit().await.unwrap();
     let new = rotated.client_key.unwrap();
 
-    assert!(keys::resolve_cached(&db, &unknown, &old)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &old)
         .await
         .unwrap()
         .is_none());
-    assert!(keys::resolve_cached(&db, &unknown, &new)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &new)
         .await
         .unwrap()
         .is_some());
@@ -5779,7 +5781,8 @@ async fn rotation_stops_a_key_through_the_cache(pool: PgPool) {
 async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
     let db = db(pool.clone()).await;
     let org = OrgId::new();
-    let unknown = keys::UnknownKeys::new();
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
     let mut tx = db.begin(org).await.unwrap();
     let (_, issued) = tx
         .create_app("web", &["production".into()], UserId::new())
@@ -5787,7 +5790,7 @@ async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
         .unwrap();
     tx.commit().await.unwrap();
     let key = issued.client_key.unwrap();
-    assert!(keys::resolve_cached(&db, &unknown, &key)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &key)
         .await
         .unwrap()
         .is_some());
@@ -5796,7 +5799,7 @@ async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
         .execute(&pool)
         .await
         .unwrap();
-    assert!(keys::resolve_cached(&db, &unknown, &key)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &key)
         .await
         .unwrap()
         .is_none());
@@ -5807,8 +5810,9 @@ async fn a_deleted_orgs_key_stops_through_the_cache(pool: PgPool) {
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn malformed_keys_are_not_remembered(pool: PgPool) {
     let db = db(pool).await;
-    let unknown = keys::UnknownKeys::new();
-    assert!(keys::resolve_cached(&db, &unknown, "sdk_xyz")
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
+    assert!(keys::resolve_cached(&db, &unknown, &limit, "sdk_xyz")
         .await
         .unwrap()
         .is_none());
@@ -5820,11 +5824,120 @@ async fn malformed_keys_are_not_remembered(pool: PgPool) {
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn errors_are_not_remembered(pool: PgPool) {
     let db = db(pool).await;
-    let unknown = keys::UnknownKeys::new();
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
     let key = keys::NewKey::mint(KeyKind::Client).key;
     db.pool().close().await;
-    assert!(keys::resolve_cached(&db, &unknown, &key).await.is_err());
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &key)
+        .await
+        .is_err());
     assert!(unknown.is_empty());
+}
+
+/// A connection outside `pool` holding `app_keys` in ACCESS EXCLUSIVE mode, so
+/// every key lookup blocks in the database, holding its pool connection, until
+/// the transaction is rolled back (#120). Close it before the test returns so
+/// sqlx can drop the database.
+async fn lock_app_keys(pool: &PgPool) -> sqlx::PgConnection {
+    let mut lock = sqlx::PgConnection::connect_with(&pool.connect_options())
+        .await
+        .unwrap();
+    sqlx::raw_sql("BEGIN; LOCK TABLE public.app_keys IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut lock)
+        .await
+        .unwrap();
+    lock
+}
+
+/// Release [`lock_app_keys`]' lock and close its connection.
+async fn unlock_app_keys(mut lock: sqlx::PgConnection) {
+    sqlx::raw_sql("ROLLBACK").execute(&mut lock).await.unwrap();
+    lock.close().await.unwrap();
+}
+
+/// Poll `check` every 10 ms until it holds; panics with `what` after 5 s.
+async fn within_5s(what: &str, mut check: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !check() {
+        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// With every permit held by a lookup blocked in the database, the next
+/// lookup waits out the limit's wait and is refused `Busy`; a remembered
+/// unknown key still answers without a permit; and the blocked lookup's
+/// permit comes back once it finishes (#120).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_waits_for_a_permit_and_is_refused_after_the_wait(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let wait = std::time::Duration::from_millis(200);
+    let limit = Arc::new(keys::KeyLookups::new(1, wait));
+    let remembered = keys::NewKey::mint(KeyKind::Client).key;
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &remembered)
+        .await
+        .unwrap()
+        .is_none());
+
+    let lock = lock_app_keys(&pool).await;
+    let blocked = tokio::spawn({
+        let (db, unknown, limit) = (db.clone(), unknown.clone(), limit.clone());
+        let key = keys::NewKey::mint(KeyKind::Client).key;
+        async move { keys::resolve_cached(&db, &unknown, &limit, &key).await }
+    });
+    within_5s("the blocked lookup takes the permit", || {
+        limit.available() == 0
+    })
+    .await;
+
+    let started = std::time::Instant::now();
+    let refused = keys::resolve_cached(
+        &db,
+        &unknown,
+        &limit,
+        &keys::NewKey::mint(KeyKind::Client).key,
+    )
+    .await;
+    assert!(matches!(refused, Err(Error::Busy)), "{refused:?}");
+    assert!(started.elapsed() >= wait, "refused before the wait was up");
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &remembered)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(limit.available(), 0, "the remembered key took no permit");
+
+    unlock_app_keys(lock).await;
+    assert!(blocked.await.unwrap().unwrap().is_none());
+    within_5s("the permit comes back", || limit.available() == 1).await;
+    assert_eq!(unknown.len(), 2, "the remembered key and the blocked one");
+}
+
+/// A lookup whose caller is dropped mid-lookup still finishes: its answer is
+/// remembered and only then is its permit freed (#120).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_dropped_lookup_still_remembers_its_unknown_key(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = Arc::new(keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT));
+    let lock = lock_app_keys(&pool).await;
+    let caller = tokio::spawn({
+        let (db, unknown, limit) = (db.clone(), unknown.clone(), limit.clone());
+        let key = keys::NewKey::mint(KeyKind::Client).key;
+        async move { keys::resolve_cached(&db, &unknown, &limit, &key).await }
+    });
+    within_5s("the lookup takes the permit", || limit.available() == 0).await;
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    assert_eq!(limit.available(), 0, "still held: the lookup is blocked");
+
+    unlock_app_keys(lock).await;
+    within_5s("the permit comes back", || limit.available() == 1).await;
+    assert_eq!(
+        unknown.len(),
+        1,
+        "the dropped lookup's answer is remembered"
+    );
 }
 
 /// Every query on the pool's own role, outside a pinned (`begin_live`),
@@ -5859,8 +5972,10 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
     ];
     let allowed: BTreeMap<&str, usize> = BTreeMap::from([
         // The helper itself: opens the transaction it then drops into the
-        // tenant role.
-        ("flags-core/src/unpinned.rs", 1),
+        // tenant role; hands the key lookup a connection it holds itself, so
+        // it can await the connection's return to the pool before freeing its
+        // permit (#120); and reads the pool's size, which touches no table.
+        ("flags-core/src/unpinned.rs", 3),
         // Migrations run as the migrating role: DDL, grants, and the
         // security-definer purge function's owner.
         ("flags-core/src/migrate.rs", 1),

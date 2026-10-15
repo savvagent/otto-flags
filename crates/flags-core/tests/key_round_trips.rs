@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use flags_core::apps::AppsExt;
-use flags_core::keys::{self, UnknownKeys};
+use flags_core::keys::{self, KeyLookups, UnknownKeys, KEY_LOOKUP_WAIT};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
@@ -175,24 +175,25 @@ async fn a_cached_unknown_key_takes_no_round_trips(pool: PgPool) {
     let known = known_key(&pool).await;
     let unknown_key = unknown_key();
     let (db, trips) = counted_db(&pool).await;
-    let unknown = UnknownKeys::new();
+    let unknown = Arc::new(UnknownKeys::new());
+    let limit = KeyLookups::new(1, KEY_LOOKUP_WAIT);
     // Warm the connection's statement cache without touching `unknown`.
     keys::resolve(&db, &unknown_key).await.unwrap();
     trips.take(&db).await;
 
-    assert!(keys::resolve_cached(&db, &unknown, &unknown_key)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &unknown_key)
         .await
         .unwrap()
         .is_none());
     assert_eq!(trips.take(&db).await, 6, "first lookup of the unknown key");
-    assert!(keys::resolve_cached(&db, &unknown, &unknown_key)
+    assert!(keys::resolve_cached(&db, &unknown, &limit, &unknown_key)
         .await
         .unwrap()
         .is_none());
     assert_eq!(trips.take(&db).await, 0, "the unknown key, remembered");
 
     for attempt in 0..2 {
-        assert!(keys::resolve_cached(&db, &unknown, &known)
+        assert!(keys::resolve_cached(&db, &unknown, &limit, &known)
             .await
             .unwrap()
             .is_some());
