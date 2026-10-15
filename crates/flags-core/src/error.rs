@@ -283,6 +283,8 @@ fn db_reason(e: &sqlx::Error) -> &'static str {
         sqlx::Error::Tls(_) => "tls",
         sqlx::Error::Protocol(_) => "protocol",
         sqlx::Error::RowNotFound => "row_not_found",
+        // `maintenance::begin` refusing a role exempt from row-level security.
+        sqlx::Error::Configuration(_) => "configuration",
         sqlx::Error::TypeNotFound { .. }
         | sqlx::Error::ColumnIndexOutOfBounds { .. }
         | sqlx::Error::ColumnNotFound(_)
@@ -437,6 +439,11 @@ mod tests {
             (Error::Db(db("53300")), "insufficient_resources", None),
             (Error::Db(db("XX000")), "database_error", None),
             (Error::Db(sqlx::Error::RowNotFound), "row_not_found", None),
+            (
+                Error::Db(sqlx::Error::Configuration("secret".into())),
+                "configuration",
+                None,
+            ),
             (
                 Error::Db(sqlx::Error::Protocol("secret".into())),
                 "protocol",

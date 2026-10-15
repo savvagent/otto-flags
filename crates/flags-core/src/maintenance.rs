@@ -39,33 +39,45 @@ use sqlx::{Postgres, Transaction};
 /// `Db::begin` leaves it, which is only safe when the pool's own role is
 /// subject to row-level security (a managed Postgres role with no CREATEROLE).
 /// `Db::verify_tenant_isolation` checks that once at startup; this checks it
-/// on every transaction, so a role exempt from row-level security (superuser
-/// or BYPASSRLS) that cannot assume the tenant role, say after its membership
-/// was revoked at runtime, fails the transaction instead of quietly running
-/// unconstrained.
+/// on every transaction, for the role the transaction will actually run as: a
+/// pool role exempt from row-level security (superuser or BYPASSRLS) that
+/// cannot assume the tenant role, say after its membership was revoked at
+/// runtime, or a tenant role that is itself exempt, fails the transaction
+/// instead of quietly running unconstrained. The failure is
+/// `sqlx::Error::Configuration`, logged with reason `configuration`.
 pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres>> {
     let mut tx = db.pool().begin().await?;
-    // One round trip for the marker and both probes. `set_config` runs as its
+    // One round trip for the marker and the probes. `set_config` runs as its
     // own select-list column, so the marker is set whatever the probes return;
-    // inside one boolean expression Postgres could skip it.
-    let (_, assumable, exempt): (String, bool, bool) = sqlx::query_as(
+    // inside one boolean expression Postgres could skip it. Exemption is a
+    // role attribute, never inherited through membership, so each role is
+    // checked by name.
+    let (_, assumable, pool_exempt, tenant_exempt): (String, bool, bool, bool) = sqlx::query_as(
         "SELECT set_config('app.maintenance', 'on', true), \
-                EXISTS ( \
-                  SELECT 1 FROM pg_catalog.pg_roles r \
-                  WHERE r.rolname = $1 \
-                    AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')), \
-                EXISTS ( \
-                  SELECT 1 FROM pg_catalog.pg_roles r \
-                  WHERE r.rolname = current_user AND (r.rolsuper OR r.rolbypassrls))",
+                    EXISTS ( \
+                      SELECT 1 FROM pg_catalog.pg_roles r \
+                      WHERE r.rolname = $1 \
+                        AND pg_catalog.pg_has_role(current_user, r.oid, 'USAGE')), \
+                    EXISTS ( \
+                      SELECT 1 FROM pg_catalog.pg_roles r \
+                      WHERE r.rolname = current_user AND (r.rolsuper OR r.rolbypassrls)), \
+                    EXISTS ( \
+                      SELECT 1 FROM pg_catalog.pg_roles r \
+                      WHERE r.rolname = $1 AND (r.rolsuper OR r.rolbypassrls))",
     )
     .bind(db.tenant_role())
     .fetch_one(&mut *tx)
     .await?;
-    if !assumable && exempt {
+    let runs_exempt = if assumable {
+        tenant_exempt
+    } else {
+        pool_exempt
+    };
+    if runs_exempt {
         return Err(sqlx::Error::Configuration(
             format!(
-                "maintenance transactions must be subject to row-level security, but the \
-                 pool's role is exempt from it and cannot assume the tenant role {:?}",
+                "maintenance transactions must be subject to row-level security, but they \
+                 would run exempt from it (tenant role {:?}, assumable: {assumable})",
                 db.tenant_role()
             )
             .into(),
@@ -162,6 +174,23 @@ mod tests {
     async fn begin_refuses_an_exempt_role_that_cannot_assume_the_tenant_role(pool: PgPool) {
         let db = Db::from_pool(pool)
             .with_tenant_role("flags_no_such_role")
+            .unwrap();
+        let err = begin(&db).await.unwrap_err();
+        assert!(matches!(err, sqlx::Error::Configuration(_)), "{err}");
+    }
+
+    /// A tenant role that is itself exempt from row-level security would let
+    /// the maintenance transaction run unconstrained after the switch:
+    /// refused. The pool's own superuser role stands in for one here (a role
+    /// can always assume itself).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_refuses_a_tenant_role_exempt_from_rls(pool: PgPool) {
+        let pool_role: String = sqlx::query_scalar("SELECT current_user::text")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let db = Db::from_pool(pool)
+            .with_tenant_role(Box::leak(pool_role.into_boxed_str()))
             .unwrap();
         let err = begin(&db).await.unwrap_err();
         assert!(matches!(err, sqlx::Error::Configuration(_)), "{err}");
