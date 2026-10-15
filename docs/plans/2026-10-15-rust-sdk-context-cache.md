@@ -61,7 +61,7 @@ One task: the cache signature change and its only caller must change together to
 
 **Model:** sonnet
 
-- [ ] **Step 1: Write the failing integration tests** (append to `tests/integration_test.rs`)
+- [x] **Step 1: Write the failing integration tests** (append to `tests/integration_test.rs`)
 
 ```rust
 #[tokio::test]
@@ -147,14 +147,14 @@ async fn an_identical_context_hits_the_cache_whatever_the_attribute_order() {
 }
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `cargo test --locked --test integration_test`
 Expected: `different_users_each_get_their_own_cached_answer` and
 `contexts_differing_in_an_attribute_each_get_their_own_answer` FAIL (the second context is served
 the first's cached value; wiremock's `expect(1)` on the second mock reports 0 calls).
 
-- [ ] **Step 3: Implement `src/cache.rs`**
+- [x] **Step 3: Implement `src/cache.rs`**
 
 ```rust
 use crate::types::Context;
@@ -310,7 +310,7 @@ mod tests {
 (Adapt the second sweep test if needed: the point is that expired entries are swept before a
 clear. A cache with zero TTL proves the sweep path; the first test proves the clear path.)
 
-- [ ] **Step 4: Update `FlagClient::evaluate` in `src/client.rs`**
+- [x] **Step 4: Update `FlagClient::evaluate` in `src/client.rs`**
 
 Move the "Prepare context" block (`context.unwrap_or_default()` and the `application_id` fill-in)
 above the cache lookup; compute `let ctx_key = context_key(&ctx);`; replace
@@ -320,19 +320,19 @@ above the cache lookup; compute `let ctx_key = context_key(&ctx);`; replace
 Import `crate::cache::context_key`. Document on `evaluate` that results are cached per flag and
 context for `cache_ttl`, and on `invalidate_cache` that `Some(flag)` covers every context.
 
-- [ ] **Step 5: README**
+- [x] **Step 5: README**
 
 Delete the "Caching caveat" blockquote (four lines starting `> **Caching caveat:**`). Replace it
 with one sentence: "Results are cached per flag key and evaluation context for `cache_ttl`; a
 different context (another user, other attributes) is evaluated by the server."
 
-- [ ] **Step 6: Run the gates**
+- [x] **Step 6: Run the gates**
 
 Run in `packages/rust-server`: `cargo fmt --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`.
 Expected: all pass; record per-binary pass counts.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add packages/rust-server

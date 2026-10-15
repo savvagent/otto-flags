@@ -1,6 +1,6 @@
 # Rust SDK caches evaluations per flag and context
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#103)
 **Issue:** #91
 
 ## 1. Brief
