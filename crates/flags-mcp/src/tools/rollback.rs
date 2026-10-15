@@ -166,7 +166,12 @@ impl Flags {
                        policy does not re-arm a tripped one (turn the environment back on to \
                        re-arm). By default only telemetry reported with the server key counts \
                        (includeClientReports opts in, needs an owner or admin). Needs a plan \
-                       with auto-rollback; billed as a change."
+                       with auto-rollback; billed as a change.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn set_rollback_policy(
         &self,
@@ -215,7 +220,12 @@ impl Flags {
         name = "remove_rollback_policy",
         description = "Delete a flag's auto-rollback policy for one environment. Its history is \
                        kept: its rollback_events stay listed for the flag, with policyId null. \
-                       Free and never plan-gated, so an org that downgraded can always clean up."
+                       Free and never plan-gated, so an org that downgraded can always clean up.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true
+        )
     )]
     pub async fn remove_rollback_policy(
         &self,
@@ -244,7 +254,8 @@ impl Flags {
                        means an enforcing policy turned the environment off; observe, \
                        not-entitled and unknown-entitlement trips leave it armed and show only \
                        in rollback_events. A policy whose last check failed shows \
-                       lastErrorCode; it stays armed and is retried. Free."
+                       lastErrorCode; it stays armed and is retried. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn list_rollback_policies(
         &self,
@@ -277,7 +288,8 @@ impl Flags {
                        fields you pass; it cannot clear a stored maxErrorRate. It judges the \
                        numbers only; it ignores the policy's mode and the plan, but reports \
                        canAct false for an archived flag or an environment the app no longer \
-                       has. Changes nothing. Free."
+                       has. Changes nothing. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn propose_rollback(
         &self,
@@ -311,7 +323,8 @@ impl Flags {
                        auto-rollback), entitlement_unknown (the platform could not say; nothing \
                        changed). The last three are recorded at most once per hour per policy. \
                        Kept 90 days. For one flag or the whole app, at most 200. Events hold \
-                       numbers only, no reported text. Free."
+                       numbers only, no reported text. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn rollback_events(
         &self,

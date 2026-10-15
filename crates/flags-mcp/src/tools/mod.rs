@@ -55,6 +55,53 @@ pub const NAMES: &[&str] = &[
     "rollback_events",
 ];
 
+/// Tools that only read. The rule: no write scope is required and no state a
+/// caller can observe changes. Every tool but `propose_rollback` records a usage row through
+/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true`
+/// lets connector clients run these without asking. `propose_rollback` is a
+/// dry run and belongs here.
+///
+/// These three sets pin the `annotations(...)` on each `#[tool]`; they do not
+/// drive them. The tests below force the two to agree, so a reclassification
+/// shows up here in review.
+pub const READ_ONLY: &[&str] = &[
+    "whoami",
+    "usage",
+    "list_apps",
+    "list_flags",
+    "get_flag",
+    "flag_history",
+    "evaluate_flag",
+    "flag_health",
+    "list_rollback_policies",
+    "propose_rollback",
+    "rollback_events",
+];
+
+/// Writes that can switch off or alter live evaluation, or delete something
+/// (`destructiveHint = true`). Every write except the two creations qualifies:
+/// each alters or deletes existing state or arms an automatic switch-off, and
+/// a client should confirm before running one.
+/// `create_app` and `create_flag` only add, so they are not listed.
+pub const DESTRUCTIVE: &[&str] = &[
+    "update_app",
+    "rotate_app_keys",
+    "update_flag",
+    "set_flag_environment",
+    "archive_flag",
+    "restore_flag",
+    "rollback_flag",
+    "set_rollback_policy",
+    "remove_rollback_policy",
+];
+
+/// Writes whose repeat has no further effect (`idempotentHint = true`). This
+/// excludes every billable tool, since each call records usage: a repeat is
+/// another charge. Of the writes, only `remove_rollback_policy` is not
+/// billable, and removing an absent policy deletes nothing and writes no audit
+/// row; only its non-billable usage row repeats.
+pub const IDEMPOTENT: &[&str] = &["remove_rollback_policy"];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +123,137 @@ mod tests {
                 NAMES.contains(billable),
                 "{billable} is billed but is not a tool"
             );
+        }
+    }
+
+    #[test]
+    fn every_tool_is_annotated() {
+        for tool in router().list_all() {
+            let name = tool.name.to_string();
+            let Some(a) = tool.annotations else {
+                panic!("{name} has no annotations");
+            };
+            let Some(read_only) = a.read_only_hint else {
+                panic!("{name} has no read_only_hint");
+            };
+            if !read_only {
+                assert!(a.destructive_hint.is_some(), "{name}: no destructive_hint");
+                assert!(a.idempotent_hint.is_some(), "{name}: no idempotent_hint");
+            }
+        }
+    }
+
+    #[test]
+    fn annotations_match_the_pinned_sets() {
+        for set in [READ_ONLY, DESTRUCTIVE, IDEMPOTENT] {
+            for name in set {
+                assert!(NAMES.contains(name), "{name} is pinned but is not a tool");
+            }
+        }
+        for name in DESTRUCTIVE.iter().chain(IDEMPOTENT) {
+            assert!(
+                !READ_ONLY.contains(name),
+                "{name} is both a read and a write"
+            );
+        }
+        for tool in router().list_all() {
+            let name = tool.name.to_string();
+            let n = name.as_str();
+            let Some(a) = tool.annotations else {
+                panic!("{name} has no annotations");
+            };
+            assert_eq!(a.read_only_hint, Some(READ_ONLY.contains(&n)), "{name}");
+            if READ_ONLY.contains(&n) {
+                assert_eq!(a.destructive_hint, None, "{name}");
+                assert_eq!(a.idempotent_hint, None, "{name}");
+            } else {
+                assert_eq!(a.destructive_hint, Some(DESTRUCTIVE.contains(&n)), "{name}");
+                assert_eq!(a.idempotent_hint, Some(IDEMPOTENT.contains(&n)), "{name}");
+            }
+        }
+    }
+
+    /// Cross-checks the classification against the code. The source scan
+    /// matches names, not behaviour: it catches a read-only tool that checks
+    /// a write scope or admin role or calls a `flags-core` write method, or a
+    /// write that names no write scope, in its own body (archive and restore
+    /// delegate to `set_archived`).
+    #[test]
+    fn read_only_tools_change_nothing() {
+        for name in READ_ONLY {
+            assert!(
+                !flags_core::usage::BILLABLE.contains(name),
+                "{name} is read-only but billable"
+            );
+        }
+        // A billed repeat is another charge, so no billable tool is idempotent.
+        for name in IDEMPOTENT {
+            assert!(
+                !flags_core::usage::BILLABLE.contains(name),
+                "{name} is idempotent but billable"
+            );
+        }
+        let sources = [
+            ("org.rs", include_str!("org.rs")),
+            ("apps.rs", include_str!("apps.rs")),
+            ("flags.rs", include_str!("flags.rs")),
+            ("insight.rs", include_str!("insight.rs")),
+            ("rollback.rs", include_str!("rollback.rs")),
+        ];
+        for name in NAMES {
+            let head = format!("pub async fn {name}(");
+            let (file, body) = sources
+                .iter()
+                .find_map(|(file, src)| {
+                    let start = src.find(&head)? + head.len();
+                    let rest = &src[start..];
+                    let Some(end) = rest.find("\n    }\n") else {
+                        panic!("{name} in {file}: no end of body found");
+                    };
+                    Some((*file, &rest[..end]))
+                })
+                .unwrap_or_else(|| panic!("{name}: not found in any tool source"));
+            assert!(!body.is_empty(), "{name} in {file}: empty body");
+            assert!(
+                !body.contains("\n    pub ")
+                    && !body.contains("\n    async fn ")
+                    && !body.contains("\n    fn "),
+                "{name} in {file}: body runs into the next function"
+            );
+            // Write scopes, the admin check, and every `flags-core` write
+            // method a tool calls.
+            let writes = [
+                "FLAGS_WRITE",
+                "APPS_ADMIN",
+                "require_admin",
+                "set_archived",
+                ".create_app(",
+                ".set_app_environments(",
+                ".rotate_keys(",
+                ".create_flag(",
+                ".update_flag(",
+                ".set_environment(",
+                ".rollback_flag(",
+                ".set_policy(",
+                ".remove_policy(",
+            ];
+            if READ_ONLY.contains(name) {
+                for w in writes {
+                    assert!(
+                        !body.contains(w),
+                        "{name} in {file}: read-only but uses {w}"
+                    );
+                }
+            } else {
+                // archive_flag and restore_flag delegate their FLAGS_WRITE check
+                // to `Flags::set_archived`.
+                assert!(
+                    ["FLAGS_WRITE", "APPS_ADMIN", "set_archived"]
+                        .iter()
+                        .any(|w| body.contains(w)),
+                    "{name} in {file}: a write that checks no write scope"
+                );
+            }
         }
     }
 }

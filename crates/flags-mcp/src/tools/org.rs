@@ -19,7 +19,8 @@ impl Flags {
         name = "whoami",
         description = "Who this token says you are: your user, the one organization it opens, your \
                        role there, the scopes it carries, and how much of this month's allowance is \
-                       left. Call this first in a session. Free."
+                       left. Call this first in a session. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn whoami(
         &self,
@@ -71,7 +72,8 @@ impl Flags {
         description = "How much of this organization's monthly allowance (shared across every otto \
                        service it uses) has been used and how much is left. Changes to apps and \
                        flags consume it; reads, evaluate_flag and flag_health do not. Free. If \
-                       `warning` is true, tell the person you are working for."
+                       `warning` is true, tell the person you are working for.",
+        annotations(read_only_hint = true)
     )]
     pub async fn usage(
         &self,

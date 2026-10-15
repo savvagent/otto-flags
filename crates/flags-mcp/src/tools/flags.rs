@@ -160,7 +160,8 @@ fn meta(caller: &Principal, expected_version: Option<i32>, reason: Option<String
 impl Flags {
     #[tool(
         name = "list_flags",
-        description = "The flags in an app, with each one's state in every environment. Free."
+        description = "The flags in an app, with each one's state in every environment. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn list_flags(
         &self,
@@ -184,7 +185,8 @@ impl Flags {
         name = "get_flag",
         description = "One flag's full state: environments (enabled, rollout, rules, default \
                        variation), variations, configuration, and its current version. Read this \
-                       before changing a flag and pass its version as expectedVersion. Free."
+                       before changing a flag and pass its version as expectedVersion. Free.",
+        annotations(read_only_hint = true)
     )]
     pub async fn get_flag(
         &self,
@@ -205,7 +207,12 @@ impl Flags {
         name = "create_flag",
         description = "Create a flag in an app. It starts switched off in every environment; turn \
                        it on with set_flag_environment. Put the key in the code that checks the \
-                       flag."
+                       flag.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false
+        )
     )]
     pub async fn create_flag(
         &self,
@@ -239,7 +246,12 @@ impl Flags {
     #[tool(
         name = "update_flag",
         description = "Change a flag's name, description, variations, or configuration. To turn \
-                       it on or off, roll it out, or target it, use set_flag_environment."
+                       it on or off, roll it out, or target it, use set_flag_environment.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn update_flag(
         &self,
@@ -274,7 +286,12 @@ impl Flags {
         description = "Turn a flag on or off in one environment, set its rollout percentage, \
                        replace its targeting rules, or choose its default variation. Only the \
                        fields you pass change. Applies to running apps within seconds. Pass \
-                       expectedVersion and a reason."
+                       expectedVersion and a reason.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn set_flag_environment(
         &self,
@@ -312,7 +329,12 @@ impl Flags {
     #[tool(
         name = "archive_flag",
         description = "Archive a flag once the code no longer checks it. Archived flags evaluate \
-                       as off everywhere and drop out of list_flags; restore_flag brings one back."
+                       as off everywhere and drop out of list_flags; restore_flag brings one back.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn archive_flag(
         &self,
@@ -324,7 +346,12 @@ impl Flags {
 
     #[tool(
         name = "restore_flag",
-        description = "Bring an archived flag back, with the state it had when archived."
+        description = "Bring an archived flag back, with the state it had when archived.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn restore_flag(
         &self,
@@ -338,7 +365,12 @@ impl Flags {
         name = "rollback_flag",
         description = "Restore a flag to an earlier version (default: the previous one), as a new \
                        version. Use when a change caused trouble; flag_health shows whether it \
-                       did, flag_history shows the versions."
+                       did, flag_history shows the versions.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false
+        )
     )]
     pub async fn rollback_flag(
         &self,

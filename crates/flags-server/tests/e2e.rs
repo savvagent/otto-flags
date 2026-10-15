@@ -1504,6 +1504,60 @@ async fn rollback_tools_check_their_scopes(pool: PgPool) {
     }
 }
 
+/// Connector clients (Claude, ChatGPT) read these hints off `tools/list` to
+/// decide what runs without asking (#77): every tool carries them, on the
+/// wire, in MCP's camelCase.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn tools_list_carries_annotations(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let t = token(
+        &platform,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Role::Member,
+        &["flags:read"],
+    );
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
+    let (status, v) = send(
+        &s.app,
+        Request::post("/mcp")
+            .header("host", "flags.example.com")
+            .header("authorization", format!("Bearer {t}"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert!(status.is_success(), "HTTP {status} {v}");
+    let tools = v["result"]["tools"].as_array().expect("tools");
+    assert_eq!(tools.len(), flags_mcp::tools::NAMES.len());
+    let mut read_only = Vec::new();
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap();
+        let a = &tool["annotations"];
+        match a["readOnlyHint"].as_bool() {
+            Some(true) => read_only.push(name),
+            Some(false) => {
+                assert!(a["destructiveHint"].is_boolean(), "{name}: {a}");
+                assert!(a["idempotentHint"].is_boolean(), "{name}: {a}");
+            }
+            None => panic!("{name} has no readOnlyHint: {tool}"),
+        }
+    }
+    read_only.sort();
+    let mut expected = flags_mcp::tools::READ_ONLY.to_vec();
+    expected.sort();
+    assert_eq!(read_only, expected);
+    let hint = |name: &str, key: &str| {
+        tools.iter().find(|t| t["name"] == name).unwrap()["annotations"][key].clone()
+    };
+    assert_eq!(hint("set_flag_environment", "destructiveHint"), true);
+    assert_eq!(hint("create_flag", "destructiveHint"), false);
+    assert_eq!(hint("remove_rollback_policy", "idempotentHint"), true);
+}
+
 /// Only setting a policy is billed; the rest record a free row, except the
 /// dry run, which records none. A refused set is never billed.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
