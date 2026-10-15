@@ -38,7 +38,7 @@ source scan keeps it that way.
 - Out-of-band: none. Never run `ALTER ROLE` or any production write.
 - Worktree only; trunk changes only through the PR.
 - Commit format: `<type>(<scope>): <imperative, lower-case>`, body explains why and ends
-  `Refs #97`; no attribution of any kind (no Co-Authored-By, no "Generated with", no credit
+  `Fixes #97`; no attribution of any kind (no Co-Authored-By, no "Generated with", no credit
   markers).
 
 ## File Structure
@@ -293,12 +293,19 @@ Unit tests: in `unpinned.rs` tests add
 In `maintenance.rs` `the_role_and_marker_end_with_the_transaction`, also read
 `current_setting('search_path')` before the loop on the one-connection pool and assert it is the
 same after each commit/rollback (rename the test to
-`the_role_marker_and_search_path_end_with_the_transaction`).
+`the_role_marker_and_search_path_end_with_the_transaction`). This one passes before the fix too:
+it is the no-leak check, not one of the red-first tests.
+
+Also in `unpinned.rs` tests, cover the fallback role: in
+`begin_keeps_a_non_exempt_role_that_cannot_assume_the_tenant_role`, before the rollback, assert
+`SELECT current_setting('search_path')` inside `tx` equals `SEARCH_PATH`.
 
 - [ ] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core`
 Expected: all pass, including the four shadow tests and the two unit tests; none skipped.
+Then `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`
+(fix anything they report before committing).
 
 - [ ] **Step 5: Commit**
 
@@ -306,7 +313,7 @@ Expected: all pass, including the four shadow tests and the two unit tests; none
 git add crates/flags-core
 git commit -m "fix(core): resolve names in public only in every flags-core transaction" \
   -m "A schema named after the tenant role, first on the default search_path, could redirect any unqualified table name. Each transaction now sets search_path transaction-locally, folded into the statement it already runs, so the SDK key, request, and maintenance paths gain no round trip." \
-  -m "Refs #97"
+  -m "Fixes #97"
 ```
 
 ### Task 2: Guard pinned transactions with a source scan
@@ -346,14 +353,15 @@ fn no_pinned_begin_outside_the_search_path_helpers() {
 ```
 
 - [ ] **Step 2: Prove it bites** — temporarily revert one webhook site to `db.begin(org)`, run
-  `cargo test -p flags-core --test db no_pinned_begin` and see it fail, then restore.
+  `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test db no_pinned_begin` and see it fail, then restore.
 
 - [ ] **Step 3: Run and see it pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test db no_`
 Expected: both scan tests pass.
 
-- [ ] **Step 4: Full gates** — test, lint, format, extra (Global Constraints), all green.
+- [ ] **Step 4: Full gates** — test, lint, format, extra, and `podman build -t otto-flags:check .`
+  (Global Constraints), all green.
 
 - [ ] **Step 5: Commit**
 
@@ -361,5 +369,5 @@ Expected: both scan tests pass.
 git add crates/flags-core/tests/db.rs
 git commit -m "test(core): refuse a pinned transaction that skips the search_path helpers" \
   -m "A new bare db.begin would open a transaction with the role's default search_path again. The scan keeps every pinned transaction on begin_live or begin_pinned." \
-  -m "Refs #97"
+  -m "Fixes #97"
 ```
