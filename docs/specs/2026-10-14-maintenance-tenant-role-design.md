@@ -51,10 +51,13 @@ From #73 (found by the security review of #72):
 - **Role name interpolation is safe.** `SET LOCAL ROLE` takes no bind parameter; the name comes
   from `Db::tenant_role()`, which `otto-tenant` validates (`^[a-z_][a-z0-9_]*$`, ≤ 63 bytes)
   before it can be set, exactly as `Db::begin` relies on.
-- **Not assumable means no role change**, as in `Db::begin`. A server only boots when
-  `verify_tenant_isolation` passes, and with the role not assumable that requires a pool role
-  that is neither superuser nor BYPASSRLS, i.e. one RLS already applies to. So in any booted
-  server every maintenance transaction is subject to RLS after this change.
+- **Not assumable means no role change**, as in `Db::begin`, **unless the pool's role is exempt
+  from RLS** (superuser or BYPASSRLS): then `begin` fails (`sqlx::Error::Configuration`). A server
+  only boots when `verify_tenant_isolation` passes, which with the role not assumable already
+  requires a non-exempt pool role, but `Db` checks that once and caches it, while this checks every
+  transaction: a superuser whose `otto_app` membership is revoked at runtime fails closed instead
+  of sweeping unconstrained (added after PR review, #78). So every maintenance transaction that
+  runs is subject to RLS.
 - Run Profile: every value comes from `CLAUDE.md` > Development Workflow; nothing assumed.
 
 ## 4. Goal & success criteria
@@ -65,9 +68,12 @@ marker-requiring policies constrain the background code in production as they do
 - A maintenance transaction on the default superuser test pool reports `current_user` =
   `otto_app` and `app.maintenance` = `on`.
 - On a `Db` whose tenant role cannot be assumed, `maintenance::begin` still opens (no role change),
-  as `Db::begin` does.
-- On the default superuser test pool, the retention sweeps, the platform-events sweep, the
-  checker's `due_policies`, and `ship_once` still act on rows of two different orgs.
+  as `Db::begin` does, when the pool's role is subject to RLS, and refuses when it is exempt.
+- The role and the marker end with the transaction, committed or rolled back.
+- On the default superuser test pool, the retention sweeps, the platform-events sweep (including
+  removed-member tombstones), the checker's `due_policies` (already covered by
+  `due_policies_sees_every_org_unpinned`), and `ship_once` still act on rows of two different
+  orgs.
 - A maintenance transaction is refused what `otto_app` is refused (proved by a `DELETE` on
   `audit_events`, from which `otto_app` has DELETE revoked: SQLSTATE `42501`).
 - `docs/deploy/fly.md` describes the marker policies as enforced in production.
@@ -173,11 +179,15 @@ migrations extra gate, `podman build -t otto-flags:check .` (crates changed).
   since `begin` is `pub(crate)`):
   - on the default pool: `current_user` = `otto_app`, `current_setting('app.maintenance')` =
     `on`, and `DELETE FROM audit_events` fails with `42501`;
-  - on `Db::from_pool(pool).with_tenant_role("flags_no_such_role")`: `begin` succeeds,
-    `current_user` is the pool's role, the marker is set.
+  - not assumable (`with_tenant_role("flags_no_such_role")`): on a pool whose sessions run as
+    `otto_app` (subject to RLS) `begin` succeeds as that role with the marker set; on the
+    superuser pool it fails with `sqlx::Error::Configuration`;
+  - on a one-connection pool, after commit and after rollback, the pool's role is back and the
+    marker is unset.
 - `crates/flags-core/tests/db.rs`: a new test on the default (superuser) pool with two orgs:
-  `telemetry::sweep`, `platform_events::sweep` delete both orgs' expired rows and keep fresh ones;
-  `due_policies` returns both orgs.
+  `telemetry::sweep`, `platform_events::sweep` delete both orgs' expired rows (and removed-member
+  tombstones) and keep fresh ones. `due_policies` across orgs on that pool is the existing
+  `due_policies_sees_every_org_unpinned`.
 - `crates/flags-server/tests/e2e.rs`: `ship_once` on the default pool ships usage rows from two
   orgs (both delivered, outbox empty), and a rejected one lands in `usage_outbox_rejected`.
 

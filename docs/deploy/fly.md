@@ -338,13 +338,17 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   checker's backstop, and the usage shipper set. Migration `0005` (#68) does the same for
   `usage_outbox` and `usage_outbox_rejected`, for every command. Those background transactions
   (`maintenance::begin`) drop into `otto_app` with `SET LOCAL ROLE`, as tenant transactions do
-  (#73), so in production too the marker policies are what let them see across orgs. A query
+  (#73), so in production too the marker policies are what let them see across orgs; if the pool's
+  role were exempt from RLS and could not assume `otto_app`, they fail rather than run
+  unconstrained, so a failing shipper, sweep, or checker backstop after a role change points
+  here. A query
   run directly on the pool without pinning an org still runs as the superuser attach role, which
   RLS does not apply to; request paths pin through `begin_live`. A release from before #73 runs
   its background work as the attach role, so it keeps working during the rollout overlap and
   after a rollback. Under a pool role subject to RLS, a release from before `0005` ships no usage
   while it runs against that schema, and the rows wait in the outbox until a newer release ships
-  them. Ad-hoc diagnostics as a role subject to RLS need `SET LOCAL app.maintenance = 'on'` in
+  them. Ad-hoc SELECT diagnostics as the superuser attach role bypass RLS and need neither the
+  marker nor the role; as a role subject to RLS they need `SET LOCAL app.maintenance = 'on'` in
   their transaction to see across orgs.
 
 Diagnostics (SELECT-only):
