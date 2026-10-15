@@ -6,6 +6,8 @@
 //!                                     flags-mcp   agents: bearer tokens from the platform
 //!   /api/…                            flags-api   SDKs: sdk_/srv_ keys
 //!   /platform/webhooks                flags-api   the platform's signed lifecycle events
+//!   /                                 install page  browsers (Accept: text/html, no
+//!                                                   Authorization); else JSON 404
 //!   everything else                   JSON 404
 //! ```
 //!
@@ -18,16 +20,18 @@
 
 pub mod config;
 pub mod health;
+pub mod install_page;
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::response::{IntoResponse, Response};
+use axum::routing::any;
 use axum::Router;
 use flags_core::entitlements::Entitlements;
 use flags_core::notify::Listener;
 use flags_core::rollback::{Checker, CheckerConfig, Hints};
-use http::{StatusCode, Uri};
+use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use otto_resource::{ClientConfig, PlatformClient};
 use otto_tenant::Db;
 use tokio::sync::watch;
@@ -61,9 +65,22 @@ pub fn router(
         hints,
         &config.platform_webhook_secret,
     ));
+    let page = Arc::new(install_page::InstallPage::new(
+        &config.resource_uri,
+        &config.platform_url,
+    ));
     health::router(db)
         .merge(mcp)
         .merge(api)
+        // `any`, not `get`: a GET-only route would answer other methods
+        // with 405 (and add `Allow` to its fallback's responses); `root`
+        // keeps them on the JSON 404.
+        .route(
+            "/",
+            any(move |method: Method, headers: HeaderMap, uri: Uri| {
+                root(page.clone(), method, headers, uri)
+            }),
+        )
         .fallback(not_found)
         // Request spans without headers: including them would log every
         // bearer token and SDK key in clear.
@@ -158,6 +175,28 @@ async fn not_found(uri: Uri) -> Response {
         .into_response()
 }
 
+/// `/`: the connector install page for a person's browser, the JSON 404
+/// for everyone else (see [`install_page::wants_html`]). For `GET`/`HEAD`
+/// both vary on `Accept` and `Authorization`, so a cache never swaps one for
+/// the other; other methods get the plain 404, which nothing caches.
+async fn root(
+    page: Arc<install_page::InstallPage>,
+    method: Method,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if method != Method::GET && method != Method::HEAD {
+        return not_found(uri).await;
+    }
+    if install_page::wants_html(&headers) {
+        return page.response();
+    }
+    let mut res = not_found(uri).await;
+    res.headers_mut()
+        .insert(header::VARY, HeaderValue::from_static(install_page::VARY));
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +257,8 @@ mod tests {
             .oneshot(
                 Request::post("/mcp")
                     .header("host", "flags.example.com")
+                    // A browser-like Accept must not reach the install page.
+                    .header("accept", "text/html")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -228,6 +269,114 @@ mod tests {
         assert!(challenge.contains(
             "resource_metadata=\"https://flags.example.com/.well-known/oauth-protected-resource\""
         ));
+    }
+
+    const BROWSER: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+    async fn request_root(
+        method: http::Method,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> (StatusCode, http::HeaderMap, Vec<u8>) {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "flags.example.com");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let res = app()
+            .oneshot(req.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = res.status();
+        let headers = res.headers().clone();
+        let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, headers, bytes.to_vec())
+    }
+
+    fn the_json_404(path: &str) -> serde_json::Value {
+        serde_json::json!({
+            "error": "not_found",
+            "error_description": format!(
+                "no route serves {path}. Agents: the MCP endpoint is /mcp (see \
+                 /.well-known/oauth-protected-resource). SDKs: see /api/sdk/flags."
+            ),
+        })
+    }
+
+    fn json(body: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(body).expect("a JSON body")
+    }
+
+    #[tokio::test]
+    async fn a_browser_at_the_root_gets_the_install_page() {
+        let (status, h, body) = request_root(http::Method::GET, "/", &[("accept", BROWSER)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h["content-type"], "text/html; charset=utf-8");
+        assert_eq!(h["cache-control"], "public, max-age=3600");
+        assert_eq!(h["vary"], "Accept, Authorization");
+        assert_eq!(h["x-content-type-options"], "nosniff");
+        assert_eq!(h["referrer-policy"], "no-referrer");
+        assert_eq!(h["content-security-policy"], install_page::CSP);
+        let html = String::from_utf8(body).unwrap();
+        assert!(html.contains("<h1>Use Otto Flags from your AI assistant</h1>"));
+        assert!(html.contains(">https://flags.example.com/mcp</code>"));
+        assert!(html.contains("href=\"https://platform.example.com/products/flags#connect\""));
+    }
+
+    #[tokio::test]
+    async fn a_query_string_still_gets_the_page() {
+        let (status, _, _) = request_root(
+            http::Method::GET,
+            "/?utm_source=otto",
+            &[("accept", BROWSER)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn head_at_the_root_gets_the_page_headers_and_no_body() {
+        let (status, h, body) = request_root(http::Method::HEAD, "/", &[("accept", BROWSER)]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(h["content-type"], "text/html; charset=utf-8");
+        assert_eq!(h["content-security-policy"], install_page::CSP);
+        assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn everything_else_at_the_root_keeps_the_json_404() {
+        for headers in [
+            &[][..],
+            &[("accept", "*/*")][..],
+            &[("accept", "application/json")][..],
+            &[("accept", BROWSER), ("authorization", "Bearer otto_at_x")][..],
+        ] {
+            let (status, h, body) = request_root(http::Method::GET, "/", headers).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{headers:?}");
+            assert_eq!(json(&body), the_json_404("/"), "{headers:?}");
+            assert_eq!(h["vary"], "Accept, Authorization", "{headers:?}");
+        }
+        let (status, h, body) = request_root(http::Method::HEAD, "/", &[("accept", "*/*")]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.is_empty());
+        assert_eq!(h["vary"], "Accept, Authorization");
+        let (status, h, body) = request_root(http::Method::POST, "/", &[("accept", BROWSER)]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body), the_json_404("/"));
+        assert!(h.get("allow").is_none());
+    }
+
+    #[tokio::test]
+    async fn other_paths_keep_the_json_404_for_browsers_too() {
+        let (status, h, body) =
+            request_root(http::Method::GET, "/nope", &[("accept", BROWSER)]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body), the_json_404("/nope"));
+        assert!(h.get("vary").is_none());
     }
 
     #[test]

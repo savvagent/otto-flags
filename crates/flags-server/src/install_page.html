@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Otto Flags connector</title>
+<style>
+:root {
+  color-scheme: dark;
+  --canvas: oklch(0.19 0.02 260);
+  --surface: oklch(0.24 0.02 260);
+  --raised: oklch(0.29 0.02 260);
+  --edge: oklch(0.36 0.02 260);
+  --ink: oklch(0.97 0.005 260);
+  --muted: oklch(0.72 0.02 260);
+  --faint: oklch(0.58 0.02 260);
+  --accent: oklch(0.75 0.14 220);
+  --accent-ink: oklch(0.2 0.05 240);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+* { box-sizing: border-box; }
+html { background: var(--canvas); }
+body {
+  margin: 0;
+  background: var(--canvas);
+  color: var(--ink);
+  font: 16px/1.6 var(--sans);
+}
+main {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 48px max(16px, env(safe-area-inset-left)) 64px;
+}
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+h1 { margin: 0 0 16px; font-size: 30px; line-height: 1.2; }
+h2 { margin: 32px 0 8px; font-size: 18px; }
+p, ol { margin: 0 0 16px; }
+.lead { color: var(--muted); font-size: 18px; }
+ol { padding-left: 24px; }
+li { margin: 4px 0; }
+a { color: var(--accent); text-underline-offset: 3px; }
+code, .value {
+  font-family: var(--mono);
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.copy {
+  margin: 0 0 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.value {
+  flex: 1 1 240px;
+  min-width: 0;
+  color: var(--ink);
+  user-select: all;
+}
+button {
+  flex: none;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 600 14px/1.2 var(--sans);
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.08); }
+a:focus-visible, button:focus-visible, .value:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.status { min-height: 1.6em; margin: 0 0 16px; color: var(--muted); font-size: 14px; }
+.links { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 32px; }
+footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--edge);
+  color: var(--muted);
+  font-size: 14px;
+}
+footer code { color: var(--ink); background: var(--raised); padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">Otto Flags · connector</p>
+<h1>Use Otto Flags from your AI assistant</h1>
+<p class="lead">Otto Flags doesn't have a web page here. Add it to your AI assistant as a connector, then ask which flags are on, roll one out, or roll one back in plain language. The first time, you sign in with your Otto account.</p>
+
+<h2>Connector address</h2>
+<div class="copy">
+<code class="value" id="connector-url" tabindex="0">{{CONNECTOR_URL}}</code>
+<button type="button" aria-label="Copy connector address" data-copy="connector-url" data-status="connector-url-status">Copy</button>
+</div>
+<p class="status" id="connector-url-status" role="status"></p>
+
+<h2>Claude (claude.ai or the desktop app)</h2>
+<ol>
+<li>Open Settings, then Connectors.</li>
+<li>Choose Add custom connector.</li>
+<li>Paste the connector address.</li>
+<li>Choose Connect.</li>
+<li>Sign in with your Otto account.</li>
+</ol>
+
+<h2>ChatGPT</h2>
+<ol>
+<li>Open Settings, then Connectors (turn on developer mode if Connectors asks for it).</li>
+<li>Choose Create.</li>
+<li>Paste the connector address.</li>
+<li>Sign in with your Otto account.</li>
+</ol>
+
+<h2>Claude Code</h2>
+<ol>
+<li>Run this in your terminal:
+<div class="copy">
+<code class="value" id="claude-code-command" tabindex="0">claude mcp add --transport http otto-flags {{CONNECTOR_URL}}</code>
+<button type="button" aria-label="Copy Claude Code command" data-copy="claude-code-command" data-status="claude-code-command-status">Copy</button>
+</div>
+<p class="status" id="claude-code-command-status" role="status"></p>
+</li>
+<li>In Claude Code, run <code>/mcp</code> and sign in with your Otto account.</li>
+</ol>
+
+<p class="links">
+<a href="{{PLATFORM_ORIGIN}}/products/flags#connect">Full setup guide</a>
+<a href="{{PLATFORM_ORIGIN}}/">Open your Otto console</a>
+</p>
+
+<footer>
+<p>Developers: the MCP endpoint is <code>{{CONNECTOR_URL}}</code>. Apps evaluate flags through the SDKs: see <code>/api/sdk/flags</code>. OAuth metadata is at <code>/.well-known/oauth-protected-resource</code>.</p>
+</footer>
+</main>
+<script>
+document.querySelectorAll("button[data-copy]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    var target = document.getElementById(button.dataset.copy);
+    var status = document.getElementById(button.dataset.status);
+    var text = target.textContent;
+    status.textContent = "";
+    function selectIt() {
+      var range = document.createRange();
+      range.selectNodeContents(target);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      status.textContent = "Selected. Press Ctrl+C to copy.";
+    }
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      selectIt();
+      return;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      status.textContent = "Copied.";
+    }, selectIt);
+  });
+});
+</script>
+</body>
+</html>
