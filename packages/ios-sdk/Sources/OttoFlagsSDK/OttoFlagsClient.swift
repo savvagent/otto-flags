@@ -106,9 +106,14 @@ public class OttoFlagsClient {
 
     /// Initialize the Otto Flags client
     /// - Parameter config: Configuration for the SDK
-    public init(config: OttoFlagsConfig) {
+    public convenience init(config: OttoFlagsConfig) {
+        self.init(config: config, session: URLSession(configuration: .default))
+    }
+
+    /// Initialize the client with a caller-supplied URLSession (tests inject a mock protocol here)
+    internal init(config: OttoFlagsConfig, session: URLSession) {
         self.config = config
-        self.session = URLSession(configuration: .default)
+        self.session = session
 
         if config.enableWebSocket {
             setupWebSocket()
@@ -117,12 +122,49 @@ public class OttoFlagsClient {
         startPolling()
     }
 
+    /// Whether `key` is a flag key the SDK will put in a URL.
+    ///
+    /// Mirrors the server's key rule: 1 to 128 bytes, each one of `A-Z a-z 0-9 - _ .`,
+    /// and not `.` or `..`. Anything else (`/`, `?`, `#`, `%`, spaces, non-ASCII) could
+    /// steer the request, and the SDK key in its Authorization header, to a different
+    /// endpoint, and `.` and `..` cannot be carried in a URL path at all because clients
+    /// normalize them away (savvagent/otto-flags#107). Checked on UTF-8 bytes, so
+    /// Unicode-wide character classes cannot slip through. Whole-string match, no trimming.
+    private static func isValidFlagKey(_ key: String) -> Bool {
+        let bytes = key.utf8
+        guard (1...128).contains(bytes.count) else { return false }
+        if key == "." || key == ".." { return false }
+        return bytes.allSatisfy { b in
+            (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A) || (b >= 0x30 && b <= 0x39)
+                || b == 0x2D || b == 0x5F || b == 0x2E
+        }
+    }
+
+    /// Short description of a rejected key for the error message: the first 64
+    /// characters quoted and escaped, plus the full length.
+    private static func describeInvalidKey(_ key: String) -> String {
+        "\(String(reflecting: String(key.prefix(64)))) (length \(key.count))"
+    }
+
+    /// RFC 3986 unreserved characters only (not `.alphanumerics`, which is Unicode-wide).
+    private static let pathSegmentAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+    )
+
+    private static func encodePathSegment(_ key: String) -> String? {
+        key.addingPercentEncoding(withAllowedCharacters: pathSegmentAllowed)
+    }
+
     /// Evaluate a feature flag and get full details (Phase 1 & 2)
     /// - Parameters:
     ///   - flagKey: The key of the feature flag
     ///   - context: User context for evaluation
     /// - Returns: FlagEvaluationResult with value, configuration, and variation
     public func evaluate(flagKey: String, context: UserContext) async throws -> FlagEvaluationResult {
+        guard Self.isValidFlagKey(flagKey) else {
+            throw OttoFlagsError.invalidFlagKey(Self.describeInvalidKey(flagKey))
+        }
+
         // Check cache first
         if let cached = flagCache[flagKey] {
             var configuration = cached.configuration
@@ -151,7 +193,8 @@ public class OttoFlagsClient {
         }
 
         // Fetch from API
-        guard let url = URL(string: "\(config.apiUrl)/v1/flags/\(flagKey)/evaluate") else {
+        guard let encodedKey = Self.encodePathSegment(flagKey),
+              let url = URL(string: "\(config.apiUrl)/v1/flags/\(encodedKey)/evaluate") else {
             throw OttoFlagsError.invalidURL
         }
 
@@ -247,8 +290,13 @@ public class OttoFlagsClient {
     ///   - defaultValue: Default value if flag evaluation fails
     /// - Returns: The variation value or default
     public func getVariation<T>(flagKey: String, context: UserContext, defaultValue: T) async -> T {
+        guard Self.isValidFlagKey(flagKey) else {
+            return defaultValue
+        }
+
         do {
-            guard let url = URL(string: "\(config.apiUrl)/v1/flags/\(flagKey)/variation") else {
+            guard let encodedKey = Self.encodePathSegment(flagKey),
+                  let url = URL(string: "\(config.apiUrl)/v1/flags/\(encodedKey)/variation") else {
                 return defaultValue
             }
 
@@ -534,6 +582,9 @@ public class OttoFlagsClient {
 /// Errors that can occur in the Otto Flags SDK
 public enum OttoFlagsError: Error {
     case invalidURL
+    /// The flag key is not 1-128 characters of `A-Z a-z 0-9 - _ .` (or is `.` or `..`);
+    /// no request was made. The associated text describes the rejected key.
+    case invalidFlagKey(String)
     case requestFailed
     case invalidResponse
     case networkError(Error)
