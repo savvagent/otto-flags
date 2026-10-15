@@ -79,11 +79,12 @@ From #112:
   has no server equivalent and returns the default; its Android test changes accordingly.
 - **Metadata stays as is.** Python, Node, Go and Java fill `flagId`/`description`/`variant` from
   fields the server never sends, so they are always empty. Filling them from `version` and `scope`
-  (as Rust #109 did) is a separate API change, filed as a follow-up.
+  (as Rust #109 did) is a separate API change, filed as a follow-up before the PR opens; the PR
+  body names it.
 - **Other iOS and Android endpoints are out of scope.** Both also call `/v1/events`, `/v1/stream`
   (WebSocket) and `/v1/flags`, which the server does not serve either (it has
   `/api/telemetry/*`, SSE `/api/flags/stream` and `/api/sdk/flags`). The issue names only evaluate
-  and variation; the rest is filed as a follow-up.
+  and variation; the rest is filed as a follow-up before the PR opens; the PR body names it.
 - **Changesets:** `@otto-flags/node-server` gets a patch changeset. Python, Go, Java, iOS and
   Android are not pnpm packages and are unpublished; no version-file edits.
 - **Gates not run** (no toolchain on the host, per CLAUDE.md): Go (`go vet`, `go test`; known red
@@ -172,6 +173,12 @@ None.
 - `variation: null`, `configuration: null`: absent, not an error.
 - Cached hits are unchanged: only real `enabled` values are cached.
 - Go: `json.Unmarshal` of `"enabled": null` into `*bool` leaves it nil, so it is a failure too.
+  `"variation": null` into a `string` and `"configuration": null` into a map decode as zero
+  values without error, so Go needs no null handling.
+- iOS: `json["configuration"] as? [String: Any]` and `json["variation"] as? String` are already
+  nil for `NSNull`; no change.
+- Mobile `getVariation<T>` now goes through `evaluate`, so the cache and local variation
+  overrides apply to it, as they already do to `getVariationDetails`. The doc comment says so.
 
 ## 11. Testing approach
 
@@ -187,7 +194,9 @@ None.
   missing `enabled` → default + error, not cached. Not run (no toolchain; #113).
 - **iOS, Android:** existing path pins move; new assertions for the request body
   (`context.user_id`, `context.environment`) and `getVariation` returning the variation name.
-  Not run (no toolchain / no gate; #119, #113).
+  The commented-out `getVariation` placeholder in `OttoFlagsClientNetworkTests.swift` stays a
+  placeholder; the new assertions live in a new `EvaluateContractTests.swift` that uses the
+  injectable session. Not run (no toolchain / no gate; #119, #113).
 
 ## 12. Risks & open questions
 
