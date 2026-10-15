@@ -44,11 +44,13 @@ From #77:
 
 ## 3. Assumptions
 
-- **`idempotent_hint` only where a repeat has no further effect at all.** Every billable tool
-  (`flags_core::usage::BILLABLE`) records a usage event on every call, and most writes also add a
-  flag version, so a repeat is not effect-free: they get `idempotent_hint = false`.
-  `remove_rollback_policy` is not billable and a repeat deletes nothing (`remove_policy` returns
-  `false`, writes no audit row), so it gets `idempotent_hint = true`. It is the only one.
+- **`idempotent_hint` only where a repeat has no further effect the caller can see.** Every tool,
+  reads included, records a usage row (`Meter::charge`, `crates/flags-core/src/usage.rs`); a
+  non-billable row is internal metering, not an effect, or no read could be read-only. A repeat of
+  a billable tool (`flags_core::usage::BILLABLE`) is billed again, and most of them also add a flag
+  version or an audit row, so they get `idempotent_hint = false`. `remove_rollback_policy` is not
+  billable and a repeat deletes nothing (`remove_policy` returns `false` and writes no audit row;
+  only its non-billable usage row repeats), so it gets `idempotent_hint = true`. It is the only one.
 - **Every write sets all three hints explicitly** (`read_only_hint`, `destructive_hint`,
   `idempotent_hint`), so no client falls back to the spec defaults (`destructive_hint` defaults to
   true, which would mislabel the additive tools). Read tools set only `read_only_hint = true`; the
@@ -57,7 +59,11 @@ From #77:
   does not set them.
 - **`update_flag` is destructive** per the issue: replacing variations or configuration changes
   what live evaluations return.
-- Run Profile: every value comes from `CLAUDE.md` > Development Workflow; none assumed.
+- **Test database on port 15444, not 15434.** The `test` gate's command names the shared
+  container on 15434; several agents run `#[sqlx::test]` concurrently, whose database names
+  collide across worktrees, so this worktree uses its own container on 15444 (CLAUDE.md allows "give
+  a worktree its own container on another port"). Same command otherwise.
+- Every other Run Profile value comes from `CLAUDE.md` > Development Workflow.
 
 ## 4. Goal & success criteria
 
@@ -105,14 +111,17 @@ Tests in `crates/flags-mcp/src/tools/mod.rs` `tests`, beside the existing routin
 1. `every_tool_is_annotated`: for each tool in `router().list_all()`, `annotations` is `Some`
    (panic names the tool), `read_only_hint` is `Some`; when it is `Some(false)`,
    `destructive_hint` and `idempotent_hint` are `Some`.
-2. `read_only_set_is_pinned`: the names with `read_only_hint == Some(true)` equal a `READ_ONLY`
+2. `annotations_match_the_pinned_sets`: the names with `read_only_hint == Some(true)` equal a `READ_ONLY`
    constant (the 11 names), and `DESTRUCTIVE`/`IDEMPOTENT` pin the other two hints, so a
    reclassification shows in review.
 3. `read_only_tools_change_nothing`: no `READ_ONLY` tool is in `flags_core::usage::BILLABLE`; by
    source scan of the tool files (`include_str!`), a read-only tool's body never names
-   `FLAGS_WRITE`, `APPS_ADMIN`, `self.charge`, or `set_archived`, and every other tool's body names
-   `FLAGS_WRITE`, `APPS_ADMIN`, or `set_archived` (archive/restore delegate their scope check to
-   `set_archived`, which checks `FLAGS_WRITE`).
+   `FLAGS_WRITE`, `APPS_ADMIN`, `require_admin`, or `set_archived`, and every other tool's body
+   names `FLAGS_WRITE`, `APPS_ADMIN`, or `set_archived` (archive/restore delegate their scope check
+   to `set_archived`, which checks `FLAGS_WRITE`). A body runs from `pub async fn <name>(` to the
+   method's closing brace at impl indentation (the first `\n    }\n` after it). Reads do call
+   `self.charge` (every tool meters a non-billable usage row), so it is not forbidden; "not billed"
+   is the `BILLABLE` check.
 
 ## 7. Invariants impact
 
@@ -135,7 +144,7 @@ annotations on their next `tools/list`.
 - A new tool added without `annotations(...)`: test 1 fails naming it (and the existing routing
   test fails until it is in `NAMES`).
 - A new read tool annotated read-only but not added to `READ_ONLY`: test 2 fails.
-- A tool annotated read-only that charges or checks a write scope: test 3 fails.
+- A tool annotated read-only that is billable or checks a write scope or admin role: test 3 fails.
 
 ## 11. Testing approach
 
