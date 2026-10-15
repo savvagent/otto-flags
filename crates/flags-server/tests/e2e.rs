@@ -392,7 +392,7 @@ async fn sdk(
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
     let (url, platform) = start_platform().await;
-    let s = server(pool, &url).await;
+    let s = server(pool.clone(), &url).await;
     let org = Uuid::new_v4();
     let admin = token(
         &platform,
@@ -510,6 +510,14 @@ async fn an_agent_ships_a_flag_and_an_app_evaluates_it(pool: PgPool) {
     .unwrap();
     assert_eq!(dry["evaluation"]["enabled"], true);
     assert_eq!(dry["evaluation"]["reason"]["kind"], "rule");
+    // The dry run changes no flag but is recorded as unbilled usage, as its
+    // description says (#89).
+    let billable: Vec<bool> =
+        sqlx::query_scalar("SELECT billable FROM usage_outbox WHERE tool = 'evaluate_flag'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(billable, vec![false]);
 
     // The SDK sees the same answer, on both route spellings.
     for path in [
@@ -1556,6 +1564,13 @@ async fn tools_list_carries_annotations(pool: PgPool) {
     assert_eq!(hint("set_flag_environment", "destructiveHint"), true);
     assert_eq!(hint("create_flag", "destructiveHint"), false);
     assert_eq!(hint("remove_rollback_policy", "idempotentHint"), true);
+    // evaluate_flag writes an unbilled usage row (#89), so its description,
+    // read next to the read-only hint, must not claim it records nothing.
+    let evaluate = tools.iter().find(|t| t["name"] == "evaluate_flag").unwrap()["description"]
+        .as_str()
+        .unwrap();
+    assert!(!evaluate.contains("records nothing"), "{evaluate}");
+    assert!(evaluate.contains("not billed"), "{evaluate}");
 }
 
 /// Only setting a policy is billed; the rest record a free row, except the

@@ -64,8 +64,8 @@ public client key's reports too (includeClientReports) needs an owner or admin. 
 auto-rollback turned off stays off until someone turns it back on, which also \
 re-arms its policy.
 
-evaluate_flag answers what a given user would get, and why, without touching \
-anything. Use it to check targeting before turning a flag on.
+evaluate_flag answers what a given user would get, and why, without changing \
+any flag. Use it to check targeting before turning a flag on.
 
 You are billed for changes, not for looking: reads, evaluate_flag, \
 flag_health, whoami and usage are free. Call usage to see where you stand.";

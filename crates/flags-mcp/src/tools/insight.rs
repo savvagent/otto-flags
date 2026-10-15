@@ -85,8 +85,8 @@ impl Flags {
     #[tool(
         name = "evaluate_flag",
         description = "What a given user would get from a flag right now, and why (which rule \
-                       matched, or their rollout bucket). Changes nothing and records nothing. \
-                       Use it to check targeting before turning a flag on. Free.",
+                       matched, or their rollout bucket). Changes no flag; the call is recorded as \
+                       usage but not billed. Use it to check targeting before turning a flag on.",
         annotations(read_only_hint = true)
     )]
     pub async fn evaluate_flag(
