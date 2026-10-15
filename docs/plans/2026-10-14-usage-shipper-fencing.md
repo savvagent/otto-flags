@@ -84,7 +84,7 @@ writes still pass). The contiguity test in `crates/flags-core/src/migrate.rs` mu
 
 **Model:** sonnet — SQL and a test fully specified here.
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`, directly after
+- [x] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`, directly after
   `tenant_isolation_is_enforced_on_every_tenant_table` (reuse the file's `as_app_unpinned`,
   `as_app_maintenance`, `sqlstate`, and `db` helpers):
 
@@ -178,12 +178,12 @@ async fn usage_outbox_tables_need_the_maintenance_marker_unpinned(pool: PgPool) 
   Adapt only what the compiler requires (for example the `rollback` method name on `otto_tenant::Tx`
   or a missing import); keep every assertion.
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db usage_outbox_tables_need_the_maintenance_marker_unpinned`
 Expected: FAIL on `usage_outbox: unpinned read without the marker` (left: 2, right: 0).
 
-- [ ] **Step 3: Create the migration**
+- [x] **Step 3: Create the migration**
   `crates/flags-core/migrations/0005_usage_outbox_maintenance.sql`:
 
 ```sql
@@ -225,7 +225,7 @@ CREATE POLICY usage_outbox_rejected_maintenance ON usage_outbox_rejected
   WITH CHECK (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');
 ```
 
-- [ ] **Step 4: Run it and see it pass**
+- [x] **Step 4: Run it and see it pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db`
 Expected: every `db` test passes (including the new one and
@@ -234,13 +234,13 @@ Expected: every `db` test passes (including the new one and
 (the migration contiguity test). Note: e2e shipper tests in `flags-server` still pass at this point
 because the test pool is a superuser, which RLS does not apply to.
 
-- [ ] **Step 5: Lint, format, extra**
+- [x] **Step 5: Lint, format, extra**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
 `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints
 nothing).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add crates/flags-core/migrations/0005_usage_outbox_maintenance.sql crates/flags-core/tests/db.rs
@@ -271,7 +271,7 @@ DEBUG line with the platform reason: keep those logs as they are.
 
 **Model:** opus — concurrency and transaction logic.
 
-- [ ] **Step 1: Mock platform usage gate** in `crates/flags-server/tests/e2e.rs`. Add to `struct
+- [x] **Step 1: Mock platform usage gate** in `crates/flags-server/tests/e2e.rs`. Add to `struct
   Platform`:
 
 ```rust
@@ -295,7 +295,7 @@ async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageR
 }
 ```
 
-- [ ] **Step 2: Write the failing tests** in `crates/flags-server/tests/e2e.rs`, after
+- [x] **Step 2: Write the failing tests** in `crates/flags-server/tests/e2e.rs`, after
   `a_receipt_naming_events_outside_the_batch_moves_nothing` (reuse `row_count`):
 
 ```rust
@@ -415,13 +415,13 @@ async fn the_usage_shipper_sets_the_maintenance_marker(pool: PgPool) {
   `Db` is not `Clone`, wrap it in `Arc`; import `otto_tenant::Db` if the file already names it as
   `Db`). Keep every assertion.
 
-- [ ] **Step 3: Run them and see them fail**
+- [x] **Step 3: Run them and see them fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e -- a_lapsed_usage_claim_leaves_the_row_to_the_newer_one the_usage_shipper_sets_the_maintenance_marker`
 Expected: both FAIL — the first on `row_count(.., "usage_outbox") == 1` after the first shipper
 (left: 0), the second on `n == 2` (left: 0: the shipper's unmarked claim sees no rows).
 
-- [ ] **Step 4: `maintenance::begin` returns `sqlx::Result`** in
+- [x] **Step 4: `maintenance::begin` returns `sqlx::Result`** in
   `crates/flags-core/src/maintenance.rs`:
 
 ```rust
@@ -440,7 +440,7 @@ pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres
   Existing callers (`platform_events::sweep`, `telemetry` sweep, `rollback::due_policies`) keep
   `?` (`crate::Error: From<sqlx::Error>`).
 
-- [ ] **Step 5: Fence and wrap the shipper** in `crates/flags-core/src/usage.rs`:
+- [x] **Step 5: Fence and wrap the shipper** in `crates/flags-core/src/usage.rs`:
 
   - `Row` gains `attempts: i32`; the claim's `RETURNING` adds `attempts`.
   - The claim runs as `let mut tx = crate::maintenance::begin(db).await?;` …
@@ -532,7 +532,7 @@ async fn reschedule(db: &Db, ids: &[i64], attempts: &[i32], reason: &str, cfg: &
     maintenance transaction and the writes after the claim are fenced on `(id, attempts)`; update
     the module doc's "Shipping is a background task" bullet the same way in one sentence.
 
-- [ ] **Step 6: Run the tests and see them pass**
+- [x] **Step 6: Run the tests and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-server --test e2e -- a_lapsed_usage_claim_leaves_the_row_to_the_newer_one the_usage_shipper_sets_the_maintenance_marker`
 Expected: both PASS. Then the full gate:
@@ -540,13 +540,13 @@ Expected: both PASS. Then the full gate:
 binary passes, including `usage_logs`, `a_rejected_usage_event_keeps_a_capped_reason`, and
 `a_receipt_naming_events_outside_the_batch_moves_nothing`, none skipped.
 
-- [ ] **Step 7: Lint, format, extra**
+- [x] **Step 7: Lint, format, extra**
 
 Run: `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`,
 `git diff --name-status --diff-filter=MDR origin/main...HEAD -- 'crates/*/migrations/*'` (prints
 nothing).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/flags-core/src/maintenance.rs crates/flags-core/src/usage.rs crates/flags-server/tests/e2e.rs
@@ -568,7 +568,7 @@ git commit -m "fix(core): fence usage shipper writes and run them as maintenance
 
 **Model:** haiku — a docs update to match the change.
 
-- [ ] **Step 1: Edit** the bullet in `docs/deploy/fly.md` that begins "Migration `0003` (#12)
+- [x] **Step 1: Edit** the bullet in `docs/deploy/fly.md` that begins "Migration `0003` (#12)
   gives the retention sweeps an unpinned read": after its sentence about `0002` and `0003`
   requiring the marker, add: "Migration `0005` (#68) does the same for `usage_outbox` and
   `usage_outbox_rejected`, for every command, and the usage shipper runs in a maintenance
@@ -576,8 +576,8 @@ git commit -m "fix(core): fence usage shipper writes and run them as maintenance
   production today; under a non-exempt pool role, a release without this change ships no usage
   while it runs against that schema (rollout overlap, rollback), and the rows wait in the outbox
   until a newer release ships them."
-- [ ] **Step 2: Check** with `git diff docs/deploy/fly.md` that only that bullet changed.
-- [ ] **Step 3: Commit**
+- [x] **Step 2: Check** with `git diff docs/deploy/fly.md` that only that bullet changed.
+- [x] **Step 3: Commit**
 
 ```bash
 git add docs/deploy/fly.md

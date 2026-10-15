@@ -1,6 +1,6 @@
 # Fence the usage shipper's claims and require the maintenance marker on the usage outbox
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#72)
 **Issues:** #67, #68 (one PR: both change `ship_once` in `crates/flags-core/src/usage.rs` and the
 `usage_outbox` tables)
 
