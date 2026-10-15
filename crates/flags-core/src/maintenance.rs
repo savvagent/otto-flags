@@ -2,12 +2,13 @@
 //! tables across every org.
 //!
 //! The unpinned row-level policies (`rollback_policies_checker`, the
-//! `*_retention_read` policies, `rollback_events_retention`,
-//! `usage_outbox_maintenance`, `usage_outbox_rejected_maintenance`) grant
-//! access only when no org is pinned **and** the transaction carries the
-//! marker `app.maintenance = 'on'` (#27). Unpinned alone is not enough: a
-//! request path that forgot to pin an org is unpinned too, and must see
-//! nothing.
+//! `*_retention_read` policies, `rollback_events_retention`) grant access only
+//! when no org is pinned **and** the transaction carries the marker
+//! `app.maintenance = 'on'` (#27). Unpinned alone is not enough: a request
+//! path that forgot to pin an org is unpinned too, and must see nothing. The
+//! restrictive policies (0003's `*_maintenance_delete`, 0005's
+//! `usage_outbox_maintenance` and `usage_outbox_rejected_maintenance`) leave
+//! pinned access alone and require the marker only when unpinned.
 //!
 //! **Only background maintenance code may call [`begin`]**: the retention
 //! sweeps, the rollback checker's backstop, and the usage shipper. Never a

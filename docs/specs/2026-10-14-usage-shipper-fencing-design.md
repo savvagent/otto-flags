@@ -159,12 +159,16 @@ enforced in production too (a change to every sweep; separate decision); the cla
 
    `$3`/`$4` are the receipt's rejected ids and their stored reasons
    (`telemetry::stored(reason, MAX_REJECTED_REASON)`). The per-event `error!`/`debug!` logs for
-   rejected events stay as they are (fixed reason above `debug`, #44). Then:
-   - `deleted < ids.len()`: `warn!` with counts only ("N of M claimed usage rows are no longer
-     held by this claim; left as they are"). Usually another shipper reclaimed them after this
-     claim lapsed; the org.deleted purge removing an org's rows is the other way.
-   - `moved < rejected.len()`: the existing `warn!` (counts, no platform text) that rejected
-     events were not recorded by this shipper, now worded as left to the newer claim.
+   rejected events keep their shape (fixed `reason = "rejected"` above `debug`, the platform's
+   reason at `debug` only, #44) and no longer promise the move: "the platform refused a usage
+   event; recording it in usage_outbox_rejected if this claim still holds it". Then, with the
+   two counts converted to `usize` once:
+   - `deleted < ids.len()`: `warn!` with counts only (`claimed`, `lost`): "usage rows this
+     shipper claimed are no longer held by its claim (reclaimed after it lapsed, or purged); left
+     as they are". Usually another shipper reclaimed them after this claim lapsed; the
+     org.deleted purge removing an org's rows is the other way.
+   - `moved < rejected.len()`: `warn!` with counts only (`rejected`, `recorded`, no platform
+     text): "rejected usage events are no longer held by this claim; left as they are".
    The previous per-event `INSERT` loop and the separate `DELETE` are replaced by this statement.
    `maintenance::begin` adds one `SET LOCAL` round trip to each transaction (the claim goes from
    one autocommit statement to BEGIN, SET, UPDATE, COMMIT, including the empty poll every 5 s);
@@ -173,9 +177,11 @@ enforced in production too (a change to every sweep; separate decision); the cla
    5 s poll.
 
 `reschedule(db, ids, attempts, reason, cfg)`: same backoff SQL, fenced with
-`FROM unnest($1::int8[], $5::int4[]) AS c(id, attempts) WHERE o.id = c.id AND o.attempts =
-c.attempts`, in a `maintenance::begin` transaction. Failures (begin, statement, commit) are logged
-and swallowed as today (the claim lease still holds the rows back).
+`FROM unnest($1::int8[], $2::int4[]) AS c(id, attempts) WHERE o.id = c.id AND o.attempts =
+c.attempts`, in a `maintenance::begin` transaction. Binds: `$1` ids, `$2` attempts, `$3` the
+stored reason (`last_error`), `$4`/`$5` the base and maximum backoff in seconds. Failures (begin,
+statement, commit) are logged and swallowed as today (the claim lease still holds the rows back),
+with a `rows` count field.
 
 `crates/flags-core/migrations/0005_usage_outbox_maintenance.sql` (Section 8).
 
@@ -268,6 +274,17 @@ Gates: test, lint, format, extra (no modified migration), and the `crates/**` po
     request. Release A: `Ok(1)`; the row is still in `usage_outbox` and `usage_outbox_rejected` is
     empty. Release B: `Ok(1)`; exactly one rejected row for the event; `usage_outbox` empty.
     Without fencing, A deletes and records the row (fails the first assertion).
+  - New `a_lapsed_claim_does_not_reschedule_the_newer_one` (#67): the mock gains `fail_usage`
+    (every batch answered 502). One row, lease 0; A and B both claim it and wait at the gate.
+    With `fail_usage` set, A is released and fails (`http_status`); the row keeps `attempts = 2`,
+    `last_error IS NULL`, and the `next_attempt_at` B's claim set. Then B is released with
+    `fail_usage` cleared: `Ok(1)`, both tables empty. Without the fence on `reschedule`, A
+    overwrites B's schedule and `last_error`.
+  - New `a_lapsed_claim_is_fenced_row_by_row` (#67): two rows, the first inserted with
+    `attempts = 5` (so the claim pairs 6 with it and 1 with the second), both rejected. A claims
+    both; the test then bumps only the second row's `attempts`, as a newer claim would. Releasing
+    A returns `Ok(2)`: the first row moves to `usage_outbox_rejected`, the second stays in
+    `usage_outbox`. Proves the ids and attempts arrays pair row by row.
   - New `the_usage_shipper_sets_the_maintenance_marker` (#68): a second pool on the test database
     whose connections run `SET ROLE otto_app` after connect (built in the test itself; the
     `db.rs` helpers live in another test binary). An unmarked unpinned `count(*)` on

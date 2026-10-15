@@ -21,16 +21,21 @@
 -- after a rollback, so usage waits in the outbox (nothing is lost) until a
 -- release with the marker ships it.
 
--- CREATE POLICY takes a lock that conflicts with every metered tool call's
--- insert: fail fast rather than queue behind a long transaction. sqlx runs
--- each migration in its own transaction, so SET LOCAL ends with it.
+-- CREATE POLICY takes an ACCESS EXCLUSIVE lock that blocks every read and
+-- write of the table for its duration: fail fast rather than queue behind a
+-- long transaction (and have every metered tool call queue behind this one).
+-- sqlx runs each migration in its own transaction, so SET LOCAL ends with it.
 SET LOCAL lock_timeout = '3s';
 
-CREATE POLICY usage_outbox_maintenance ON usage_outbox
+-- usage_outbox_rejected first: the previous release's shipper finishes a batch
+-- by inserting into usage_outbox_rejected and then deleting from usage_outbox.
+-- Taking the two locks in the same order avoids a lock-order deadlock with it
+-- while this migration runs.
+CREATE POLICY usage_outbox_rejected_maintenance ON usage_outbox_rejected
   AS RESTRICTIVE FOR ALL
   USING (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on')
   WITH CHECK (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');
-CREATE POLICY usage_outbox_rejected_maintenance ON usage_outbox_rejected
+CREATE POLICY usage_outbox_maintenance ON usage_outbox
   AS RESTRICTIVE FOR ALL
   USING (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on')
   WITH CHECK (current_org() IS NOT NULL OR current_setting('app.maintenance', true) = 'on');

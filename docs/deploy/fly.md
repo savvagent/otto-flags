@@ -198,10 +198,10 @@ gh run rerun <databaseId> -R savvagent/otto-flags --failed
 
 **A transient cause** (`canceling statement due to lock timeout`, a dropped connection, a machine
 stopped mid-boot): there is nothing to clear. Migrations that take strong locks set
-`SET LOCAL lock_timeout` (as `0002` and `0003` do) so a lock wait fails the boot quickly instead
-of queueing every query behind it. If one session keeps blocking, ending it is Rob's call, scoped
-so a mistyped pid cannot reach another database (no row returned means it was not on
-`otto_flags`):
+`SET LOCAL lock_timeout` (as `0002`, `0003`, and `0005` do) so a lock wait fails the boot
+quickly instead of queueing every query behind it. If one session keeps blocking, ending it is
+Rob's call, scoped so a mistyped pid cannot reach another database (no row returned means it was
+not on `otto_flags`):
 
 ```sql
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity
@@ -335,13 +335,13 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
 - Migration `0003` (#12) gives the retention sweeps an unpinned read so they work under a
   non-exempt pool role. Every unpinned policy added by `0002` and `0003` also requires the
   transaction-local marker `app.maintenance = 'on'` (#27), which only the background sweeps, the
-  checker's backstop, and the usage shipper set, so a request path that forgot to pin an org reads nothing.
-  Migration `0005` (#68) does the same for `usage_outbox` and `usage_outbox_rejected`, for every
-  command, and the usage shipper runs in a maintenance transaction. Under the superuser attach
-  role RLS does not apply, so this changes nothing in production today; under a non-exempt pool
-  role, a release without this change ships no usage while it runs against that schema (rollout
-  overlap, rollback), and the rows wait in the outbox until a newer release ships them. Ad-hoc
-  diagnostics as a non-exempt role need `SET LOCAL app.maintenance = 'on'` in their
+  checker's backstop, and the usage shipper set, so a request path that forgot to pin an org reads
+  nothing. Migration `0005` (#68) does the same for `usage_outbox` and `usage_outbox_rejected`,
+  for every command, and the usage shipper runs in a maintenance transaction. Under the superuser
+  attach role RLS does not apply, so this changes nothing in production today; under a non-exempt
+  pool role, a release from before `0005` ships no usage while it runs against that schema
+  (rollout overlap, rollback), and the rows wait in the outbox until a newer release ships them.
+  Ad-hoc diagnostics as a non-exempt role need `SET LOCAL app.maintenance = 'on'` in their
   transaction to see across orgs.
 
 Diagnostics (SELECT-only):

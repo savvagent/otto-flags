@@ -7,9 +7,10 @@
 //!   is down.
 //! - **Shipping is a background task** ([`run`]) that posts rows to the
 //!   platform and deletes what it answered for. The platform dedupes on the
-//!   row's `event_id`, so retries are free. Every outbox statement runs in a
-//!   maintenance transaction, and the writes after a claim are fenced on the
-//!   `(id, attempts)` it set, so a lapsed claim cannot touch a newer one's rows.
+//!   row's `event_id`, so retries are free. Every statement the shipper issues
+//!   runs in a maintenance transaction, and the writes after a claim are fenced
+//!   on the `(id, attempts)` it set, so a lapsed claim cannot touch a newer
+//!   one's rows.
 //! - **Enforcing** reads the platform's cached usage status (and counts this
 //!   org's unshipped rows on top). Off by default. If the platform cannot
 //!   answer, the call is allowed and still recorded.
@@ -368,9 +369,9 @@ pub async fn ship_once(
         // replaced so it is bounded and cannot fail the batch (#51).
         let reason = crate::telemetry::stored(&r.reason, MAX_REJECTED_REASON);
         tracing::error!(event_id = %r.event_id, reason = "rejected",
-            "the platform refused a usage event; moving it to usage_outbox_rejected");
+            "the platform refused a usage event; recording it in usage_outbox_rejected if this claim still holds it");
         tracing::debug!(event_id = %r.event_id, reason = "rejected", platform_reason = ?reason,
-            "the platform refused a usage event; moving it to usage_outbox_rejected");
+            "the platform refused a usage event; recording it in usage_outbox_rejected if this claim still holds it");
         rejected_ids.push(r.event_id);
         reasons.push(reason);
     }
@@ -382,7 +383,9 @@ pub async fn ship_once(
     // rejected only if this statement deleted it, and a row can be deleted
     // once, so a rejection is recorded at most once even when two shippers
     // finish together: the later DELETE waits on the row lock, then re-checks
-    // the fence against the row as the newer claim left it. The join on this
+    // the fence against the row as the newer claim left it. That re-check is
+    // how read committed, Postgres's default isolation and the one these
+    // transactions use, handles a row changed under it. The join on this
     // batch's deleted rows is also a second guard on the batch boundary (#63).
     let (deleted, moved): (i64, i64) = sqlx::query_as(
         "WITH gone AS ( \
@@ -406,13 +409,19 @@ pub async fn ship_once(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    if (deleted as usize) < ids.len() {
-        tracing::warn!(claimed = ids.len(), lost = ids.len() - deleted as usize,
+    // Counts from count(*), never negative.
+    let deleted = usize::try_from(deleted).unwrap_or(0);
+    let moved = usize::try_from(moved).unwrap_or(0);
+    if deleted < ids.len() {
+        tracing::warn!(claimed = ids.len(), lost = ids.len() - deleted,
             "usage rows this shipper claimed are no longer held by its claim (reclaimed after it lapsed, or purged); left as they are");
     }
-    if (moved as usize) < rejected_ids.len() {
-        tracing::warn!(rejected = rejected_ids.len(), recorded = moved,
-            "rejected usage events are no longer held by this claim; left for their current holder to record");
+    if moved < rejected_ids.len() {
+        tracing::warn!(
+            rejected = rejected_ids.len(),
+            recorded = moved,
+            "rejected usage events are no longer held by this claim; left as they are"
+        );
     }
     Ok(ids.len())
 }
@@ -460,9 +469,10 @@ async fn reschedule(db: &Db, ids: &[i64], attempts: &[i32], reason: &str, cfg: &
         tracing::warn!(
             reason = f.reason,
             sqlstate = f.sqlstate(),
+            rows = ids.len(),
             "could not record a usage shipping failure"
         );
-        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e, "could not record a usage shipping failure");
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), rows = ids.len(), error = %e, "could not record a usage shipping failure");
     }
 }
 
