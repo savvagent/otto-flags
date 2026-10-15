@@ -20,12 +20,14 @@
 use otto_tenant::Db;
 use sqlx::{Postgres, Transaction};
 
-/// The `search_path` every flags-core transaction runs with (#97): unqualified
-/// names resolve in `public` after the built-ins, never in a schema named after
-/// the current role (`"$user"`, first in the default path) and never in a
-/// same-session temporary table (`pg_temp`, otherwise searched first for
-/// relations). The same value `0004_audit_purge.sql` gives the purge function.
-/// Set transaction-locally, so it ends with the transaction like the role.
+/// The `search_path` every tenant, unpinned, and maintenance transaction runs
+/// with (#97): unqualified names resolve in `public` after the built-ins,
+/// never in a schema named after the current role (`"$user"`, first in the
+/// default path), and a temporary table (`pg_temp`, otherwise searched first
+/// for relations) can no longer shadow a `public` one. The same value
+/// `0004_audit_purge.sql` gives the purge function. Set transaction-locally,
+/// so it ends with the transaction like the role. Pinned transactions get it
+/// from `platform_events::begin_live` or `platform_events::begin_pinned`.
 pub(crate) const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
 
 /// Open an unpinned transaction on `db`'s pool as the tenant role, with no
@@ -64,15 +66,15 @@ pub(crate) async fn begin_as_tenant_role(
     // One round trip for the probes, the marker, the role switch, and the
     // search path (these run on every SDK key lookup). The probes are a
     // MATERIALIZED CTE so they read `current_user` before the outer select
-    // list can switch the role. Each conditional `set_config` sits in its own
-    // select-list column inside a CASE: a
-    // volatile function in a CASE arm runs only when that arm is taken, and
-    // a column of its own is never skipped the way one operand of a boolean
-    // expression can be. Exemption is a role attribute, never inherited
+    // list can switch the role. The marker and role `set_config`s each sit in
+    // their own select-list column inside a CASE: a volatile function in a
+    // CASE arm runs only when that arm is taken, and a column of its own is
+    // never skipped the way one operand of a boolean expression can be. Exemption is a role attribute, never inherited
     // through membership, so each role is checked by name. If the result is
     // refused below, the switch is rolled back with the transaction. The
-    // search path is set unconditionally: the pool's own role, kept when the
-    // tenant role cannot be assumed, has the same `"$user"` entry.
+    // search path is set unconditionally, in a column of its own: the pool's
+    // own role, kept when the tenant role cannot be assumed, has the same
+    // `"$user"`-first default path.
     let (assumable, pool_exempt, tenant_exempt, _, _, _): (
         bool,
         bool,

@@ -95,8 +95,10 @@ pub async fn begin_live(db: &Db, org: OrgId, user: Option<UserId>) -> Result<Tx<
     let mut tx = db.begin(org).await?;
     // The lock statement also pins the search path
     // (`crate::unpinned::SEARCH_PATH`), so a request transaction pays no extra
-    // round trip for it; the statement's own functions are built-ins, resolved
-    // in `pg_catalog` whatever the path.
+    // round trip for it. The statement itself is planned before the path takes
+    // effect, so it must never name a relation; its functions are `pg_catalog`
+    // built-ins. Everything after it, the tombstone re-check included, runs
+    // under the pinned path.
     sqlx::query(
         "SELECT pg_advisory_xact_lock_shared($1, hashtext($2::text)), \
                 set_config('search_path', $3::text, true)",
@@ -114,9 +116,11 @@ pub async fn begin_live(db: &Db, org: OrgId, user: Option<UserId>) -> Result<Tx<
 
 /// Open a transaction pinned to `org` with the search path pinned
 /// (`crate::unpinned::SEARCH_PATH`). For the webhook handlers and the boot
-/// check, which pin an org without `begin_live`'s lifecycle lock; request
-/// paths use [`begin_live`]. Every pinned transaction in flags-core goes
-/// through one of the two (`tests/db.rs` scans for a bare `db.begin(`).
+/// check, which pin an org without `begin_live`'s shared lifecycle lock and
+/// tombstone re-check (the org-deleting and member-removing handlers take the
+/// exclusive lock themselves); request paths use [`begin_live`]. Every pinned
+/// transaction in flags-core opens through one of the two (`tests/db.rs`
+/// scans for a bare `db.begin(` or `Db::begin(`).
 pub(crate) async fn begin_pinned(db: &Db, org: OrgId) -> Result<Tx<'static>> {
     let mut tx = db.begin(org).await?;
     sqlx::query("SELECT set_config('search_path', $1::text, true)")
