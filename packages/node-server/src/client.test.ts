@@ -90,7 +90,6 @@ describe('FlagClient', () => {
         ok: true,
         json: async () => ({
           enabled: true,
-          value: true,
           reason: 'match',
         }),
       });
@@ -107,7 +106,6 @@ describe('FlagClient', () => {
         ok: true,
         json: async () => ({
           enabled: false,
-          value: false,
           reason: 'default',
         }),
       });
@@ -123,7 +121,6 @@ describe('FlagClient', () => {
         ok: true,
         json: async () => ({
           enabled: true,
-          value: true,
         }),
       });
 
@@ -155,7 +152,6 @@ describe('FlagClient', () => {
         ok: true,
         json: async () => ({
           enabled: true,
-          value: true,
         }),
       });
 
@@ -243,7 +239,7 @@ describe('FlagClient', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          value: true,
+          enabled: true,
         }),
       });
 
@@ -255,7 +251,7 @@ describe('FlagClient', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          value: false,
+          enabled: false,
         }),
       });
 
@@ -288,7 +284,7 @@ describe('FlagClient', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          value: true,
+          enabled: true,
           variation: 'dark-mode',
         }),
       });
@@ -302,7 +298,7 @@ describe('FlagClient', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          value: true,
+          enabled: true,
           variation: 'variant-100',
         }),
       });
@@ -328,7 +324,7 @@ describe('FlagClient', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
-          value: true,
+          enabled: true,
           configuration: configObject,
         }),
       });
@@ -378,7 +374,7 @@ describe('FlagClient', () => {
     it('should merge application_id from config', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ value: true }),
+        json: async () => ({ enabled: true }),
       });
 
       await client.evaluate('test-flag', { user_id: 'user-123' });
@@ -393,7 +389,7 @@ describe('FlagClient', () => {
     it('should handle complex context attributes', async () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ value: true }),
+        json: async () => ({ enabled: true }),
       });
 
       const context: FlagContext = {
@@ -475,7 +471,7 @@ describe('FlagClient', () => {
     });
 
     test('fetches a valid key at one path segment', async () => {
-      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: true }) });
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ enabled: true }) });
       const client = makeClient(jest.fn());
 
       await client.evaluate('new-checkout.v2_b');
@@ -485,7 +481,7 @@ describe('FlagClient', () => {
     });
 
     test('treats ... as a valid key', async () => {
-      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: true }) });
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ enabled: true }) });
       const client = makeClient(jest.fn());
 
       await client.evaluate('...');
@@ -495,7 +491,7 @@ describe('FlagClient', () => {
     });
 
     test('accepts a 128-character key', async () => {
-      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ value: true }) });
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ enabled: true }) });
       const client = makeClient(jest.fn());
       const key = 'a'.repeat(128);
 
@@ -503,6 +499,81 @@ describe('FlagClient', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/${key}/evaluate`);
+    });
+  });
+  describe('evaluate contract (#112)', () => {
+    const baseUrl = 'https://flags.example.test';
+    let fetchMock: jest.Mock;
+    let originalFetch: typeof global.fetch;
+
+    // The evaluate response exactly as the server sends it (docs/SDK-DEVELOPER-GUIDE.md).
+    const serverBody = (enabled: boolean) => ({
+      key: 'checkout',
+      enabled,
+      scope: 'application',
+      variation: null,
+      configuration: null,
+      timestamp: 1700000000,
+      version: 3,
+      context: { environment: 'production' },
+    });
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      fetchMock = jest.fn();
+      global.fetch = fetchMock as unknown as typeof fetch;
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    const makeClient = (onError: jest.Mock, defaultValue: boolean) =>
+      new FlagClient({
+        apiKey: 'sdk_test_key',
+        baseUrl,
+        enableRealtime: false,
+        enableTelemetry: false,
+        defaults: { checkout: defaultValue },
+        onError,
+      });
+
+    test.each([true, false])('reads enabled=%s from the documented path', async (enabled) => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => serverBody(enabled) });
+      const onError = jest.fn();
+      const client = makeClient(onError, !enabled);
+
+      const result = await client.evaluate('checkout');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/checkout/evaluate`);
+      expect(fetchMock.mock.calls[0][1].method).toBe('POST');
+      expect(result.value).toBe(enabled);
+      expect(result.reason).toBe('evaluated');
+      expect(onError).not.toHaveBeenCalled();
+      client.close();
+    });
+
+    test.each([
+      [{ value: true }],
+      [{ enabled: 'true' }],
+      [{ enabled: 1 }],
+      [{ enabled: null }],
+      [null],
+    ])('treats %j as a failed lookup and does not cache it', async (body) => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => body });
+      const onError = jest.fn();
+      const client = makeClient(onError, false);
+
+      const first = await client.evaluate('checkout');
+      const second = await client.evaluate('checkout');
+
+      expect(first.value).toBe(false);
+      expect(first.reason).toBe('error');
+      expect(second.reason).toBe('error');
+      expect(onError).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      client.close();
     });
   });
 });
