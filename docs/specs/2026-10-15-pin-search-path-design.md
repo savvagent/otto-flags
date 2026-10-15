@@ -1,6 +1,6 @@
 # Tenant and maintenance transactions resolve names in public only
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#116)
 **Issue:** #97
 
 ## 1. Brief
@@ -97,7 +97,7 @@ pub(crate) const SEARCH_PATH: &str = "pg_catalog, public, pg_temp";
 1. **Unpinned and maintenance** (`unpinned.rs:50`, `begin_as_tenant_role`): the probe's outer
    select list gains a column `set_config('search_path', $3, true)`, bound to `SEARCH_PATH`,
    unconditional (no CASE: it applies whether or not the role is switched). The decoded tuple
-   gains one `Option<String>`/`String` slot that is ignored. If the transaction is then refused,
+   gains one ignored `String` slot (`set_config` never returns NULL). If the transaction is then refused,
    the rollback discards the setting with everything else.
 2. **Request transactions** (`platform_events.rs:94`, `begin_live`): the lifecycle-lock statement
    becomes `SELECT pg_advisory_xact_lock_shared($1, hashtext($2::text)), set_config('search_path',
@@ -170,21 +170,26 @@ New tests:
   `current_setting('search_path') = SEARCH_PATH`; it ends with the transaction (extend
   `the_role_and_marker_end_with_the_transaction`).
 - `tests/db.rs`, shared fixture `shadow_schema(pool, tables)`: as the superuser test role,
-  `CREATE SCHEMA otto_app AUTHORIZATION otto_app` and `CREATE TABLE otto_app.<t> (LIKE public.<t> INCLUDING ALL)` (defaults and unique
-  constraints too, so a pre-fix run fails by reaching the wrong table, not on `ON CONFLICT`)
-  owned by `otto_app`, with planted rows. Then:
-  - `unpinned_lookups_ignore_a_shadowing_schema`: planted `otto_app.deleted_orgs` row for org X;
-    `platform_events::revoked(X, user)` is false; planted `otto_app.app_keys` row for a fresh key;
-    `keys::resolve` of that key is not found.
-  - `request_transactions_ignore_a_shadowing_schema`: planted `otto_app.deleted_orgs` row;
-    `begin_live(X)` succeeds and a `flag_apps` read in it sees the `public` row, not a planted
-    `otto_app.flag_apps` row.
-  - `maintenance_transactions_ignore_a_shadowing_schema`: planted old `otto_app.platform_events`
-    row; `platform_events::sweep` deletes the old `public` row and leaves the planted one.
-  - `webhooks_ignore_a_shadowing_schema`: `team.deleted` delivered twice records its marker in
-    `public.platform_events` (second is `Duplicate`) and writes nothing to the shadow table.
-  Each must fail before the fix (verified red first).
-- Source scan `no_pinned_begin_outside_the_search_path_helpers`.
+  `CREATE SCHEMA otto_app AUTHORIZATION otto_app` and
+  `CREATE TABLE otto_app.<t> (LIKE public.<t> INCLUDING ALL)` owned by `otto_app` (defaults and
+  unique constraints too, so a pre-fix run fails by reaching the wrong table, not on
+  `ON CONFLICT`). One test per path, each red without the fix (as built, after review):
+  - `revocation_checks_ignore_a_shadowing_schema`: a planted `otto_app.deleted_orgs` row;
+    `platform_events::revoked` is false.
+  - `key_resolution_ignores_a_shadowing_schema`: empty shadow `app_keys`; `keys::resolve` still
+    finds the key.
+  - `request_tombstone_checks_ignore_a_shadowing_schema`: a planted shadow tombstone;
+    `begin_live` succeeds.
+  - `request_reads_ignore_a_shadowing_schema`: a planted shadow `flag_apps` row; `list_apps`
+    in `begin_live` sees only the `public` app.
+  - `maintenance_transactions_ignore_a_shadowing_schema`: `platform_events::sweep` deletes the
+    old `public` row and leaves the planted one.
+  - `team_deleted_ignores_a_shadowing_schema`, `org_deleted_ignores_a_shadowing_schema`,
+    `member_removed_ignores_a_shadowing_schema`: each webhook's tombstone and dedupe marker land
+    in `public`, and the shadow tables stay empty.
+  - `transactions_ignore_a_shadowing_temporary_table`: a same-session temporary
+    `deleted_orgs` holding a tombstone shadows nothing (`pg_temp` is last).
+- Source scan `no_pinned_begin_outside_the_search_path_helpers` (`db.begin(` and `Db::begin(`).
 
 ## 12. Risks and open questions
 

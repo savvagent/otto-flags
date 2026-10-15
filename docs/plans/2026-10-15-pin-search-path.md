@@ -18,6 +18,15 @@ source scan keeps it that way.
 
 **Spec:** `docs/specs/2026-10-15-pin-search-path-design.md`
 
+## As built
+
+Review of #116 split two tests and added four: the unpinned lookup test became
+`revocation_checks_…` and `key_resolution_…`, the request test became
+`request_tombstone_checks_…` and `request_reads_…`, the webhook test became one per event
+(`team_deleted_…`, `org_deleted_…`, `member_removed_…`), `transactions_ignore_a_shadowing_temporary_table`
+covers `pg_temp`, and the scan also matches `Db::begin(`. The probe's extra tuple slot is `String`.
+The spec's Testing approach lists the final set.
+
 ## Global Constraints
 
 - Gates, from the worktree `/home/robhicks/dev/otto-flags/.claude/worktrees/fix-97-pin-search-path`,
@@ -77,7 +86,7 @@ unchanged. No new round trip on `unpinned::begin`, `maintenance::begin`, or `beg
 
 **Model:** sonnet — specified change, some SQL care.
 
-- [ ] **Step 1: Write the failing DB tests** in `crates/flags-core/tests/db.rs`:
+- [x] **Step 1: Write the failing DB tests** in `crates/flags-core/tests/db.rs`:
 
 ```rust
 /// Plant a schema named after the tenant role, owned by it, holding empty
@@ -206,12 +215,12 @@ async fn webhooks_ignore_a_shadowing_schema(pool: PgPool) {
 
 Add `use flags_core::apps::AppsExt;` only if not already imported (it is, line 6).
 
-- [ ] **Step 2: Run them and see all four fail**
+- [x] **Step 2: Run them and see all four fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test db shadowing_schema`
 Expected: 4 failed (revoked true / AccessRevoked / public count 1 / public count 0), none skipped.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `unpinned.rs`, above `begin`:
 
@@ -300,14 +309,14 @@ Also in `unpinned.rs` tests, cover the fallback role: in
 `begin_keeps_a_non_exempt_role_that_cannot_assume_the_tenant_role`, before the rollback, assert
 `SELECT current_setting('search_path')` inside `tx` equals `SEARCH_PATH`.
 
-- [ ] **Step 4: Run and see them pass**
+- [x] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core`
 Expected: all pass, including the four shadow tests and the two unit tests; none skipped.
 Then `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings`
 (fix anything they report before committing).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core
@@ -328,7 +337,7 @@ git commit -m "fix(core): resolve names in public only in every flags-core trans
 
 **Model:** sonnet — mechanical refactor of an existing test.
 
-- [ ] **Step 1: Write the test** — factor the directory walk and per-file counting of
+- [x] **Step 1: Write the test** — factor the directory walk and per-file counting of
   `no_raw_pool_queries_outside_the_allowed_sites` (everything from `let crates = …` through
   building `found`) into `fn count_in_crate_src(patterns: &[&str]) -> BTreeMap<String, usize>`
   (keep the test-module tail check inside it), make the existing test call it with its
@@ -352,18 +361,18 @@ fn no_pinned_begin_outside_the_search_path_helpers() {
 }
 ```
 
-- [ ] **Step 2: Prove it bites** — temporarily revert one webhook site to `db.begin(org)`, run
+- [x] **Step 2: Prove it bites** — temporarily revert one webhook site to `db.begin(org)`, run
   `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test db no_pinned_begin` and see it fail, then restore.
 
-- [ ] **Step 3: Run and see it pass**
+- [x] **Step 3: Run and see it pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15448/otto_flags cargo test -p flags-core --test db no_`
 Expected: both scan tests pass.
 
-- [ ] **Step 4: Full gates** — test, lint, format, extra, and `podman build -t otto-flags:check .`
+- [x] **Step 4: Full gates** — test, lint, format, extra, and `podman build -t otto-flags:check .`
   (Global Constraints), all green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core/tests/db.rs
