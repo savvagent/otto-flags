@@ -1,7 +1,7 @@
 # MCP Tool Annotations Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** Every tool on `/mcp` declares `readOnlyHint` (and, for writes, `destructiveHint` and
 `idempotentHint`), pinned by tests that fail on an unannotated or misclassified tool.
@@ -48,7 +48,7 @@
 - Modify: `crates/flags-mcp/src/tools/org.rs`, `apps.rs`, `flags.rs`, `insight.rs`, `rollback.rs`
   (the `#[tool(...)]` attributes only)
 
-- [ ] **Step 1: Write the failing tests.** In `crates/flags-mcp/src/tools/mod.rs`, after `NAMES`,
+- [x] **Step 1: Write the failing tests.** In `crates/flags-mcp/src/tools/mod.rs`, after `NAMES`,
   add three `pub const` slices with a doc comment each explaining the rule (reads: no write scope,
   not billed; destructive: can switch off or alter live evaluation, or delete; idempotent: a
   repeat has no further effect, which excludes every billable tool since each call records usage):
@@ -75,24 +75,25 @@
      `"rollback.rs"`; for each name in `NAMES`, take the body from
      `format!("pub async fn {name}(")` to the first `"\n    }\n"` after it (the method's closing
      brace at impl indentation; rustfmt guarantees the shape), panicking with the tool and file
-     names if the function or its end is not found, or if the body is empty or contains a second
-     `pub async fn` (a layout change that would let one body run into the next). A `READ_ONLY` body must contain none of `FLAGS_WRITE`, `APPS_ADMIN`, `require_admin`,
+     names if the function or its end is not found, or if the body is empty or contains another method or helper at impl
+     indentation (`\n    pub `, `\n    async fn `, `\n    fn `), a layout change that would let
+     one body run into the next. A `READ_ONLY` body must contain none of `FLAGS_WRITE`, `APPS_ADMIN`, `require_admin`,
      `set_archived` (reads do call `self.charge`: every tool meters a non-billable usage row); every other body must contain at least one of `FLAGS_WRITE`,
      `APPS_ADMIN`, `set_archived` (archive/restore delegate their `FLAGS_WRITE` check to
      `Flags::set_archived`).
-- [ ] **Step 2: Run and see them fail.** `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp cargo test -p flags-mcp --lib tools::tests`
+- [x] **Step 2: Run and see them fail.** `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp cargo test -p flags-mcp --lib tools::tests`
   — `every_tool_is_annotated` and `annotations_match_the_pinned_sets` fail ("whoami has no
   annotations" or similar); `read_only_tools_change_nothing` passes (it checks existing code).
-- [ ] **Step 3: Annotate.** Add to each `#[tool(...)]`, after `description`:
+- [x] **Step 3: Annotate.** Add to each `#[tool(...)]`, after `description`:
   - read tools: `annotations(read_only_hint = true)`
   - `create_app`, `create_flag`: `annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false)`
   - `remove_rollback_policy`: `annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = true)`
   - every other write: `annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false)`
   Do not change descriptions, arguments, or bodies.
-- [ ] **Step 4: Run and see them pass.** Same command as Step 2: all `tools::tests` pass. Then the
+- [x] **Step 4: Run and see them pass.** Same command as Step 2: all `tools::tests` pass. Then the
   full gates: test (with `DATABASE_URL` on 15444), lint, format, extra — report pass counts per
   test binary.
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
   `feat(mcp): annotate every tool as read-only or destructive` with a body explaining that
   connector clients (Claude, ChatGPT) use the hints to auto-run reads and confirm writes, that the
   tests pin the classification and fail on an unannotated tool, and ending `Fixes #77`.

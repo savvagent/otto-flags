@@ -1,34 +1,36 @@
 # Annotate every MCP tool as read-only or destructive
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#88)
 **Issue:** #77
 
 ## 1. Brief
 
-From #77:
+From #77, verbatim:
 
-> People are starting to use Otto Flags from Claude (web or desktop) and ChatGPT as a custom
-> connector. Those clients use MCP tool annotations to decide which tools can run without asking
-> and which need the person's confirmation. None of the flags-mcp tools declare any annotations,
-> so a client either asks before every call, including harmless reads, or treats
-> `set_flag_environment` and `rollback_flag`, which change production behaviour, as no riskier
-> than `list_flags`.
+> ## Problem
 >
-> **Approach**
-> - Add `annotations(...)` to every `#[tool]` in `crates/flags-mcp/src/tools/`: reads get
->   `read_only_hint = true`; writes get `read_only_hint = false`, plus `destructive_hint = true`
->   where the change can switch off or alter live behaviour or delete something; purely additive
->   tools (`create_flag`, `create_app`) get `destructive_hint = false`; set `idempotent_hint`
->   where it is true.
-> - Add a test that lists the tools and fails on any tool without annotations.
+> People are starting to use Otto Flags from Claude (web or desktop) and ChatGPT as a custom connector. Those clients use MCP tool annotations to decide which tools can run without asking and which need the person's confirmation. None of the flags-mcp tools declare any annotations, so a client either asks before every call, including harmless reads, or treats `set_flag_environment` and `rollback_flag`, which change production behaviour, as no riskier than `list_flags`. otto-cxp already annotates its tools (see `crates/cxp-mcp/src/tools/support.rs`).
+>
+> ## Approach
+>
+> - Add `annotations(...)` to every `#[tool]` in `crates/flags-mcp/src/tools/`:
+>   - Reads (`whoami`, `usage`, `list_apps`, `list_flags`, `get_flag`, `flag_history`, `flag_health`, `evaluate_flag`, `propose_rollback`, `list_rollback_policies`, `rollback_events`) get `read_only_hint = true`.
+>   - Writes get `read_only_hint = false`, plus `destructive_hint = true` where the change can switch off or alter live behaviour or delete something: `set_flag_environment`, `rollback_flag`, `archive_flag`, `remove_rollback_policy`, `rotate_app_keys`, `update_flag`, `set_rollback_policy`.
+>   - Purely additive tools (`create_flag`, `create_app`) get `destructive_hint = false`.
+>   - Set `idempotent_hint` where it is true.
+> - Add a test that lists the tools and fails on any tool without annotations, so a new tool can't ship without them.
 > - Add a test that pins the read-only set.
 >
-> **Acceptance criteria**
+> ## Acceptance criteria
+>
 > - `tools/list` shows annotations on every tool.
 > - The read-only set exactly matches the tools that don't need `flags:write`.
 > - The new test fails when an unannotated tool is added.
 >
-> **Non-goals:** server-side confirmation prompts; scope changes.
+> ## Non-goals
+>
+> - Server-side confirmation prompts.
+> - Scope changes (consent narrowing is savvagent/otto-platform#43).
 
 ## 2. Premise corrections
 
@@ -56,7 +58,7 @@ From #77:
   true, which would mislabel the additive tools). Read tools set only `read_only_hint = true`; the
   MCP spec says the other hints are meaningful only when `readOnlyHint` is false.
 - **`open_world_hint` and `title` are left unset**: the issue does not ask for them, and otto-cxp
-  does not set them.
+  (`crates/cxp-mcp/src/tools/*.rs` in that repo, checked 2026-10-15) does not set them.
 - **`update_flag` is destructive** per the issue: replacing variations or configuration changes
   what live evaluations return.
 - **Test database on port 15444, not 15434.** The `test` gate's command names the shared
@@ -120,13 +122,18 @@ Tests in `crates/flags-mcp/src/tools/mod.rs` `tests`, beside the existing routin
    names `FLAGS_WRITE`, `APPS_ADMIN`, or `set_archived` (archive/restore delegate their scope check
    to `set_archived`, which checks `FLAGS_WRITE`). A body runs from `pub async fn <name>(` to the
    method's closing brace at impl indentation (the first `\n    }\n` after it). Reads do call
-   `self.charge` (every tool meters a non-billable usage row), so it is not forbidden; "not billed"
-   is the `BILLABLE` check.
+   `self.charge` (every tool but `propose_rollback` meters a non-billable usage row), so it is not
+   forbidden; "not billed" is the `BILLABLE` check. Added in review: a read body also may not call
+   any `flags-core` write method (`.create_app(`, `.set_environment(`, `.remove_policy(`, ...), and
+   no `IDEMPOTENT` tool may be billable.
+4. Added in review: `tools_list_carries_annotations` in `crates/flags-server/tests/e2e.rs` sends
+   a real `tools/list` to `/mcp` and checks every tool's camelCase hints on the wire and that the
+   `readOnlyHint: true` set equals `READ_ONLY`.
 
 ## 7. Invariants impact
 
 - **MCP auth:** unchanged; annotations are hints to clients, not authorization. Every tool still
-  checks its scope; test 3 asserts the write-scope checks are present.
+  checks its scope; test 3 asserts each write body names a write scope.
 - **Metering:** unchanged; test 3 reads `BILLABLE` without modifying it.
 - All other invariants (migrations, RLS, SQL placement, SDK contract, licensing): untouched.
 

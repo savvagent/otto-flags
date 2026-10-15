@@ -55,11 +55,15 @@ pub const NAMES: &[&str] = &[
     "rollback_events",
 ];
 
-/// Tools that only read. The rule: no write scope is required and no state
-/// changes. Every tool but `propose_rollback` records a usage row through
+/// Tools that only read. The rule: no write scope is required and no state a
+/// caller can observe changes. Every tool but `propose_rollback` records a usage row through
 /// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true`
 /// lets connector clients run these without asking. `propose_rollback` is a
 /// dry run and belongs here.
+///
+/// These three sets pin the `annotations(...)` on each `#[tool]`; they do not
+/// drive them. The tests below force the two to agree, so a reclassification
+/// shows up here in review.
 pub const READ_ONLY: &[&str] = &[
     "whoami",
     "usage",
@@ -76,7 +80,8 @@ pub const READ_ONLY: &[&str] = &[
 
 /// Writes that can switch off or alter live evaluation, or delete something
 /// (`destructiveHint = true`). Every write except the two creations qualifies:
-/// each replaces existing state, and a client should confirm before running one.
+/// each alters or deletes existing state or arms an automatic switch-off, and
+/// a client should confirm before running one.
 /// `create_app` and `create_flag` only add, so they are not listed.
 pub const DESTRUCTIVE: &[&str] = &[
     "update_app",
@@ -170,14 +175,22 @@ mod tests {
 
     /// Cross-checks the classification against the code. The source scan
     /// matches names, not behaviour: it catches a read-only tool that checks
-    /// a write scope or admin role, or a write that checks none, in its own
-    /// body (archive and restore delegate to `set_archived`).
+    /// a write scope or admin role or calls a `flags-core` write method, or a
+    /// write that names no write scope, in its own body (archive and restore
+    /// delegate to `set_archived`).
     #[test]
     fn read_only_tools_change_nothing() {
         for name in READ_ONLY {
             assert!(
                 !flags_core::usage::BILLABLE.contains(name),
                 "{name} is read-only but billable"
+            );
+        }
+        // A billed repeat is another charge, so no billable tool is idempotent.
+        for name in IDEMPOTENT {
+            assert!(
+                !flags_core::usage::BILLABLE.contains(name),
+                "{name} is idempotent but billable"
             );
         }
         let sources = [
@@ -207,7 +220,23 @@ mod tests {
                     && !body.contains("\n    fn "),
                 "{name} in {file}: body runs into the next function"
             );
-            let writes = ["FLAGS_WRITE", "APPS_ADMIN", "require_admin", "set_archived"];
+            // Write scopes, the admin check, and every `flags-core` write
+            // method a tool calls.
+            let writes = [
+                "FLAGS_WRITE",
+                "APPS_ADMIN",
+                "require_admin",
+                "set_archived",
+                ".create_app(",
+                ".set_app_environments(",
+                ".rotate_keys(",
+                ".create_flag(",
+                ".update_flag(",
+                ".set_environment(",
+                ".rollback_flag(",
+                ".set_policy(",
+                ".remove_policy(",
+            ];
             if READ_ONLY.contains(name) {
                 for w in writes {
                     assert!(
