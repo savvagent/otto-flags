@@ -1,7 +1,7 @@
 # Purge and sweep rejected usage Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** `org.deleted` also purges the org's `usage_outbox_rejected` rows, and an hourly sweep
 bounds that table at `usage::REJECTED_RETENTION_DAYS` (90).
@@ -48,6 +48,12 @@ No migration: the baseline and `0005` policies already allow both deletes.
 | **Modify.** `crates/flags-server/src/main.rs` | `sweep_loop` calls `sweep_rejected`; doc comment |
 | **Modify.** `crates/flags-core/tests/db.rs` | Purge test extended; new sweep test |
 
+## After review (PR #81)
+
+The purge comment states why `usage_outbox_rejected` must stay after `usage_outbox` (read committed,
+a later statement); the sweep test adds a row a day inside the window, which fails if the cutoff or
+its unit changes.
+
 ## Task Order & Rationale
 
 Task 1 (purge) and Task 2 (sweep) are independent; the purge is the PII half of the ticket, so it
@@ -66,7 +72,7 @@ goes first.
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Extend the test.** In `org_deleted_purges_everything_and_revokes_keys`, before the
+- [x] **Step 1: Extend the test.** In `org_deleted_purges_everything_and_revokes_keys`, before the
   webhook `body` is built (after the rollback-event `tx.commit()`), insert one rejected row per
   org on the superuser test pool:
 
@@ -100,11 +106,11 @@ goes first.
     assert_eq!(others, 1, "another org's rejected usage stays");
 ```
 
-- [ ] **Step 2: Run it; it fails.**
+- [x] **Step 2: Run it; it fails.**
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db org_deleted_purges_everything_and_revokes_keys`
   Expected: FAIL (`detail["usage_outbox_rejected"]` is null).
 
-- [ ] **Step 3: Implement.** In `crates/flags-core/src/platform_events.rs`, `org_deleted`, add
+- [x] **Step 3: Implement.** In `crates/flags-core/src/platform_events.rs`, `org_deleted`, add
   `"usage_outbox_rejected",` after `"usage_outbox",` in the delete list, and extend the comment
   above the list:
 
@@ -116,9 +122,9 @@ goes first.
     // records a rejection for an outbox row its own fenced DELETE removed.
 ```
 
-- [ ] **Step 4: Run it; it passes.** Same command: 1 passed, not skipped. Then the full gates.
+- [x] **Step 4: Run it; it passes.** Same command: 1 passed, not skipped. Then the full gates.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add crates/flags-core/src/platform_events.rs crates/flags-core/tests/db.rs
@@ -149,7 +155,7 @@ additive).
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs` (add
+- [x] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs` (add
   `usage` to the `flags_core::{...}` imports if it is not already imported; check the file's
   `use` lines):
 
@@ -193,11 +199,11 @@ async fn rejected_usage_is_swept_after_its_retention(pool: PgPool) {
 }
 ```
 
-- [ ] **Step 2: Run it; it fails to compile** (`sweep_rejected` and `REJECTED_RETENTION_DAYS` do
+- [x] **Step 2: Run it; it fails to compile** (`sweep_rejected` and `REJECTED_RETENTION_DAYS` do
   not exist):
   `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db rejected_usage_is_swept_after_its_retention`
 
-- [ ] **Step 3: Implement in `crates/flags-core/src/usage.rs`.** Near the top-level constants
+- [x] **Step 3: Implement in `crates/flags-core/src/usage.rs`.** Near the top-level constants
   (after `WARN_AT`):
 
 ```rust
@@ -238,9 +244,9 @@ pub async fn sweep_rejected(db: &Db) -> Result<u64> {
 //!   [`REJECTED_RETENTION_DAYS`], and goes with its org on `org.deleted`.
 ```
 
-- [ ] **Step 4: Run the test; it passes.** Same command: 1 passed, not skipped.
+- [x] **Step 4: Run the test; it passes.** Same command: 1 passed, not skipped.
 
-- [ ] **Step 5: Call it from the server.** In `crates/flags-server/src/main.rs`, `sweep_loop`, after
+- [x] **Step 5: Call it from the server.** In `crates/flags-server/src/main.rs`, `sweep_loop`, after
   the `flags_core::telemetry::sweep` `match`, add (same shape as that one):
 
 ```rust
@@ -267,10 +273,10 @@ pub async fn sweep_rejected(db: &Db) -> Result<u64> {
   platform-event markers, removed-member tombstones, error reports, old evaluation buckets, and
   rejected usage events."
 
-- [ ] **Step 6: Gates.** `cargo fmt --all`, then test, lint, format, extra, and
+- [x] **Step 6: Gates.** `cargo fmt --all`, then test, lint, format, extra, and
   `podman build -t otto-flags:check .` as in Global Constraints.
 
-- [ ] **Step 7: Commit.**
+- [x] **Step 7: Commit.**
 
 ```bash
 git add crates/flags-core/src/usage.rs crates/flags-server/src/main.rs crates/flags-core/tests/db.rs

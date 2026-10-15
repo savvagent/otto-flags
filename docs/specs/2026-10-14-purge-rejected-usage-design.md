@@ -1,6 +1,6 @@
 # Purge and sweep rejected usage events
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#81)
 **Issue:** #74
 
 ## 1. Brief
@@ -144,8 +144,9 @@ migrations extra gate, `podman build -t otto-flags:check .`.
   `usage_outbox_rejected` row for each org before the purge; assert
   `detail["usage_outbox_rejected"] == 1`, the org's rows are gone, and the other org's row stays.
 - `crates/flags-core/tests/db.rs`, new `rejected_usage_is_swept_after_its_retention`: on the
-  default pool, two orgs, one row each at `REJECTED_RETENTION_DAYS + 1` days old and one fresh;
-  `sweep_rejected` returns 2 and each org keeps its fresh row.
+  default pool, two orgs, rows at `REJECTED_RETENTION_DAYS + 1`, `REJECTED_RETENTION_DAYS - 1`, and
+  1 day old; `sweep_rejected` returns 2 and each org keeps the two rows inside the window (the
+  near-cutoff row pins the cutoff and its unit; added after review, #81).
 
 ## 12. Risks & open questions
 
