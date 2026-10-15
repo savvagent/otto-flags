@@ -60,7 +60,7 @@ One task: the edits are small and only meaningful together (the clippy fix is un
 
 **Model:** haiku — mechanical, fully specified.
 
-- [ ] **Step 1: Write the failing test** at the end of `src/types.rs`:
+- [x] **Step 1: Write the failing test** at the end of `src/types.rs`:
 
 ```rust
 #[cfg(test)]
@@ -78,11 +78,11 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run it, see it fail** (in `packages/rust-server`, with
+- [x] **Step 2: Run it, see it fail** (in `packages/rust-server`, with
   `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp`):
   `cargo test --locked --lib config_override_options_default_validates`
   → FAIL (derived `Default` gives `validate: false`).
-- [ ] **Step 3: Implement:** in `src/types.rs` change the derive to `#[derive(Debug, Clone)]` and
+- [x] **Step 3: Implement:** in `src/types.rs` change the derive to `#[derive(Debug, Clone)]` and
   add, after the struct:
 
 ```rust
@@ -96,13 +96,13 @@ impl Default for ConfigOverrideOptions {
   In `src/client.rs` `set_config_override`: `let opts = options.unwrap_or_default();`.
   In `src/cache.rs`: delete `Cache::get` and its doc comment.
   In `tests/dynamic_config_test.rs`: drop the unused `Context` from the `otto_flags` import.
-- [ ] **Step 4: Run it, see it pass**, then `cargo fmt` and every gate in Global Constraints.
-- [ ] **Step 5: `CLAUDE.md`:** replace the two Rust SDK known-red lines with this line verbatim:
+- [x] **Step 4: Run it, see it pass**, then `cargo fmt` and every gate in Global Constraints.
+- [x] **Step 5: `CLAUDE.md`:** replace the two Rust SDK known-red lines with this line verbatim:
 
 ```
 - known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile) — #4
 ```
-- [ ] **Step 6: Commit:** `fix(sdk): make the rust sdk pass rustfmt and clippy`, body explaining
+- [x] **Step 6: Commit:** `fix(sdk): make the rust sdk pass rustfmt and clippy`, body explaining
   the `Default` trap and the `#4` split, ending `Fixes #15`.
 
 Before merge (ship phase): the spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)` and these boxes

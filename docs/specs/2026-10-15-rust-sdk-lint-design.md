@@ -1,6 +1,6 @@
 # Rust SDK passes rustfmt and clippy on its library
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#86)
 **Issue:** #15
 
 ## 1. Brief
