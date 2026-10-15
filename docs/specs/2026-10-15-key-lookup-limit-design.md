@@ -53,7 +53,7 @@ semantics unchanged; no new config secret.
 - **A global concurrency cap, not a per-client limit.** A per-client limit needs a decision on
   trusting `Fly-Client-IP`, and a flood from many addresses defeats it anyway; the cap needs no
   client identity and bounds the shared resource directly. It does not refuse anything in normal
-  operation (section 6, sizing).
+  operation (section 6, Sizing).
 - **Permits derive from the pool size; no new config key.** `permits = max(1, (max_connections -
   1) / 2)`: half of what the listener leaves, rounded down. On the production pool of 5 that is 2,
   so a flood holds at most 2 connections and the listener's 1 leaves 2 free for evaluation,
@@ -64,9 +64,11 @@ semantics unchanged; no new config secret.
   `KEY_LOOKUP_WAIT` (2 s, under the pool's 5 s acquire timeout) is refused with the SDK
   surface's existing `503 temporarily_unavailable` body and `Retry-After: 5`. `503` rather than
   `429`: the limit is global, not the caller's rate, and `503` is the status every SDK already
-  treats as "serve cached or default values" (`docs/SDK-DEVELOPER-GUIDE.md`, Error Handling; the
-  server already sends it for database failures). The error code is `busy` so logs and tests can
-  tell it from a database failure.
+  must already survive: the server sends it, with `Retry-After: 5`, for every database failure
+  (`crates/flags-api/src/error.rs`), and the invariant is that SDKs fall back to defaults and
+  cached values on any failed lookup. The guide's status table lists only `500` among server
+  errors; this change adds a `503` row. The error code is `busy` so logs and tests can tell it
+  from a database failure.
 - **Only database lookups take a permit.** A malformed key and a cached unknown key are answered
   before the gate, so a repeating bad client never queues. A key that resolves takes a permit
   for its lookup, as it must: a key is only known to be valid after the lookup.
@@ -127,13 +129,19 @@ pub async fn resolve_cached(db: &Db, unknown: &UnknownKeys, limit: &KeyLookups, 
 `resolve_cached`: malformed key → `Ok(None)`; cached unknown hash → `Ok(None)`; else acquire an
 owned permit within `limit.wait` (timeout → `Err(Error::Busy)`), then run the lookup in a
 `tokio::spawn`ed task that owns the permit, a clone of `db`, and the hash, and drops the permit
-only after `resolve_hash` returns. Awaiting the `JoinHandle` gives the answer; if the request is
-dropped, the task still finishes and only then frees the permit. A `JoinError` (the task
-panicked) is re-raised as a panic, as it would have been inline. `Ok(None)` is cached as today.
+only after `resolve_hash` returns. The task also records an `Ok(None)` in `unknown` (an
+`Arc<UnknownKeys>`, so `resolve_cached` takes `&Arc<UnknownKeys>`), so a dropped request's answer
+is still cached. Awaiting the `JoinHandle` gives the answer; if the request is dropped, the task
+still finishes and only then frees the permit. A `JoinError` (the task panicked) is re-raised as
+a panic, as it would have been inline.
 
 `resolve_hash`: acquires a `PoolConnection` explicitly, runs the unpinned transaction on it
 (`unpinned::begin_on`), and awaits `PoolConnection::return_to_pool()` before returning, so the
-release ping is inside the caller's await (and inside the permit). Same six round trips.
+release ping is inside the caller's await (and inside the permit). Same six round trips. The
+transaction work runs in an inner async fn whose result is held while `return_to_pool()` is
+awaited on every outcome, success or error; no `?` may return before it, or `Drop` would fall
+back to sqlx's spawned release and free the permit early. After `return_to_pool()` the
+connection's `Drop` spawns nothing (production `min_connections` is 0).
 
 `crates/flags-core/src/unpinned.rs`: the probe moves into a helper taking a `Transaction<'c, _>`;
 `begin_as_tenant_role` calls it on `db.pool().begin()` as today, and a new
@@ -145,8 +153,21 @@ retry shortly", code `busy`, `retriable` and `is_transient` true, `is_internal` 
 `crates/flags-api`: `AppState` gains `pub key_lookups: Arc<KeyLookups>`, built in `AppState::new`
 from `db.pool().options().get_max_connections()` (signature unchanged). The `Sdk` extractor
 passes it. `ApiError::from(Error::Busy)` → `503`, `busy`, "the flag service is busy; serve
-cached or default values and retry", with the `Retry-After: 5` every `503` already carries. It is
-logged at most once a second at `warn` (a flood must not flood the log), never per request.
+cached or default values and retry", with the `Retry-After: 5` every `503` already carries. The
+arm comes before the generic `e =>` arm (otherwise a non-internal error becomes `400`). It is
+logged at most once a second at `warn` (a flood must not flood the log), never per request
+above `debug`; the limiter is a process-wide static in `flags-api/src/error.rs`.
+
+### Sizing
+
+Every SDK request with a valid key still does one lookup, now at most `permits` (2) at a time.
+A lookup is six round trips; inside Fly's private network to `otto-db` a round trip is well under
+a millisecond to a few milliseconds, so one lookup holds its permit for roughly 3 to 20 ms, and
+two permits clear roughly 100 to 600 lookups a second. A lookup waits up to 2 s for a permit, so
+a burst of up to a few hundred simultaneous valid requests queues and succeeds. The service's
+SDK traffic is far below that (a handful of apps; SDKs fetch the flag list once and then stream
+or poll), so in normal operation the semaphore is uncontended and adds nothing but a
+`tokio::spawn`.
 
 Public interface: additive. Rust API (`KeyLookups`, `KEY_LOOKUP_WAIT`, `Error::Busy`, an
 `AppState` field, `resolve_cached`'s new parameter, all workspace-internal). Wire: a new `503`
@@ -156,8 +177,8 @@ cause with code `busy`, a status SDKs already handle; nothing else changes.
 
 - **The database is small and shared:** the point of the change; the lookup's six round trips are
   unchanged and now bounded in concurrency.
-- **SDK REST contract stable:** additive; `503` + `Retry-After` was already a documented outcome
-  of a database failure. The guide's status table gains a `503` row.
+- **SDK REST contract stable:** additive; `503` + `Retry-After` was already what the server
+  sends on a database failure. The guide's status table gains a `503` row.
 - **SDKs fall back on errors:** every SDK treats `5xx` as "serve cached or default".
 - **Client keys are public / stored hashed:** only hashes are held; nothing new is stored.
 - **SDK path never calls the platform; no SQL outside flags-core; runtime queries only:**
@@ -190,7 +211,8 @@ None.
 Gates per the section (test DB on 15451), clippy, fmt, migrations check, podman build.
 
 - `crates/flags-api/tests/key_lookups.rs` (new binary): a pool of 5 on the test database;
-  `AppState` with `KeyLookups::new(2, 300 ms)`; a separate connection takes
+  `AppState::new` on it, then `state.key_lookups` overwritten with `KeyLookups::new(2, 300 ms)`
+  (the signature of `new` is unchanged); a separate connection, outside the 5-pool, takes
   `LOCK TABLE public.app_keys IN ACCESS EXCLUSIVE MODE` in an open transaction, so every lookup
   blocks in the database holding its connection. Send 20 requests with distinct random keys.
   Wait until both permits are taken and Postgres shows two lookups waiting on the lock; then
@@ -209,5 +231,8 @@ Gates per the section (test DB on 15451), clippy, fmt, migrations check, podman 
   ones and may get `503` too. That is the intended trade: the SDKs serve cached or default values
   and the rest of the service (evaluation for already-authenticated work, MCP, `/readyz`,
   background) keeps working. A per-client limit would be the next step if this proves too coarse.
+- `PoolConnection::return_to_pool` is `#[doc(hidden)] pub` in sqlx 0.8.6; `Cargo.lock` pins it.
+  A sqlx upgrade that removes it fails to compile, and `key_lookups.rs` would catch a behavior
+  change (the dropped-request test).
 - Waiting requests hold a socket and a small future each, up to 2 s; hyper bounds connections,
   not this code.
