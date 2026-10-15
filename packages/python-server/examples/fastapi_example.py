@@ -11,6 +11,8 @@ Run:
     uvicorn examples.fastapi_example:app --reload
 """
 
+from __future__ import annotations
+
 import os
 from contextlib import asynccontextmanager
 from typing import Annotated
