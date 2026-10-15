@@ -109,5 +109,16 @@ describe('FlagClient', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/.../evaluate`);
     });
+
+    test('accepts a 128-character key', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ enabled: true }) });
+      const client = makeClient(jest.fn());
+      const key = 'a'.repeat(128);
+
+      await client.evaluate(key);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/${key}/evaluate`);
+    });
   });
 });

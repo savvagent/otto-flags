@@ -428,6 +428,17 @@ class TestInvalidFlagKey:
         assert result.reason == "evaluated"
 
     @respx.mock
+    def test_128_character_key_is_valid(self, client_config: FlagClientConfig) -> None:
+        key = "a" * 128
+        route = respx.post(
+            f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
+        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        with FlagClient(client_config) as client:
+            result = client.evaluate(key)
+        assert route.called
+        assert result.reason == "evaluated"
+
+    @respx.mock
     def test_triple_dot_key_is_valid(self, client_config: FlagClientConfig) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/.../evaluate"

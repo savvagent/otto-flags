@@ -392,6 +392,18 @@ class TestAsyncInvalidFlagKey:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_128_character_key_is_valid(self, async_config: FlagClientConfig) -> None:
+        key = "a" * 128
+        route = respx.post(
+            f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
+        ).mock(return_value=httpx.Response(200, json={"value": True}))
+        async with AsyncFlagClient(async_config) as client:
+            result = await client.evaluate(key)
+        assert route.called
+        assert result.reason == "evaluated"
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_triple_dot_key_is_valid(self, async_config: FlagClientConfig) -> None:
         route = respx.post(
             "https://otto-flags.savvagent.com/api/flags/.../evaluate"

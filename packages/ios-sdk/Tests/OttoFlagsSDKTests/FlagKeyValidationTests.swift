@@ -53,11 +53,12 @@ final class FlagKeyValidationTests: XCTestCase {
         lock.unlock()
     }
 
-    /// Requests to the per-flag endpoints only (polling may fetch other paths).
+    /// Every request except the flag-list poll. A steered key such as `a?b` would
+    /// request `/v1/flags/a`, so filtering on the endpoint suffix would miss it.
     private func flagRequests() -> [URL] {
         lock.lock()
         defer { lock.unlock() }
-        return urls.filter { $0.path.hasSuffix("/evaluate") || $0.path.hasSuffix("/variation") }
+        return urls.filter { $0.path != "/v1/flags" }
     }
 
     private var invalidKeys: [String] {
