@@ -5661,6 +5661,18 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
         // the notify listener its clone.
         ("flags-server/src/main.rs", 2),
     ]);
+    let found = count_in_crate_src(&PATTERNS);
+    let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        found, allowed,
+        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+    );
+}
+
+/// How often any of `patterns` occurs in each workspace crate's non-test
+/// `src`, by path relative to `crates/`: comment lines and the trailing
+/// `#[cfg(test)] mod tests` (which must be the file's last item) are skipped.
+fn count_in_crate_src(patterns: &[&str]) -> BTreeMap<String, usize> {
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -5715,17 +5727,31 @@ fn no_raw_pool_queries_outside_the_allowed_sites() {
             let n: usize = code
                 .lines()
                 .filter(|l| !l.trim_start().starts_with("//"))
-                .map(|l| PATTERNS.iter().map(|p| l.matches(p).count()).sum::<usize>())
+                .map(|l| patterns.iter().map(|p| l.matches(p).count()).sum::<usize>())
                 .sum();
             if n > 0 {
                 found.insert(name, n);
             }
         }
     }
+    found
+}
+
+/// Every pinned transaction in the crates' source opens through
+/// `platform_events::begin_live` or `platform_events::begin_pinned`, which pin
+/// the search path to `public` (#97); a bare `Db::begin` would run with the
+/// role's default path, where a schema named after the role comes first.
+/// Textual, like the scan above: it matches `db.begin(`, and every `Db` in the
+/// workspace is held as `db` (or `self.db`, `state.db`), so one held under
+/// another name would escape it.
+#[test]
+fn no_pinned_begin_outside_the_search_path_helpers() {
+    let found = count_in_crate_src(&["db.begin("]);
     let found: BTreeMap<&str, usize> = found.iter().map(|(k, v)| (k.as_str(), *v)).collect();
     assert_eq!(
-        found, allowed,
-        "raw pool access outside the allowed sites; route it through `unpinned::begin`"
+        found,
+        BTreeMap::from([("flags-core/src/platform_events.rs", 2)]),
+        "open pinned transactions with `begin_live` or `begin_pinned`"
     );
 }
 
