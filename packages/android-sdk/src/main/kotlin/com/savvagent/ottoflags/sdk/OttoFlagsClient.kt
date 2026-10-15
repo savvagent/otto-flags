@@ -6,6 +6,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.*
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -130,6 +131,12 @@ class OttoFlagsClient(
     suspend fun evaluate(flagKey: String, userContext: UserContext): Result<FlagEvaluationResult> {
         return withContext(Dispatchers.IO) {
             try {
+                if (!isValidFlagKey(flagKey)) {
+                    val message = invalidKeyMessage(flagKey)
+                    logError(message)
+                    return@withContext Result.failure(OttoFlagsException(message))
+                }
+
                 // Check cache first
                 flagCache[flagKey]?.let { cached ->
                     var configuration = cached.configuration
@@ -160,7 +167,7 @@ class OttoFlagsClient(
                 }
 
                 // Fetch from API
-                val url = "${config.apiUrl}/v1/flags/$flagKey/evaluate"
+                val url = flagUrl(flagKey, "evaluate")
                 val json = userContext.toJson()
 
                 val request = Request.Builder()
@@ -261,7 +268,12 @@ class OttoFlagsClient(
     ): T {
         return withContext(Dispatchers.IO) {
             try {
-                val url = "${config.apiUrl}/v1/flags/$flagKey/variation"
+                if (!isValidFlagKey(flagKey)) {
+                    logError(invalidKeyMessage(flagKey))
+                    return@withContext defaultValue
+                }
+
+                val url = flagUrl(flagKey, "variation")
                 val json = userContext.toJson()
 
                 val request = Request.Builder()
@@ -547,8 +559,60 @@ class OttoFlagsClient(
         return result
     }
 
+    /**
+     * Build `<apiUrl>/v1/flags/<flagKey>/<action>` with the key as a single, encoded
+     * path segment. An unparsable `apiUrl` throws IllegalArgumentException, which the
+     * callers' try blocks turn into their failure path.
+     */
+    private fun flagUrl(flagKey: String, action: String): HttpUrl =
+        config.apiUrl.toHttpUrl().newBuilder()
+            .addPathSegment("v1")
+            .addPathSegment("flags")
+            .addPathSegment(flagKey)
+            .addPathSegment(action)
+            .build()
+
+    private fun invalidKeyMessage(flagKey: String): String =
+        "Invalid flag key ${escapeForMessage(flagKey.take(64))} (${flagKey.length} characters); not evaluated"
+
     companion object {
         private const val TAG = "OttoFlagsClient"
+        private const val MAX_FLAG_KEY_LENGTH = 128
+
+        /**
+         * Whether [key] is a flag key this SDK will put in a request URL: 1 to 128
+         * characters, each one of A-Z a-z 0-9 `-` `_` `.`, and not `.` or `..`.
+         *
+         * This mirrors the server's key rule. A key outside it could steer the request
+         * (and the SDK key in its Authorization header) to another endpoint: `/`, `?`
+         * and `#` change the path or query, and `.` or `..` cannot be carried as a URL
+         * path segment because clients normalize them away (#107). Whole-string match,
+         * no trimming.
+         */
+        internal fun isValidFlagKey(key: String): Boolean {
+            if (key.isEmpty() || key.length > MAX_FLAG_KEY_LENGTH) return false
+            if (key == "." || key == "..") return false
+            return key.all { c ->
+                c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c == '-' || c == '_' || c == '.'
+            }
+        }
+
+        /**
+         * Quote [text] for a log or error message: printable ASCII other than `"` and
+         * `\` is kept, everything else becomes `\uXXXX`. Deliberately not org.json,
+         * which is a stub in local unit tests.
+         */
+        internal fun escapeForMessage(text: String): String {
+            val sb = StringBuilder("\"")
+            for (c in text) {
+                if (c in ' '..'~' && c != '"' && c != '\\') {
+                    sb.append(c)
+                } else {
+                    sb.append("\\u").append(String.format("%04x", c.code))
+                }
+            }
+            return sb.append('"').toString()
+        }
     }
 }
 
