@@ -1697,6 +1697,8 @@ async fn run<E: EntitlementSource>(
                         }
                     }
                     Err(e) => {
+                        // Text-free fields only: database text never reaches
+                        // a log above debug (#54).
                         let f = e.failure_reason();
                         tracing::warn!(
                             code = e.code(), reason = f.reason, status = f.status,

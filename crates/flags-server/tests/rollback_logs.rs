@@ -2,6 +2,10 @@
 //! with the text-free fields of `Error::failure_reason` above `debug`, and the
 //! same fields plus the error text only at `debug` (#54).
 //!
+//! The third site, a policy `check_flag` could not act on, logs the same
+//! fields but is not reached here: it needs a policy to fail mid-check against
+//! a working database. `log_text.rs` scans it with the rest.
+//!
 //! Its own test binary, with one test: `tracing` caches per callsite whether
 //! any subscriber is interested, so another test in the same binary hitting
 //! the same callsite with no subscriber can make this one miss its events.
@@ -96,13 +100,20 @@ async fn checker_failures_log_reasons_above_debug_and_text_only_at_debug() {
     task.await.expect("checker task");
 
     let logs = capture.text();
+    // What the error itself says: only the debug twins may carry it.
+    let text = sqlx::Error::PoolClosed.to_string();
     for (message, debug_message) in [(BACKSTOP, BACKSTOP_DEBUG), (CHECK, CHECK_DEBUG)] {
         let warn = lines(&logs, "WARN", message);
         assert_eq!(warn.len(), 1, "{message}:\n{logs}");
         let warn = warn[0];
         assert!(warn.contains("code=\"internal_error\""), "{warn}");
         assert!(warn.contains("reason=\"pool_closed\""), "{warn}");
+        // A closed pool has no status, SQLSTATE, or transport: absent, not empty.
+        for absent in ["status=", "sqlstate=", "transport="] {
+            assert!(!warn.contains(absent), "{warn}");
+        }
         assert!(!warn.contains("error="), "{warn}");
+        assert!(!warn.contains(&text), "{warn}");
 
         let debug = lines(&logs, "DEBUG", debug_message);
         assert_eq!(debug.len(), 1, "{debug_message}:\n{logs}");
@@ -110,5 +121,9 @@ async fn checker_failures_log_reasons_above_debug_and_text_only_at_debug() {
         assert!(debug.contains("code=\"internal_error\""), "{debug}");
         assert!(debug.contains("reason=\"pool_closed\""), "{debug}");
         assert!(debug.contains("error="), "{debug}");
+        assert!(debug.contains(&text), "{debug}");
     }
+    // A closed pool is transient: the failed check is retried.
+    let check = lines(&logs, "WARN", CHECK)[0];
+    assert!(check.contains("retry=true"), "{check}");
 }
