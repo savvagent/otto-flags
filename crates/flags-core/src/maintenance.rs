@@ -27,8 +27,9 @@ use sqlx::{Postgres, Transaction};
 
 /// Open an unpinned transaction on `db`'s pool, as the tenant role
 /// (`db.tenant_role()`) when the pool's role can assume it, with the
-/// maintenance marker set. Both are `SET LOCAL`, so they end with the
-/// transaction and never leak to the next user of the connection.
+/// maintenance marker set. Both are transaction-local (`SET LOCAL ROLE`,
+/// `set_config(…, true)`), so they end with the transaction and never leak to
+/// the next user of the connection.
 ///
 /// Whether the role can be assumed is the question `otto_tenant::Db::begin`
 /// asks before its own `SET LOCAL ROLE`, with the same catalog query: its
