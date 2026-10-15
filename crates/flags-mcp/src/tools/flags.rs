@@ -52,10 +52,12 @@ pub struct CreateFlagArgs {
     pub description: Option<String>,
     /// Named variations for experiments or multi-valued flags, for example
     /// {"control": {}, "treatment": {"weight": 1, "configuration": {"color": "blue"}}}.
-    /// Leave out for a plain on/off flag.
+    /// Leave out for a plain on/off flag. Each variation's configuration is
+    /// at most 32 KiB as JSON.
     #[serde(default)]
     pub variations: Option<Value>,
-    /// Configuration the SDK returns with the flag (any JSON).
+    /// Configuration the SDK returns with the flag (any JSON, at most 32 KiB
+    /// as JSON).
     #[serde(default)]
     pub configuration: Option<Value>,
     /// Why this flag exists; kept in its history.
@@ -75,10 +77,12 @@ pub struct UpdateFlagArgs {
     pub description: Option<String>,
     /// Replaces the whole set of variations. A variation still named by an
     /// environment's rules or default cannot be removed until that
-    /// environment stops using it.
+    /// environment stops using it. Each variation's configuration is at most
+    /// 32 KiB as JSON.
     #[serde(default)]
     pub variations: Option<Value>,
-    /// Replaces the configuration; JSON null clears it.
+    /// Replaces the configuration (at most 32 KiB as JSON); JSON null clears
+    /// it.
     #[serde(default)]
     pub configuration: Option<Value>,
     /// The version you last read. If the flag has changed since, the call is

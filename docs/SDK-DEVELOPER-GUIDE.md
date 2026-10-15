@@ -60,6 +60,13 @@ server refuses them at creation). Build the URL from path segments, never by str
 concatenation, and treat a key outside that set, or `.` or `..`, as a failed lookup: return the
 default without a request.
 
+A `configuration`, the flag's or a variation's, is at most 32 KiB (32 768 bytes) of compact JSON
+when written; the server refuses a larger one. A response carries at most one configuration here,
+or the flag's and each variation's (up to 20) in a list entry or a stream event. Flags stored
+before the limit existed may carry more, so do not reject a response for exceeding it: size the
+response read cap well above it (the Rust SDK reads up to 1 MiB) and treat a response over the
+cap as a failed lookup.
+
 #### Request
 
 ```http
