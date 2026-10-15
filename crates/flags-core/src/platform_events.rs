@@ -194,7 +194,9 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
 
     // Children before parents. Every statement names the org (guard 1) in
     // addition to the pinned policy (guard 2); app_keys has no policy and
-    // relies on the predicate alone.
+    // relies on the predicate alone. usage_outbox_rejected holds user ids
+    // (#74); the shipper cannot re-create a purged org's rows, since it only
+    // records a rejection for an outbox row its own fenced DELETE removed.
     let mut deleted = serde_json::Map::new();
     for table in [
         "rollback_events",
@@ -206,6 +208,7 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
         "app_keys",
         "flag_apps",
         "usage_outbox",
+        "usage_outbox_rejected",
     ] {
         let n = sqlx::query(&format!("DELETE FROM {table} WHERE org_id = $1"))
             .bind(org)

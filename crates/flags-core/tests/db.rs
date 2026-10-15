@@ -2345,6 +2345,18 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     .unwrap();
     tx.commit().await.unwrap();
 
+    // Each org has a rejected usage event; the purge takes only the org's own.
+    for o in [org, other] {
+        sqlx::query(
+            "INSERT INTO usage_outbox_rejected (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
+             VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'create_flag', true, now(), 'x')",
+        )
+        .bind(o)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
     let body = otto_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
@@ -2357,11 +2369,16 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     };
     assert_eq!(detail["rollback_policies"], 1, "{detail}");
     assert_eq!(detail["rollback_events"], 1, "{detail}");
+    assert_eq!(detail["usage_outbox_rejected"], 1, "{detail}");
     assert_eq!(
         platform_events::apply(&db, &event).await.unwrap(),
         Outcome::Duplicate
     );
-    for table in ["rollback_policies", "rollback_events"] {
+    for table in [
+        "rollback_policies",
+        "rollback_events",
+        "usage_outbox_rejected",
+    ] {
         let left: i64 =
             sqlx::query_scalar(&format!("SELECT count(*) FROM {table} WHERE org_id = $1"))
                 .bind(org)
@@ -2370,6 +2387,13 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
                 .unwrap();
         assert_eq!(left, 0, "{table}");
     }
+    let others: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM usage_outbox_rejected WHERE org_id = $1")
+            .bind(other)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(others, 1, "another org's rejected usage stays");
 
     assert!(keys::resolve(&db, &keys_issued[0]).await.unwrap().is_none());
     assert!(keys::resolve(&db, &keys_issued[1]).await.unwrap().is_some());
