@@ -38,8 +38,11 @@ pub enum Outcome {
     Applied {
         detail: serde_json::Value,
     },
-    /// An earlier delivery already applied this event. The cleanup was re-run
-    /// anyway (it is idempotent) to catch work that raced the first run.
+    /// An earlier delivery of this event was already recorded. What a
+    /// redelivery does depends on the event: `org.deleted` re-runs its purge
+    /// (it is idempotent) to catch rows that raced the first run;
+    /// `member.removed` only refreshes `removed_members.removed_at`, restarting
+    /// the refusal window, and writes nothing else; `team.deleted` does nothing.
     Duplicate,
     /// An event this version does not act on, or the first delivery of a
     /// `member.removed` for an org already deleted here (a redelivery is
