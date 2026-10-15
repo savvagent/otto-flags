@@ -2,7 +2,7 @@
 //! database from `#[sqlx::test]`; set `DATABASE_URL` to a superuser on a
 //! scratch cluster (`podman compose up -d` gives you one on port 15434).
 
-use chrono::Utc;
+use chrono::{DurationRound, TimeDelta, Utc};
 use flags_core::apps::{AppsExt, Rotate};
 use flags_core::audit_purge;
 use flags_core::eval::{Context, Operator, Rule};
@@ -1514,6 +1514,105 @@ async fn health_merges_error_types_that_read_alike(pool: PgPool) {
         .collect();
     assert_eq!(rest.len(), 9);
     assert!(rest.iter().all(|t| t.starts_with('E')), "{rest:?}");
+    tx.commit().await.unwrap();
+}
+
+// Each error group shows the message of its latest report: the newest
+// occurred_at, the row stored last on a tie, within the environment asked
+// about. It is looked up per shown group, not aggregated from every message
+// (#69).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    let flag = tx
+        .create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = Utc::now().duration_trunc(TimeDelta::seconds(1)).unwrap();
+    let ago = |mins: i64| now - TimeDelta::minutes(mins);
+    // (environment, error_type, message, occurred_at), in insertion (id) order.
+    let rows = [
+        (Some("production"), "TypeError", "newest", ago(1)),
+        (Some("production"), "TypeError", "oldest", ago(30)),
+        (
+            Some("production"),
+            "TypeError",
+            "tied, stored first",
+            ago(1),
+        ),
+        (Some("production"), "TypeError", "tied, stored last", ago(1)),
+        (Some("production"), "TypeError", "middle", ago(10)),
+        // Newer, but in another environment.
+        (Some("staging"), "TypeError", "other environment", ago(0)),
+        (
+            None,
+            "RangeError",
+            "no environment, newest",
+            ago(2) + TimeDelta::microseconds(1),
+        ),
+        // A microsecond older but stored later: the time decides, not the id.
+        (
+            Some("production"),
+            "RangeError",
+            "a microsecond older",
+            ago(2),
+        ),
+    ];
+    for (environment, error_type, message, at) in rows {
+        sqlx::query(
+            "INSERT INTO flag_errors \
+               (org_id, flag_id, environment, flag_enabled, error_type, error_message, occurred_at, reporter) \
+             VALUES ($1, $2, $3, true, $4, $5, $6, 'server')",
+        )
+        .bind(org)
+        .bind(flag.id)
+        .bind(environment)
+        .bind(error_type)
+        .bind(message)
+        .bind(at)
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    }
+
+    let h = telemetry::health(&mut tx, flag.id, Some("production"), 24)
+        .await
+        .unwrap();
+    let shown: Vec<(&str, i64, &str)> = h
+        .top_errors
+        .iter()
+        .map(|g| (g.error_type.as_str(), g.count, g.last_message.as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("TypeError", 5, "tied, stored last"),
+            ("RangeError", 2, "no environment, newest"),
+        ]
+    );
+    assert_eq!(h.top_errors[0].last_seen, ago(1));
+    assert_eq!(
+        h.top_errors[1].last_seen,
+        ago(2) + TimeDelta::microseconds(1)
+    );
+
+    // Across every environment, the staging report is the newest.
+    let h = telemetry::health(&mut tx, flag.id, None, 24).await.unwrap();
+    assert_eq!(h.top_errors[0].count, 6);
+    assert_eq!(h.top_errors[0].last_message, "other environment");
     tx.commit().await.unwrap();
 }
 

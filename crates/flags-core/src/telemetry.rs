@@ -381,15 +381,28 @@ pub async fn health(
     let rows = rows.into_iter().map(|(v, n, _)| (v, n)).collect();
     let (variations, other_variations) = top_variations(rows, named);
 
+    // Counts, the latest time, and the newest row's id per group in one
+    // pass; the message only for the groups kept, by primary key (#69).
+    // Aggregating every message to keep one grew with whatever a public
+    // client key reported, and a per-group seek through
+    // flag_errors_flag_time_idx (which has no error_type) would read every row
+    // at that instant once per group. `max` over [epoch, id] compares element
+    // by element: the latest occurred_at, then the highest id (the row stored
+    // last) on a tie, in fixed space per group.
     let top_errors: Vec<ErrorGroup> = sqlx::query_as(
-        "SELECT error_type, flag_enabled, count(*)::bigint AS count, \
-                (array_agg(error_message ORDER BY occurred_at DESC))[1] AS last_message, \
-                max(occurred_at) AS last_seen \
-         FROM flag_errors \
-         WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
-           AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
-         GROUP BY error_type, flag_enabled \
-         ORDER BY count DESC, error_type, flag_enabled LIMIT $5",
+        "WITH g AS ( \
+           SELECT error_type, flag_enabled, count(*)::bigint AS count, \
+                  max(occurred_at) AS last_seen, \
+                  (max(ARRAY[extract(epoch FROM occurred_at), id::numeric]))[2]::bigint AS last_id \
+           FROM flag_errors \
+           WHERE org_id = $1 AND flag_id = $2 AND occurred_at >= $3 \
+             AND ($4::text IS NULL OR environment = $4 OR environment IS NULL) \
+           GROUP BY error_type, flag_enabled \
+           ORDER BY count DESC, error_type, flag_enabled LIMIT $5 \
+         ) \
+         SELECT g.error_type, g.flag_enabled, g.count, e.error_message AS last_message, g.last_seen \
+         FROM g JOIN flag_errors e ON e.org_id = $1 AND e.id = g.last_id \
+         ORDER BY g.count DESC, g.error_type, g.flag_enabled",
     )
     .bind(org)
     .bind(flag)
