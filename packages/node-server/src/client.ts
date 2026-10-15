@@ -1,4 +1,5 @@
 import { FlagCache } from './cache';
+import { contextKey } from './context-key';
 import { TelemetryService } from './telemetry';
 import { RealtimeService } from './realtime';
 import {
@@ -115,8 +116,12 @@ export class FlagClient {
       // Check for variation override first
       const variationOverride = this.variationOverrides.get(flagKey);
 
+      // The cache is keyed by flag and by the context the request will carry.
+      const evalContext = this.prepareContext(context);
+      const ctxKey = contextKey(evalContext);
+
       // Check cache
-      const cachedEntry = this.cache.getEntry(flagKey);
+      const cachedEntry = ctxKey === null ? null : this.cache.getEntry(flagKey, ctxKey);
       if (cachedEntry !== null) {
         let configuration = cachedEntry.configuration;
         let variation = cachedEntry.variation;
@@ -155,13 +160,6 @@ export class FlagClient {
 
         return result;
       }
-
-      // Prepare context - inject environment from config if not provided
-      const evalContext: FlagContext = {
-        ...context,
-        application_id: context?.application_id || this.config.applicationId,
-        environment: context?.environment || this.config.environment,
-      };
 
       // Call API
       const controller = new AbortController();
@@ -204,7 +202,9 @@ export class FlagClient {
       const variation = data.variation ?? undefined;
 
       // Cache the result (including configuration and variation)
-      this.cache.set(flagKey, value, data.flagId, configuration, variation);
+      if (ctxKey !== null) {
+        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey);
+      }
 
       // Apply overrides to evaluated result
       let finalConfiguration = configuration;
@@ -325,10 +325,22 @@ export class FlagClient {
   }
 
   /**
+   * Inject the configured application and environment into a context when it has none.
+   */
+  private prepareContext(context?: FlagContext): FlagContext {
+    return {
+      ...context,
+      application_id: context?.application_id || this.config.applicationId,
+      environment: context?.environment || this.config.environment,
+    };
+  }
+
+  /**
    * Track an error that occurred in flagged code
    */
   trackError(flagKey: string, error: Error, context?: FlagContext): void {
-    const flagEnabled = this.cache.get(flagKey) ?? false;
+    const ctxKey = contextKey(this.prepareContext(context));
+    const flagEnabled = (ctxKey === null ? null : this.cache.get(flagKey, ctxKey)) ?? false;
 
     this.telemetry.trackError({
       flagKey,
@@ -577,11 +589,6 @@ export class FlagClient {
       }
 
       const data = (await response.json()) as FlagListResponse;
-
-      // Cache all flags
-      data.flags.forEach((flag) => {
-        this.cache.set(flag.key, flag.enabled, flag.key, flag.configuration);
-      });
 
       return data.flags;
     } catch (error) {

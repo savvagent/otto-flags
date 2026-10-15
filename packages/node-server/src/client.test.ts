@@ -580,4 +580,102 @@ describe('FlagClient', () => {
       client.close();
     });
   });
+
+  describe('context cache (#127)', () => {
+    const fetchMock = global.fetch as unknown as jest.Mock;
+
+    const makeClient = () =>
+      new FlagClient({
+        apiKey: 'sdk_test_key',
+        enableTelemetry: false,
+        enableRealtime: false,
+      });
+
+    beforeEach(() => {
+      fetchMock.mockImplementation(async (_url: string, init: any) => {
+        const ctx = JSON.parse(init.body).context;
+        const enabled = ctx.attributes?.plan !== undefined ? ctx.attributes.plan === 'pro' : ctx.user_id === 'a';
+        return {
+          ok: true,
+          json: async () => ({
+            key: 'checkout',
+            enabled,
+            scope: 'application',
+            variation: null,
+            configuration: null,
+            timestamp: 1700000000,
+            version: 3,
+          }),
+        };
+      });
+    });
+
+    it('A/B: each user gets their own cached answer', async () => {
+      const client = makeClient();
+      const r = [];
+      for (const u of ['a', 'b', 'a', 'b']) {
+        r.push(await client.evaluate('checkout', { user_id: u }));
+      }
+      expect(r.map((x) => x.value)).toEqual([true, false, true, false]);
+      expect(r.map((x) => x.reason)).toEqual(['evaluated', 'evaluated', 'cached', 'cached']);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      client.close();
+    });
+
+    it('Attribute: contexts differing only in an attribute are evaluated separately', async () => {
+      const client = makeClient();
+      const pro = await client.evaluate('checkout', { user_id: 'u', attributes: { plan: 'pro' } });
+      const free = await client.evaluate('checkout', { user_id: 'u', attributes: { plan: 'free' } });
+      expect(pro.value).toBe(true);
+      expect(free.value).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      client.close();
+    });
+
+    it('Order: attribute insertion order does not matter', async () => {
+      const client = makeClient();
+      await client.evaluate('checkout', { user_id: 'u', attributes: { plan: 'pro', region: 'eu' } });
+      const second = await client.evaluate('checkout', { user_id: 'u', attributes: { region: 'eu', plan: 'pro' } });
+      expect(second.reason).toBe('cached');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      client.close();
+    });
+
+    it('Invalidate: drops every context of the flag', async () => {
+      const client = makeClient();
+      for (const u of ['a', 'b']) await client.evaluate('checkout', { user_id: u });
+      client.invalidateCache('checkout');
+      for (const u of ['a', 'b']) await client.evaluate('checkout', { user_id: u });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      client.close();
+    });
+
+    it('getAllFlags does not seed the evaluation cache', async () => {
+      const client = makeClient();
+      fetchMock.mockImplementationOnce(async () => ({
+        ok: true,
+        json: async () => ({
+          flags: [{ key: 'checkout', enabled: true, scope: 'application', environments: {}, version: 1 }],
+          count: 1,
+        }),
+      }));
+      await client.getAllFlags();
+      const r = await client.evaluate('checkout', { user_id: 'b' });
+      expect(r.value).toBe(false);
+      expect(r.reason).toBe('evaluated');
+      client.close();
+    });
+
+    it('trackError reports the value cached for its own context', async () => {
+      const client = makeClient();
+      const spy = jest.spyOn((client as any).telemetry, 'trackError').mockImplementation(() => {});
+      await client.evaluate('checkout', { user_id: 'a' });
+      await client.evaluate('checkout', { user_id: 'b' });
+      client.trackError('checkout', new Error('x'), { user_id: 'a' });
+      client.trackError('checkout', new Error('x'), { user_id: 'b' });
+      expect((spy.mock.calls[0][0] as any).flagEnabled).toBe(true);
+      expect((spy.mock.calls[1][0] as any).flagEnabled).toBe(false);
+      client.close();
+    });
+  });
 });

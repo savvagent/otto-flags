@@ -54,7 +54,7 @@ const client = new FlagClient({
   applicationId: 'your-app-id',
   baseUrl: 'https://otto-flags.savvagent.com', // optional
   enableRealtime: true, // default: true
-  cacheTtl: 60000, // default: 60 seconds
+  cacheTtl: 60000, // default: 60 seconds; results are cached per flag and evaluation context
   enableTelemetry: true, // default: true
   timeout: 5000, // request timeout in ms, default: 5000
   defaults: {
