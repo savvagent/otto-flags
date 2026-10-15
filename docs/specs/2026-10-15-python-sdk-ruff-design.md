@@ -1,6 +1,6 @@
 # Python SDK: pass ruff check and gate on it
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#83)
 **Issue:** #19
 
 ## 1. Brief
@@ -53,6 +53,8 @@ there, and the rest in `src/` and `tests/`.
   awaited task is equivalent to `try/except CancelledError: pass`, so applied by hand.
 - **SIM114 / SIM117:** applied as ruff's safe fixes; combining `if`-arms with identical bodies and
   nesting-equivalent `with` statements does not change behavior.
+  Ruff's SIM114 output (`a == "heartbeat" or a == "connected"`) was then written as
+  `in ("heartbeat", "connected")` to match the `elif` beside it (review suggestion, same behavior).
 - **Gate command:** append `&& "$v/bin/ruff" check --no-cache .` to the existing Python gate
   (after `cd packages/python-server`), with `--no-cache` so the gate leaves no `.ruff_cache`, like
   `-p no:cacheprovider` and `--cache-dir=/dev/null` already do.
