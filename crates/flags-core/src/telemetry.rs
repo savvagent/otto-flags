@@ -527,7 +527,7 @@ fn top_variations(
     let (mut shown, mut undeclared): (BTreeMap<String, i64>, Vec<(String, i64)>) =
         (BTreeMap::new(), vec![]);
     for (name, n) in merged {
-        if declared.iter().any(|d| *d == name) {
+        if declared.contains(&name) {
             shown.insert(name, n);
         } else {
             undeclared.push((name, n));
