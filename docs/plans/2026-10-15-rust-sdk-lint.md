@@ -40,7 +40,7 @@ clippy's `unwrap_or_default()`; delete the dead `Cache::get`; rustfmt the crate.
 | **Modify.** `packages/rust-server/src/types.rs` | Manual `Default` for `ConfigOverrideOptions`; unit test |
 | **Modify.** `packages/rust-server/src/client.rs` | `unwrap_or_default()`; rustfmt |
 | **Modify.** `packages/rust-server/src/cache.rs` | Remove dead `Cache::get` |
-| **Modify.** `packages/rust-server/tests/*.rs` | rustfmt only |
+| **Modify.** `packages/rust-server/tests/*.rs` | rustfmt; unused import in `dynamic_config_test.rs` |
 | **Modify.** `CLAUDE.md` | Known-red notes for the Rust SDK |
 
 ## Task Order & Rationale
@@ -78,7 +78,9 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run it, see it fail:** `cargo test --locked --lib config_override_options_default_validates`
+- [ ] **Step 2: Run it, see it fail** (in `packages/rust-server`, with
+  `CARGO_BUILD_JOBS=3 TMPDIR=$PWD/target/tmp`):
+  `cargo test --locked --lib config_override_options_default_validates`
   → FAIL (derived `Default` gives `validate: false`).
 - [ ] **Step 3: Implement:** in `src/types.rs` change the derive to `#[derive(Debug, Clone)]` and
   add, after the struct:
@@ -93,8 +95,15 @@ impl Default for ConfigOverrideOptions {
 
   In `src/client.rs` `set_config_override`: `let opts = options.unwrap_or_default();`.
   In `src/cache.rs`: delete `Cache::get` and its doc comment.
+  In `tests/dynamic_config_test.rs`: drop the unused `Context` from the `otto_flags` import.
 - [ ] **Step 4: Run it, see it pass**, then `cargo fmt` and every gate in Global Constraints.
-- [ ] **Step 5: `CLAUDE.md`:** replace the two Rust SDK known-red lines with
-  `- known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile) — #4`.
+- [ ] **Step 5: `CLAUDE.md`:** replace the two Rust SDK known-red lines with this line verbatim:
+
+```
+- known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile) — #4
+```
 - [ ] **Step 6: Commit:** `fix(sdk): make the rust sdk pass rustfmt and clippy`, body explaining
   the `Default` trap and the `#4` split, ending `Fixes #15`.
+
+Before merge (ship phase): the spec's `**Status:**` becomes `IMPLEMENTED (#<PR>)` and these boxes
+are ticked, in the same PR.

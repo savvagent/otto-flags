@@ -41,9 +41,13 @@ merges.
 - `cargo clippy --lib --tests` also builds `tests/integration_test.rs` and
   `tests/override_test.rs`, which do not compile (#4). The AC scopes clippy to the lib and
   `dynamic_config_test`, so the gate run here is
-  `cargo clippy --locked --lib --tests --keep-going -- -D warnings`, passing when the only failing
+  `cargo clippy --locked --all-targets --keep-going -- -D warnings`, passing when the only failing
   targets are those two (#4), plus `cargo clippy --locked --lib --test dynamic_config_test -- -D
-  warnings` exiting 0.
+  warnings` exiting 0. (The crate has no benches or examples, so `--all-targets` and
+  `--lib --tests` cover the same targets.)
+- The issue lists only the two lib errors because clippy stopped there. On `origin/main`,
+  `tests/dynamic_config_test.rs` also has an unused import (`Context`), which `-D warnings` turns
+  into an error once the lib builds; it is removed here.
 
 ## 3. Assumptions
 
@@ -62,12 +66,15 @@ The Rust SDK's lint gates are green for everything outside #4's two broken test 
 - `cargo clippy --locked --lib --test dynamic_config_test -- -D warnings` exits 0.
 - `ConfigOverrideOptions::default()` equals `new()` field by field, pinned by a unit test.
 - `cargo test --locked --lib` and `--test dynamic_config_test` pass.
-- `CLAUDE.md` > Gates known-red notes say what is still red for the Rust SDK.
+- `CLAUDE.md` > Gates known-red notes say what is still red for the Rust SDK: the two lines
+  become one, `known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two
+  integration test files do not compile) — #4`.
 
 ## 5. Scope
 
 In: `src/cache.rs` (remove `get`), `src/types.rs` (manual `Default`, unit test), `src/client.rs`
-(`unwrap_or_default()`, formatting), rustfmt over `tests/*.rs`, `CLAUDE.md` known-red lines.
+(`unwrap_or_default()`, formatting), the unused `Context` import in
+`tests/dynamic_config_test.rs`, rustfmt over `tests/*.rs`, `CLAUDE.md` known-red lines.
 
 Out: compiling `integration_test.rs`/`override_test.rs`, re-exporting `ConfigOverrideOptions`,
 CI for the crate (all #4), `examples/rust-server` (#16).
@@ -111,8 +118,13 @@ matches its documented default.
   --check`; `cargo clippy --locked --lib --test dynamic_config_test -- -D warnings`; `cargo clippy
   --locked --all-targets --keep-going -- -D warnings` (known red: only #4's two files may fail);
   `cargo test --locked --lib --test dynamic_config_test`; `cargo test --locked` (known red, #4:
-  no new failures against `origin/main`). Root Rust gates and `podman build` do not apply
-  (`.dockerignore` excludes `packages`; nothing under `crates/`).
+  no new failures against `origin/main`). Baseline on `origin/main`, taken before the change:
+  `--lib` 0 tests, `dynamic_config_test` 6 passed, `integration_test` (109 errors) and
+  `override_test` (1 error) do not compile; clippy fails on the lib's two errors.
+  `podman build` does not apply (`.dockerignore` excludes `packages`; nothing under `crates/`,
+  `Cargo.toml`, or `Cargo.lock`). The root `cargo fmt --all -- --check` and `cargo clippy
+  --workspace` run locally; the root `cargo test --workspace` needs Postgres and touches no
+  changed file, so it is left to CI's `rust` job (merge gate), and the PR says so.
 
 ## 12. Risks and open questions
 
