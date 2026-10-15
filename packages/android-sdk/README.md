@@ -276,7 +276,7 @@ val config = OttoFlagsConfig(
 
 The SDK automatically caches flag evaluations to improve performance. The cache is kept per
 flag and per user context (user id, environment and attributes), so one user's result is never
-returned for another. `flagUpdates` holds the value of each flag's most recent evaluation.
+returned for another. `flagUpdates` holds, per flag, the value of the most recent evaluation fetched from the server (cache hits do not publish).
 Configure polling interval:
 
 ```kotlin

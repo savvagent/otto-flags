@@ -27,7 +27,9 @@ function sortKeys(value: unknown): unknown {
   }
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
+    // No prototype: assigning "__proto__" on a plain object literal would call the inherited
+    // setter instead of creating the property, silently dropping it from the key.
+    const sorted: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(source).sort()) {
       sorted[key] = sortKeys(source[key]);
     }

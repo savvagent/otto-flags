@@ -21,4 +21,12 @@ describe('contextKey', () => {
     cyclic.self = cyclic;
     expect(contextKey(cyclic)).toBeNull();
   });
+  test('keeps an attribute named __proto__ in the key', () => {
+    // JSON.parse makes "__proto__" an own property; the key must keep it, or two different
+    // request bodies would share a cache entry.
+    const gold = JSON.parse('{"attributes":{"__proto__":{"tier":"gold"}}}');
+    const free = JSON.parse('{"attributes":{"__proto__":{"tier":"free"}}}');
+    expect(contextKey(gold)).not.toBe(contextKey(free));
+    expect(contextKey(gold)).toBe(JSON.stringify(gold));
+  });
 });
