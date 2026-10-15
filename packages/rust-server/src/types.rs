@@ -189,17 +189,29 @@ pub struct VariationResult {
     pub configuration: Option<serde_json::Value>,
 }
 
-/// Metadata about a flag
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Metadata about a flag, from the evaluate response
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Metadata {
+    /// Not sent by the server; always `None`. Kept for compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flag_id: Option<String>,
 
+    /// Not sent by the server; always `None`. Kept for compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
+    /// Not sent by the server; always `None` (the variation is `EvaluationResult::variation`).
+    /// Kept for compatibility.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
+
+    /// The flag version that produced this result
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<i64>,
+
+    /// Where the flag is defined: `"application"` or `"enterprise"`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 /// Options for setting configuration overrides

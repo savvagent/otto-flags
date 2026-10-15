@@ -38,6 +38,22 @@ fn is_valid_flag_key(key: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
+/// Why a lookup fell back, for the log.
+struct Failure {
+    why: String,
+    /// The server refused the SDK key (401/403).
+    rejected_key: bool,
+}
+
+impl Failure {
+    fn new(why: impl Into<String>) -> Self {
+        Self {
+            why: why.into(),
+            rejected_key: false,
+        }
+    }
+}
+
 /// Otto Flags FlagClient for server-side feature flag evaluation
 #[derive(Clone)]
 pub struct FlagClient {
@@ -79,6 +95,13 @@ impl FlagClient {
     /// Results are cached for `Config::cache_ttl` per flag key and evaluation context (the
     /// context as sent, after `application_id` is filled in): a different context, such as
     /// another user or other attributes, is evaluated by the server.
+    ///
+    /// A lookup does not return `Err`. Any failure (an invalid flag key or `base_url`, the
+    /// server unreachable or timing out, a non-2xx status, a response that is not the evaluate
+    /// response) gives the flag's configured default with `reason: "error"`, is logged (at
+    /// `error` when the server refuses the SDK key, else `warn`), and is not cached. Config and
+    /// variation overrides are not applied to such a fallback. The `Result` is kept for
+    /// compatibility.
     pub async fn evaluate(
         &self,
         flag_key: &str,
@@ -146,42 +169,44 @@ impl FlagClient {
                 configuration,
                 variation,
                 reason: "cached".to_string(),
-                metadata: None,
+                metadata: cached_entry.metadata.clone(),
             });
         }
 
-        // Make API request
-        let url = self.evaluate_url(flag_key)?;
-        let body = json!({ "context": ctx });
-
-        let response = self
-            .http_client
-            .post(url)
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_msg = format!("API error: {}", response.status());
-            tracing::error!("{}", error_msg);
-            return self.get_default_result(flag_key);
-        }
-
-        // Parse response
-        let data: serde_json::Value = response.json().await?;
-
-        let value = data["enabled"]
-            .as_bool()
-            .or_else(|| self.config.defaults.get(flag_key).copied())
-            .unwrap_or(false);
+        let data = match self.fetch(flag_key, &ctx).await {
+            Ok(data) => data,
+            Err(failure) => {
+                // A rejected key is a misconfiguration that will not heal by itself.
+                if failure.rejected_key {
+                    tracing::error!(
+                        "Flag {:?} lookup failed ({}): check the SDK key; using its default",
+                        flag_key,
+                        failure.why
+                    );
+                } else {
+                    tracing::warn!(
+                        "Flag {:?} lookup failed ({}); using its default",
+                        flag_key,
+                        failure.why
+                    );
+                }
+                return self.get_default_result(flag_key);
+            }
+        };
+        let value = data["enabled"].as_bool().unwrap_or_default();
 
         // The server always sends the key, as `null` when the flag has no configuration;
         // `null` means absent (`object?` in docs/SDK-DEVELOPER-GUIDE.md).
         let mut configuration = data.get("configuration").filter(|v| !v.is_null()).cloned();
         let mut variation = data["variation"].as_str().map(String::from);
 
-        // Cache the result (including configuration and variation) for this context
+        let metadata = Metadata {
+            version: data["version"].as_i64(),
+            scope: data["scope"].as_str().map(String::from),
+            ..Metadata::default()
+        };
+
+        // Cache the result (including configuration, variation and metadata) for this context
         if let Some(key) = ctx_key {
             self.cache.set(
                 flag_key,
@@ -189,6 +214,7 @@ impl FlagClient {
                 value,
                 configuration.clone(),
                 variation.clone(),
+                Some(metadata.clone()),
             );
         }
 
@@ -214,12 +240,6 @@ impl FlagClient {
             }
         }
 
-        let metadata = Metadata {
-            flag_id: data["flag_id"].as_str().map(String::from),
-            description: data["description"].as_str().map(String::from),
-            variant: data["variant"].as_str().map(String::from),
-        };
-
         tracing::debug!("Flag '{}' evaluated: {}", flag_key, value);
 
         Ok(EvaluationResult {
@@ -230,6 +250,45 @@ impl FlagClient {
             reason: "evaluated".to_string(),
             metadata: Some(metadata),
         })
+    }
+
+    /// POST the evaluate request and return the response body, which is known to carry a
+    /// boolean `enabled`; or why not, for the log.
+    async fn fetch(&self, flag_key: &str, ctx: &Context) -> Result<serde_json::Value, Failure> {
+        let url = self
+            .evaluate_url(flag_key)
+            .map_err(|e| Failure::new(e.to_string()))?;
+        let response = self
+            .http_client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&json!({ "context": ctx }))
+            .send()
+            .await
+            // The URL is already in the log line's context; drop it from the error text.
+            .map_err(|e| Failure::new(format!("request failed: {}", e.without_url())))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Failure {
+                why: format!("status {status}"),
+                rejected_key: matches!(
+                    status,
+                    reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+                ),
+            });
+        }
+        let data: serde_json::Value = response.json().await.map_err(|e| {
+            Failure::new(if e.is_decode() {
+                "the body is not JSON".to_string()
+            } else {
+                // A timeout or reset while reading the body, not a malformed one.
+                format!("reading the body failed: {}", e.without_url())
+            })
+        })?;
+        if !data["enabled"].is_boolean() {
+            return Err(Failure::new("the body has no boolean `enabled`"));
+        }
+        Ok(data)
     }
 
     /// `<base_url>/api/flags/<key>/evaluate`, with the key as one encoded path segment and any
@@ -244,7 +303,7 @@ impl FlagClient {
         Ok(url)
     }
 
-    /// Check if a flag is enabled (convenience method)
+    /// Check if a flag is enabled (convenience method); the default on any failure
     pub async fn is_enabled(&self, flag_key: &str, context: Option<Context>) -> bool {
         match self.evaluate(flag_key, context).await {
             Ok(result) => result.value,
@@ -256,7 +315,8 @@ impl FlagClient {
     }
 
     /// Get dynamic configuration for a flag (Phase 1)
-    /// Returns configuration if flag is enabled, otherwise returns None
+    /// Returns configuration if flag is enabled, otherwise returns None. Like `evaluate`, a
+    /// lookup failure falls back (to `None`) rather than returning `Err`.
     pub async fn get_config(
         &self,
         flag_key: &str,
@@ -272,7 +332,8 @@ impl FlagClient {
     }
 
     /// Get variation details for multi-variant flags (Phase 2)
-    /// Returns variation name, enabled status, and configuration
+    /// Returns variation name, enabled status, and configuration. Like `evaluate`, a lookup
+    /// failure falls back (to `"control"` and the default) rather than returning `Err`.
     pub async fn get_variation(
         &self,
         flag_key: &str,

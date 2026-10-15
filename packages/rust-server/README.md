@@ -278,8 +278,16 @@ Result from flag evaluation.
 pub struct EvaluationResult {
     pub key: String,
     pub value: bool,
+    pub configuration: Option<serde_json::Value>,
+    pub variation: Option<String>,
     pub reason: String,  // "cached", "evaluated", "error"
-    pub metadata: Option<Metadata>,
+    pub metadata: Option<Metadata>,  // None when reason is "error"
+}
+
+pub struct Metadata {
+    pub version: Option<i64>,     // the flag version that produced the result
+    pub scope: Option<String>,    // "application" or "enterprise"
+    // flag_id, description, variant: not sent by the server; always None
 }
 ```
 
@@ -330,24 +338,25 @@ client.clear_cache();
 
 ## Error Handling
 
-```rust
-use otto_flags::OttoFlagsError;
+A flag lookup never fails your request. `evaluate`, `is_enabled`, `get_config`, and
+`get_variation` fall back to the flag's configured default (`with_default`, else `false`) when the
+key is invalid, the server is unreachable or slow (`with_timeout`), it answers with an error
+status, or the response is not an evaluate response. The fallback has `reason: "error"`, is logged
+through `tracing` (at `error` when the server refuses the SDK key, else `warn`), and is not cached,
+so the next lookup asks the server again. Config and variation overrides are not applied to a
+fallback; `get_config` gives `None` and `get_variation` gives `"control"`, so use `evaluate` when
+you need to tell a fallback from a real answer. The
+lookup methods keep their `Result` for compatibility but do not return `Err`, so `?` is safe.
 
-match client.evaluate("my-flag", None).await {
-    Ok(result) => {
-        println!("Flag value: {}", result.value);
-    }
-    Err(OttoFlagsError::InvalidApiKey) => {
-        eprintln!("Invalid API key");
-    }
-    Err(OttoFlagsError::RequestFailed(e)) => {
-        eprintln!("Request failed: {}", e);
-    }
-    Err(OttoFlagsError::ApiError(msg)) => {
-        eprintln!("API error: {}", msg);
-    }
+```rust
+let result = client.evaluate("my-flag", None).await?;
+if result.reason == "error" {
+    // The server's answer was unavailable; `result.value` is the default.
 }
 ```
+
+Only `FlagClient::new` returns `Err` in practice: `OttoFlagsError::InvalidApiKey` for a key that
+does not start with `sdk_`, or `RequestFailed` if the HTTP client cannot be built.
 
 ## Best Practices
 
