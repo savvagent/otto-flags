@@ -26,10 +26,24 @@ use sqlx::PgConnection;
 
 use crate::error::Result;
 
+/// The purge function's schema-qualified name: the one source for
+/// [`FUNCTION`] and [`PURGE`], so the check and the call cannot drift (#53).
+macro_rules! purge_function {
+    () => {
+        "public.purge_deleted_org_audit"
+    };
+}
+
 /// The function `org.deleted` purges a deleted org's audit trail through
-/// (migration 0004, #21). Schema-qualified because 0004 creates it in
-/// `public`, where everything this database owns lives.
-pub const FUNCTION: &str = "public.purge_deleted_org_audit(uuid)";
+/// (migration 0004, #21). Schema-qualified because everything this database
+/// owns lives in `public`; 0004 creates it unqualified, so if it landed
+/// anywhere else the startup check reports it missing.
+pub const FUNCTION: &str = concat!(purge_function!(), "(uuid)");
+
+/// The statement `org.deleted` purges through: [`FUNCTION`], named by schema
+/// so `search_path` cannot resolve it to a same-named function elsewhere
+/// (#53).
+pub(crate) const PURGE: &str = concat!("SELECT ", purge_function!(), "($1)");
 
 /// What the catalog says about [`FUNCTION`] and the role that will call it.
 #[derive(Debug, Clone, PartialEq, Eq)]

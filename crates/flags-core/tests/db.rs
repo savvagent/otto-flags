@@ -2468,6 +2468,56 @@ async fn org_deleted_purges_the_audit_trail_as_otto_app(pool: PgPool) {
     app_db.pool().close().await;
 }
 
+/// `org.deleted` purges through the function the startup check vouches for,
+/// `public.purge_deleted_org_audit`, even when a same-named function sits
+/// earlier on the tenant role's `search_path` (`"$user"`, here `otto_app`):
+/// the call names it by schema (#53).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn org_deleted_purges_through_public_whatever_the_search_path(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, other) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+    for o in [org, other] {
+        let mut tx = db.begin(o).await.unwrap();
+        tx.create_app("web", &[], actor).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    let (rows, other_rows) = (audit_rows(&pool, org).await, audit_rows(&pool, other).await);
+    assert!(rows > 0 && other_rows > 0);
+
+    for statement in [
+        "CREATE SCHEMA otto_app",
+        "CREATE FUNCTION otto_app.purge_deleted_org_audit(uuid) RETURNS bigint \
+         LANGUAGE sql AS 'SELECT -1::bigint'",
+        "GRANT USAGE ON SCHEMA otto_app TO otto_app",
+    ] {
+        sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+
+    let app_db = otto_app_db(&pool).await;
+    let decoy: i64 = sqlx::query_scalar("SELECT purge_deleted_org_audit($1)")
+        .bind(org)
+        .fetch_one(app_db.pool())
+        .await
+        .unwrap();
+    assert_eq!(decoy, -1, "the unqualified name must resolve to the decoy");
+
+    let body = otto_resource::webhook::body(
+        uuid::Uuid::new_v4(),
+        "org.deleted",
+        Utc::now(),
+        &json!({"org_id": org.as_uuid()}),
+    );
+    let event = otto_resource::webhook::parse(&body).unwrap();
+    let Outcome::Applied { detail } = platform_events::apply(&app_db, &event).await.unwrap() else {
+        panic!("first delivery should apply");
+    };
+    assert_eq!(detail["audit_events"], rows, "{detail}");
+    assert_eq!(audit_rows(&pool, org).await, 0);
+    assert_eq!(audit_rows(&pool, other).await, other_rows);
+    app_db.pool().close().await;
+}
+
 /// The purge function only reaches the pinned org once it is tombstoned, and
 /// only the real `deleted_orgs` counts: the body names it by schema, so a
 /// caller's temporary table cannot stand in for it (#21).
