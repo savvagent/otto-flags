@@ -234,7 +234,7 @@ Per SDK, failing test first.
   current SDK API. They use config fields that no longer exist; known-red #17 covers only Go's
   missing `go.sum`. The new tests use the real APIs in new files, but Go compiles every
   `_test.go` in a package together and Maven fails the whole module on a test-compile error, so
-  neither suite can run until that is fixed (filed as a follow-up). The Android network tests may
+  neither suite can run until that is fixed (#113). The Android network tests may
   already be red on a plain JVM, because they use `org.json` and `android.util.Log` without
   Robolectric. The new Android test turns logging off, and the guard avoids `org.json`.
 - Until #112, Go, Java, iOS and Android still call endpoints the server does not serve, so for
