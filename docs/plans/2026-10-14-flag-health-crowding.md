@@ -1,7 +1,7 @@
 # flag_health Crowding and Message Lookup Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** `flag_health` reads each error group's newest message by primary key instead of from an
 array of every message (#69), always lists a flag's declared variations, and keeps server-key
@@ -75,7 +75,7 @@ Task 3 then relies on. Task 3 (#70, errors) extends Task 1's query.
 
 **Model:** sonnet — a contained query rewrite the spec writes out.
 
-- [ ] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`, after
+- [x] **Step 1: Write the failing test** in `crates/flags-core/tests/db.rs`, after
   `health_merges_error_types_that_read_alike`. It inserts rows directly (to control `id` order and
   timestamps) through the tenant transaction, which RLS allows for the pinned org:
 
@@ -167,14 +167,14 @@ async fn health_shows_the_latest_message_of_each_error_group(pool: PgPool) {
 
   Add `DurationRound` to the file's `chrono` import if it is not there (`use chrono::{DurationRound, TimeDelta, Utc};` alongside what is imported). Truncating `now` to whole seconds keeps the Postgres round trip exact (microsecond precision) for the `last_seen` comparison.
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db health_shows_the_latest_message_of_each_error_group`
 Expected: FAIL on the first `assert_eq!` — the tie at `ago(1)` resolves arbitrarily under
 `array_agg` (if it happens to pass, the test is still the pin for the new query; note it in the
 report and continue).
 
-- [ ] **Step 3: Implement.** In `health`, replace the `top_errors` query string with:
+- [x] **Step 3: Implement.** In `health`, replace the `top_errors` query string with:
 
 ```rust
     // Counts, the latest time, and the newest row's id per group in one
@@ -204,13 +204,13 @@ report and continue).
 
   keeping the same `.bind(org) .bind(flag) .bind(since) .bind(environment.as_deref()) .bind(FETCHED_GROUPS)`.
 
-- [ ] **Step 4: Run it and see it pass**, then the whole `health` family:
+- [x] **Step 4: Run it and see it pass**, then the whole `health` family:
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db health`
 then `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core --test db telemetry`
 Expected: PASS, none skipped.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core/src/telemetry.rs crates/flags-core/tests/db.rs
@@ -244,7 +244,7 @@ untrusted; database small and shared.
 
 **Model:** sonnet — the spec fixes every rule.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
   Unit tests in `telemetry.rs` `mod tests` (update the existing `top_variations(rows, total)`
   calls to `top_variations(rows, &[], total)` and add):
@@ -350,12 +350,12 @@ async fn health_always_shows_declared_variations(pool: PgPool) {
   Check `NewFlag`'s `variations` field type in `crates/flags-core/src/flags.rs` (around line 111:
   `pub variations: Option<Value>`) and that `json!` is imported in `db.rs`; adjust if not.
 
-- [ ] **Step 2: Run and see them fail**
+- [x] **Step 2: Run and see them fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core`
 Expected: compile errors (new signature) — that is the failing state.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `health(tx, flag: &FeatureFlag, environment, window_hours)`: import
     `crate::flags::FeatureFlag`; use `flag.id` where `flag` was bound. Declared names:
     ```rust
@@ -426,13 +426,13 @@ Expected: compile errors (new signature) — that is the failing state.
     assert_eq!(health["health"]["variations"], json!({"control": 0, "treatment": 0}));
     ```
 
-- [ ] **Step 4: Run and see them pass**
+- [x] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
 Expected: all pass, none skipped. Run `cargo fmt --all` first. Then `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --all -- --check` clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core crates/flags-mcp crates/flags-server/tests/e2e.rs
@@ -465,7 +465,7 @@ Fixes #70"
 
 **Model:** sonnet — the spec fixes the query and the ranking rule.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
   Unit tests in `telemetry.rs`: change the `group` helper to take a reporter and give every
   existing call `KeyKind::Server` (their expectations are unchanged):
@@ -606,12 +606,12 @@ Fixes #70"
   assert_eq!(health["health"]["topErrors"][0]["reporter"], "client");
   ```
 
-- [ ] **Step 2: Run and see them fail**
+- [x] **Step 2: Run and see them fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-core`
 Expected: compile errors (`ErrorGroup` has no `reporter`).
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `ErrorGroup`: drop `FromRow` from its derive list; add after `flag_enabled`:
     ```rust
     /// The kind of SDK key that reported this group. `server` reports came
@@ -702,13 +702,13 @@ Expected: compile errors (`ErrorGroup` has no `reporter`).
   - `out.rs` `HEALTH_PROVENANCE`: after the sentence about the public client key add: "Error
     groups marked reporter \"server\" came through the app's secret server key."
 
-- [ ] **Step 4: Run and see them pass**
+- [x] **Step 4: Run and see them pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
 Expected: all pass, none skipped. Run `cargo fmt --all` first. Then `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo fmt --all -- --check`, the extra gate (prints nothing).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-core crates/flags-mcp crates/flags-server/tests/e2e.rs
@@ -729,8 +729,8 @@ Fixes #70"
 
 **Model:** orchestrator (no dispatch).
 
-- [ ] Full gates at HEAD: test, lint, format, extra, `podman build -t otto-flags:check .`.
-- [ ] Record pass counts per test binary as evidence.
-- [ ] After the PR is open and reviewed: spec `**Status:**` becomes `IMPLEMENTED (#<PR>)`, this
+- [x] Full gates at HEAD: test, lint, format, extra, `podman build -t otto-flags:check .`.
+- [x] Record pass counts per test binary as evidence.
+- [x] After the PR is open and reviewed: spec `**Status:**` becomes `IMPLEMENTED (#<PR>)`, this
   plan's boxes ticked, in a final commit on the branch before merge:
   `docs: mark the flag_health crowding spec implemented`, body ending `Fixes #69` and `Fixes #70`.
