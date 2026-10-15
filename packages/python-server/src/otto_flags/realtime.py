@@ -87,7 +87,7 @@ class RealtimeService:
                             break
 
                         # Handle different event types
-                        if event.event == "heartbeat" or event.event == "connected":
+                        if event.event in ("heartbeat", "connected"):
                             continue
                         elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
                             self._handle_flag_event(event.event, event.data)
@@ -272,7 +272,7 @@ class AsyncRealtimeService:
                         if self._closed:
                             break
 
-                        if event.event == "heartbeat" or event.event == "connected":
+                        if event.event in ("heartbeat", "connected"):
                             continue
                         elif event.event in ("flag.created", "flag.updated", "flag.deleted"):
                             await self._handle_flag_event(event.event, event.data)
