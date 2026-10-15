@@ -145,7 +145,7 @@ Per SDK:
 - **Python.** `FlagCache` and `AsyncFlagCache` hold `dict[str, dict[str, CacheEntry]]`. `get`,
   `get_entry` and `set` take keyword-only `context_key: str = ""`. `set` applies the bound.
   `invalidate(key)` pops the inner dict. `keys()` returns flags with at least one live entry;
-  `__len__` counts live entries. A new private module `_context_key.py` holds
+  `FlagCache.__len__` counts live entries (`AsyncFlagCache` has none and gets none). A new private module `_context_key.py` holds
   `context_key(ctx_dict) -> str | None` (`json.dumps(..., sort_keys=True, separators=(",", ":"))`,
   `None` on `TypeError`/`ValueError`). `FlagClient` and `AsyncFlagClient` get a private
   `_prepare_context(context) -> FlagContext` (`dataclasses.replace` copy, then fill-ins exactly as
@@ -161,7 +161,8 @@ Per SDK:
   it. `getAllFlags` stops calling `cache.set`.
 - **TypeScript browser.** Same `FlagCache` change (`get(key, contextKey = '')`,
   `set(key, value, flagId?, contextKey = '')`, `keys()` returns flags with a live entry) and its
-  own `src/context-key.ts` (packages do not share code today). `evaluate` calls `buildContext`
+  own `src/context-key.ts` (packages do not share code today). The public `getCachedFlags()`
+  (`cache.keys()`) now lists only flags with a live entry; today it also lists expired ones. `evaluate` calls `buildContext`
   before the cache lookup and keys on its result. `getAllFlags` stops calling `cache.set`.
 - **Go.** `cache.entries` becomes `map[string]map[string]cacheEntry`; `Get(key, ctxKey)`,
   `GetEntry(key, ctxKey)`, `Set(key, ctxKey, value, configuration, variation)`; `Invalidate`
@@ -177,7 +178,10 @@ Per SDK:
 - **iOS.** `flagCache: [String: [String: CacheEntry]]`. `evaluate` builds `evaluationBody(for:)`,
   validates it (existing `isValidJSONObject` guard, now before the cache lookup), and keys on
   `JSONSerialization.data(withJSONObject: body["context"], options: [.sortedKeys])` as UTF-8. The
-  body is sent as today. Override setters remove the flag's inner map. `handleWebSocketMessage`
+  body is sent as today. The cache write moves from `queue.async` to `queue.sync`, so an
+  evaluate that returns has stored its result and the next identical one hits (with `async` the
+  write could land after the next lookup, which also made a cache-hit test racy). Override
+  setters remove the flag's inner map. `handleWebSocketMessage`
   and `refreshFlags` remove the flag's inner map instead of writing an entry. Bound: a full flag
   map is cleared before inserting a new key.
 - **Android.** `flagCache: ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>>`. A
@@ -191,7 +195,8 @@ Per SDK:
 Public API: unchanged except additive optional parameters on the exported cache classes
 (Python, Node, TypeScript). Behavior changes: a cache hit requires an identical context; the list
 fetch does not seed the cache; `track_error`'s `flag_enabled` is the value cached for that
-context; mobile poll/stream invalidate; Android `flagUpdates` publishes evaluation results only.
+context; TypeScript `getCachedFlags()` omits expired flags; mobile poll/stream invalidate; Android
+`flagUpdates` publishes evaluation results only.
 
 ## 7. Invariants impact
 
@@ -212,7 +217,7 @@ None.
 ## 9. Out-of-band
 
 None. SDK-only change: post-merge verification is server health only; no SDK is published (npm
-publishing is Rob's and not automated).
+publishing is Rob's and not automated). No recurring-cost impact.
 
 ## 10. Error handling and edge cases
 
@@ -241,7 +246,10 @@ Gates (Development Workflow > Gates):
   compile (#113); Java's `FlagClientTest` does not compile (#113); iOS does not build (#119).
   Android has no gate. New tests in these SDKs follow each package's existing newest test file
   (`evaluate_contract_test.go`, `EvaluateContractTest.java`, `EvaluateContractTests.swift`,
-  `OttoFlagsClientNetworkTest.kt`) and get language-reviewer scrutiny instead.
+  `OttoFlagsClientNetworkTest.kt`) and get language-reviewer scrutiny instead. Go's existing
+  `cache_test.go` already does not compile (it calls `cache.Set("test-flag", true)` against a
+  four-argument `Set`); it is left alone, so #113 is not made worse, and the new Go cache tests
+  live in a new file.
 
 Tests per SDK, against that SDK's mock server (respx, jest `fetch` mock, `httptest`,
 `MockWebServer`, `MockURLProtocol`, OkHttp `MockWebServer`):
@@ -251,7 +259,9 @@ Tests per SDK, against that SDK's mock server (respx, jest `fetch` mock, `httpte
 2. Two contexts differing only in one attribute value each reach the server.
 3. Same attributes inserted in different orders hit the cache (Python, Node, TypeScript, Go,
    Java; mobile where the map type can differ in order).
-4. `invalidate` of the flag drops every context's entry (both re-requested).
+4. Invalidating the flag drops every context's entry (both re-requested): the public
+   `invalidate_cache` / `invalidateCache` / `InvalidateCache` (server SDKs), `clearCache`
+   (TypeScript), an override setter and its clear (iOS, Android: no public per-flag invalidate).
 5. Unit tests on the cache (server SDKs): the per-flag bound (constructor or module constant
    lowered in the test) never exceeds the bound and still stores the new entry.
 6. Python/Node/TypeScript: `get_all_flags` no longer makes a later `evaluate` return `cached`.
