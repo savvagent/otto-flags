@@ -81,8 +81,10 @@ and `Metadata` (#96); SSE invalidation.
 - `get_entry(flag, ctx_key) -> Option<CacheEntry>`: as today, expired means absent.
 - `set(flag, ctx_key, value, configuration, variation)`: inserts. If the flag's inner map already
   holds `MAX_CONTEXTS_PER_FLAG` (10 000) entries and `ctx_key` is new, first drop its expired
-  entries; if it is still full, clear that flag's inner map. Clearing (rather than evicting one
-  entry) keeps the expensive sweep amortized: at most one O(n) pass per 10 000 inserts. Cost of
+  entries; if more than half the bound is still live, clear that flag's inner map. Either way at
+  least half the bound is free afterwards, so the O(n) sweep runs at most once per 5 000 new
+  contexts (a plain "still full" test would sweep on nearly every insert when live entries hover
+  just under the bound; architect review on #103). Cost of
   hitting the bound is cache misses, never a wrong answer. This bounds memory per flag; the
   number of flags is bounded by the host code's flag keys.
 - `invalidate(Some(flag))` removes the flag's inner map (all contexts); `invalidate(None)` clears

@@ -446,3 +446,47 @@ async fn invalidating_a_flag_drops_its_cached_answer_for_every_context() {
         assert_eq!(result.reason, "evaluated");
     }
 }
+
+#[tokio::test]
+async fn the_configured_application_id_is_part_of_the_cached_context() {
+    let server = MockServer::start().await;
+    for app in ["app-1", "app-2"] {
+        Mock::given(method("POST"))
+            .and(path("/api/flags/test-flag/evaluate"))
+            .and(body_partial_json(
+                json!({ "context": { "application_id": app } }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "enabled": app == "app-1" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let client = FlagClient::new(
+        Config::new(KEY)
+            .with_base_url(server.uri())
+            .with_application_id("app-1"),
+    )
+    .unwrap();
+
+    // `None`, an empty context, and one naming the configured app are the same request.
+    assert!(client.evaluate("test-flag", None).await.unwrap().value);
+    let empty = client
+        .evaluate("test-flag", Some(Context::new()))
+        .await
+        .unwrap();
+    assert_eq!(empty.reason, "cached");
+    let mut same_app = Context::new();
+    same_app.application_id = Some("app-1".into());
+    let same = client.evaluate("test-flag", Some(same_app)).await.unwrap();
+    assert_eq!(same.reason, "cached");
+
+    // Another app is another context.
+    let mut other_app = Context::new();
+    other_app.application_id = Some("app-2".into());
+    let other = client.evaluate("test-flag", Some(other_app)).await.unwrap();
+    assert_eq!(other.reason, "evaluated");
+    assert!(!other.value);
+}

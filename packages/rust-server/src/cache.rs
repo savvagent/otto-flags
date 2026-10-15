@@ -3,9 +3,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-/// Most contexts cached for one flag. Reaching it sweeps that flag's expired entries and, if the
-/// flag is still full, clears them: at most one O(n) pass per this many inserts, and the only
-/// cost is cache misses, never a wrong answer.
+/// Most contexts cached for one flag. When a new context finds the flag full, its expired
+/// entries are swept, and if more than half the bound is still live the flag is cleared. Either
+/// way at least half the bound is free afterwards, so a sweep (O(n), under the write lock) runs
+/// at most once per `MAX_CONTEXTS_PER_FLAG / 2` new contexts. The cost of the bound is cache
+/// misses, never a wrong answer.
 pub(crate) const MAX_CONTEXTS_PER_FLAG: usize = 10_000;
 
 #[derive(Clone)]
@@ -21,6 +23,9 @@ pub(crate) struct CacheEntry {
 /// The server's answer depends on the context (targeting rules, percentage rollouts), so a
 /// result is reused only for the context that produced it. Keying by flag alone handed one
 /// user's targeted result to every other user within the TTL (#91).
+///
+/// Contexts are bounded per flag (`MAX_CONTEXTS_PER_FLAG`); the number of flags is not, and is
+/// bounded only by the flag keys the host code evaluates.
 #[derive(Clone)]
 pub(crate) struct Cache {
     entries: Arc<RwLock<HashMap<String, HashMap<String, CacheEntry>>>>,
@@ -92,7 +97,7 @@ impl Cache {
             {
                 let now = Instant::now();
                 contexts.retain(|_, entry| entry.expires_at >= now);
-                if contexts.len() >= self.max_contexts_per_flag {
+                if contexts.len() > self.max_contexts_per_flag / 2 {
                     contexts.clear();
                 }
             }
@@ -198,32 +203,48 @@ mod tests {
         assert!(cache.get_entry("g", "0").is_some());
     }
 
+    fn backdate(cache: &Cache, flag_key: &str, context_keys: &[&str]) {
+        let mut entries = cache.entries.write().unwrap();
+        let past = Instant::now() - Duration::from_secs(1);
+        for key in context_keys {
+            entries
+                .get_mut(flag_key)
+                .unwrap()
+                .get_mut(*key)
+                .unwrap()
+                .expires_at = past;
+        }
+    }
+
     #[test]
     fn a_full_flag_sweeps_expired_entries_and_keeps_live_ones() {
-        let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 3);
-        cache.set("f", "live".into(), true, None, None);
-        // Expired entries: insert, then backdate them.
-        for i in 0..2 {
-            cache.set("f", format!("old-{i}"), true, None, None);
+        let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 4);
+        for key in ["live", "old-0", "old-1", "old-2"] {
+            cache.set("f", key.into(), true, None, None);
         }
-        {
-            let mut entries = cache.entries.write().unwrap();
-            let past = Instant::now() - Duration::from_secs(1);
-            for i in 0..2 {
-                entries
-                    .get_mut("f")
-                    .unwrap()
-                    .get_mut(&format!("old-{i}"))
-                    .unwrap()
-                    .expires_at = past;
-            }
-        }
+        backdate(&cache, "f", &["old-0", "old-1", "old-2"]);
 
         cache.set("f", "new".into(), false, None, None);
 
         assert!(cache.get_entry("f", "live").is_some());
         assert!(cache.get_entry("f", "new").is_some());
         assert_eq!(len(&cache, "f"), 2);
+    }
+
+    #[test]
+    fn a_sweep_that_frees_too_little_clears_the_flag() {
+        // Without the half-bound rule, a flag whose live entries hover just under the bound
+        // would be swept on nearly every new context.
+        let cache = Cache::with_max_contexts_per_flag(Duration::from_secs(60), 4);
+        for key in ["a", "b", "c", "old"] {
+            cache.set("f", key.into(), true, None, None);
+        }
+        backdate(&cache, "f", &["old"]);
+
+        cache.set("f", "new".into(), false, None, None);
+
+        assert_eq!(len(&cache, "f"), 1);
+        assert!(cache.get_entry("f", "new").is_some());
     }
 
     #[test]
