@@ -55,6 +55,8 @@ struct Platform {
     /// When set, each usage batch hands the test a sender and waits until the
     /// test fires it before answering, so the test can hold shippers mid-call.
     usage_gate: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
+    /// When set, every usage batch is answered 502.
+    fail_usage: bool,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -112,7 +114,10 @@ async fn usage_status(
     Ok(Json(status))
 }
 
-async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageReceipt> {
+async fn ship(
+    State(p): State<Shared>,
+    Json(b): Json<UsageBatch>,
+) -> Result<Json<UsageReceipt>, StatusCode> {
     let gate = p.lock().unwrap().usage_gate.clone();
     if let Some(gate) = gate {
         let (release, released) = tokio::sync::oneshot::channel();
@@ -120,11 +125,14 @@ async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageR
         released.await.unwrap();
     }
     let mut p = p.lock().unwrap();
+    if p.fail_usage {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
     if let Some(r) = &p.receipt {
-        return Json(r.clone());
+        return Ok(Json(r.clone()));
     }
     if let Some(reason) = &p.reject_with {
-        return Json(UsageReceipt {
+        return Ok(Json(UsageReceipt {
             accepted: 0,
             duplicates: 0,
             rejected: b
@@ -135,14 +143,14 @@ async fn ship(State(p): State<Shared>, Json(b): Json<UsageBatch>) -> Json<UsageR
                     reason: reason.clone(),
                 })
                 .collect(),
-        });
+        }));
     }
     p.shipped += b.events.len();
-    Json(UsageReceipt {
+    Ok(Json(UsageReceipt {
         accepted: b.events.len() as u32,
         duplicates: 0,
         rejected: vec![],
-    })
+    }))
 }
 
 async fn member(
@@ -1732,6 +1740,17 @@ async fn a_receipt_naming_events_outside_the_batch_moves_nothing(pool: PgPool) {
     assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
 }
 
+/// The release for the next shipper to reach the gated mock platform. Bounded,
+/// so a shipper that never gets there fails the test instead of hanging it.
+async fn reached(
+    held: &mut tokio::sync::mpsc::UnboundedReceiver<tokio::sync::oneshot::Sender<()>>,
+) -> tokio::sync::oneshot::Sender<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(10), held.recv())
+        .await
+        .expect("shipper reached the platform")
+        .expect("gate open")
+}
+
 /// A shipper whose claim lapsed while it waited on the platform cannot act on
 /// the row once another shipper has claimed it: the newer claim records it,
 /// once (#67).
@@ -1764,9 +1783,9 @@ async fn a_lapsed_usage_claim_leaves_the_row_to_the_newer_one(pool: PgPool) {
     };
 
     let first = shipper(cfg.clone());
-    let release_first = held.recv().await.unwrap();
+    let release_first = reached(&mut held).await;
     let second = shipper(cfg.clone());
-    let release_second = held.recv().await.unwrap();
+    let release_second = reached(&mut held).await;
 
     // The first shipper's claim has lapsed: its rejection is not recorded and
     // the row it no longer holds stays for the second.
@@ -1841,4 +1860,118 @@ async fn the_usage_shipper_sets_the_maintenance_marker(pool: PgPool) {
         .unwrap();
     assert_eq!(rejected, vec![refused]);
     db.pool().close().await;
+}
+
+/// A shipper whose claim lapsed cannot reschedule the row once another shipper
+/// has claimed it: its failure leaves the newer claim's schedule and error as
+/// they are (#67).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lapsed_claim_does_not_reschedule_the_newer_one(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+         VALUES ($1, NULL, 'create_flag', true) RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    let (gate, mut held) = tokio::sync::mpsc::unbounded_channel();
+    platform.lock().unwrap().usage_gate = Some(gate);
+    // A lease of 0: a claimed row is due again at once, as if the claim lapsed.
+    let cfg = flags_core::usage::ShipperConfig {
+        claim_lease: std::time::Duration::ZERO,
+        ..Default::default()
+    };
+    let shipper = |cfg: flags_core::usage::ShipperConfig| {
+        let (db, platform) = (s.db.clone(), s.platform.clone());
+        tokio::spawn(async move { flags_core::usage::ship_once(&db, &platform, &cfg).await })
+    };
+    let schedule = || {
+        sqlx::query_as::<_, (i32, Option<String>, chrono::DateTime<chrono::Utc>)>(
+            "SELECT attempts, last_error, next_attempt_at FROM usage_outbox WHERE event_id = $1",
+        )
+        .bind(event_id)
+        .fetch_one(s.db.pool())
+    };
+
+    let first = shipper(cfg.clone());
+    let release_first = reached(&mut held).await;
+    let second = shipper(cfg.clone());
+    let release_second = reached(&mut held).await;
+    let (attempts, _, claimed_until) = schedule().await.unwrap();
+    assert_eq!(attempts, 2);
+
+    // The first shipper's call fails after its claim lapsed: it must not
+    // reschedule the row the second now holds.
+    platform.lock().unwrap().fail_usage = true;
+    release_first.send(()).unwrap();
+    let err = first.await.unwrap().unwrap_err();
+    assert_eq!(err.failure_reason().reason, "http_status");
+    let (attempts, last_error, next_attempt_at) = schedule().await.unwrap();
+    assert_eq!(attempts, 2);
+    assert_eq!(last_error, None);
+    assert_eq!(next_attempt_at, claimed_until);
+
+    platform.lock().unwrap().fail_usage = false;
+    release_second.send(()).unwrap();
+    assert_eq!(second.await.unwrap().unwrap(), 1);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+}
+
+/// The fence pairs each claimed row with the attempts value the claim set for
+/// that row: a lapsed claim still finishes the rows it holds and leaves the one
+/// a newer claim took (#67).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lapsed_claim_is_fenced_row_by_row(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let insert = |attempts: i32| {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO usage_outbox (org_id, user_id, tool, billable, attempts) \
+             VALUES ($1, NULL, 'create_flag', true, $2) RETURNING event_id",
+        )
+        .bind(Uuid::new_v4())
+        .bind(attempts)
+        .fetch_one(s.db.pool())
+    };
+    // The claim sets 6 on the first row and 1 on the second: a fence that
+    // paired ids and attempts other than row by row would miss both.
+    let r1 = insert(5).await.unwrap();
+    let r2 = insert(0).await.unwrap();
+    let (gate, mut held) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let mut p = platform.lock().unwrap();
+        p.reject_with = Some("unknown org".into());
+        p.usage_gate = Some(gate);
+    }
+
+    let first = {
+        let (db, platform) = (s.db.clone(), s.platform.clone());
+        tokio::spawn(async move {
+            flags_core::usage::ship_once(&db, &platform, &Default::default()).await
+        })
+    };
+    let release_first = reached(&mut held).await;
+    // A newer claim of the second row only.
+    sqlx::query("UPDATE usage_outbox SET attempts = attempts + 1 WHERE event_id = $1")
+        .bind(r2)
+        .execute(s.db.pool())
+        .await
+        .unwrap();
+
+    release_first.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), 2);
+    let left: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox")
+        .fetch_all(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(left, vec![r2]);
+    let rejected: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox_rejected")
+        .fetch_all(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(rejected, vec![r1]);
 }
