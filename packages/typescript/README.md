@@ -135,6 +135,8 @@ unsubscribe();
 
 ### Cache Management
 
+Evaluations are cached per flag and evaluation context (including the user ID), so one user's result is never returned for another; `getAllFlags()` does not fill the cache.
+
 ```typescript
 // Get all cached flags
 const cachedFlags = client.getCachedFlags();

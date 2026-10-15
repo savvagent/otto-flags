@@ -1,28 +1,39 @@
 import { CacheEntry } from './types';
 
+/** Most evaluation contexts cached for one flag. */
+export const MAX_CONTEXTS_PER_FLAG = 10_000;
+
 /**
- * Simple in-memory cache for flag values with TTL
+ * Simple in-memory cache for flag values with TTL, keyed by flag and evaluation context.
+ *
+ * The server's answer depends on the context sent, so one context's value is never served for
+ * another. Contexts are bounded per flag; hitting the bound costs misses, never a wrong answer.
  */
 export class FlagCache {
-  private cache: Map<string, CacheEntry> = new Map();
+  private cache: Map<string, Map<string, CacheEntry>> = new Map();
   private ttl: number;
+  private maxContextsPerFlag = MAX_CONTEXTS_PER_FLAG;
 
   constructor(ttl: number = 60000) {
     this.ttl = ttl;
   }
 
   /**
-   * Get a cached flag value
+   * Get a cached flag value for a context
    */
-  get(key: string): boolean | null {
-    const entry = this.cache.get(key);
-    if (!entry) {
+  get(key: string, contextKey: string = ''): boolean | null {
+    const contexts = this.cache.get(key);
+    const entry = contexts?.get(contextKey);
+    if (!contexts || !entry) {
       return null;
     }
 
     // Check if expired
     if (Date.now() > entry.expiresAt) {
-      this.cache.delete(key);
+      contexts.delete(contextKey);
+      if (contexts.size === 0) {
+        this.cache.delete(key);
+      }
       return null;
     }
 
@@ -30,10 +41,30 @@ export class FlagCache {
   }
 
   /**
-   * Set a flag value in cache
+   * Set a flag value in cache for a context
    */
-  set(key: string, value: boolean, flagId?: string): void {
-    this.cache.set(key, {
+  set(key: string, value: boolean, flagId?: string, contextKey: string = ''): void {
+    let contexts = this.cache.get(key);
+    if (!contexts) {
+      contexts = new Map();
+      this.cache.set(key, contexts);
+    }
+
+    if (contexts.size >= this.maxContextsPerFlag && !contexts.has(contextKey)) {
+      // Full: drop expired entries; if more than half the bound is still live, clear the flag.
+      // Either way at least half the bound is free, so the sweep runs rarely.
+      const now = Date.now();
+      for (const [ctx, entry] of contexts) {
+        if (now > entry.expiresAt) {
+          contexts.delete(ctx);
+        }
+      }
+      if (contexts.size > this.maxContextsPerFlag / 2) {
+        contexts.clear();
+      }
+    }
+
+    contexts.set(contextKey, {
       value,
       expiresAt: Date.now() + this.ttl,
       flagId,
@@ -41,7 +72,7 @@ export class FlagCache {
   }
 
   /**
-   * Invalidate a specific flag
+   * Invalidate a specific flag, for every context
    */
   invalidate(key: string): void {
     this.cache.delete(key);
@@ -55,9 +86,19 @@ export class FlagCache {
   }
 
   /**
-   * Get all cached keys
+   * Get the keys of flags with at least one live entry
    */
   keys(): string[] {
-    return Array.from(this.cache.keys());
+    const now = Date.now();
+    const keys: string[] = [];
+    for (const [key, contexts] of this.cache) {
+      for (const entry of contexts.values()) {
+        if (now <= entry.expiresAt) {
+          keys.push(key);
+          break;
+        }
+      }
+    }
+    return keys;
   }
 }

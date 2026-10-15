@@ -1,4 +1,5 @@
 import { FlagCache } from './cache';
+import { contextKey } from './context-key';
 import { TelemetryService } from './telemetry';
 import { RealtimeService } from './realtime';
 import {
@@ -393,8 +394,12 @@ export class FlagClient {
         };
       }
 
+      // Build context with user identifiers; the cache is keyed on what is sent
+      const evaluationContext = this.buildContext(context);
+      const ctxKey = contextKey(evaluationContext);
+
       // Check cache second
-      const cachedValue = this.cache.get(flagKey);
+      const cachedValue = ctxKey === null ? null : this.cache.get(flagKey, ctxKey);
       if (cachedValue !== null) {
         return {
           key: flagKey,
@@ -402,9 +407,6 @@ export class FlagClient {
           reason: 'cached',
         };
       }
-
-      // Build context with user identifiers
-      const evaluationContext = this.buildContext(context);
 
       // Build type-safe request body
       // Cast to any for JsonValue compatibility (all fields are JSON-serializable)
@@ -440,7 +442,9 @@ export class FlagClient {
       const value = data.enabled || false;
 
       // Cache the result (use key as ID since response doesn't include UUID)
-      this.cache.set(flagKey, value, data.key);
+      if (ctxKey !== null) {
+        this.cache.set(flagKey, value, data.key, ctxKey);
+      }
 
       // Track evaluation
       const durationMs = Date.now() - startTime;
@@ -752,11 +756,6 @@ export class FlagClient {
       );
 
       const data: FlagListResponse = await response.json();
-
-      // Optionally cache all flags
-      data.flags.forEach((flag) => {
-        this.cache.set(flag.key, flag.enabled, flag.key);
-      });
 
       return data.flags;
     } catch (error) {
