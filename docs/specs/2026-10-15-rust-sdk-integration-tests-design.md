@@ -1,6 +1,6 @@
 # Rust SDK integration tests compile and run, on the documented evaluate contract
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#94)
 **Issue:** #4
 
 ## 1. Brief
@@ -51,6 +51,10 @@ Acceptance criteria:
   contract" means mocking `enabled`, so the SDK must read `enabled`. This is fixed here: it is one
   line on the same code path as the route move, and the ported tests would otherwise assert the
   bug. `EvaluationResult.value` (the public Rust field) keeps its name.
+- (Found in review.) The server always sends `"configuration": null` for a flag without one
+  (`EvaluateResponse` has no `skip_serializing_if`), and the SDK returned it as `Some(Null)`, so
+  `get_config` gave `Some` for every enabled flag without configuration once `enabled` is read.
+  `null` is treated as absent (the guide types the field `object?`).
 - `get_variation` returns `VariationResult`, which (like `ConfigOverrideOptions`) is public in
   signature but not exported, so callers cannot name the type. It is exported too (additive).
 - The old `integration_test.rs` exercised APIs that no longer exist: `track(event, ctx, props)`
@@ -101,10 +105,14 @@ In: `src/lib.rs` (exports), `src/client.rs` (route, `enabled`), the three `tests
 workflow, `CLAUDE.md` (Gates, Ship > merge gate, Notes on CI), README if it names the route or
 the field.
 
+Also in (from review): the null-configuration fix above, extra fallback and cache tests, the
+workflow trigger on the root `rust-toolchain.toml`, and a README caveat about the cache (#91).
+
 Out: the SDK's cache keying (it caches per flag key, ignoring the context, so targeted results
 leak between users within the TTL; #91); telemetry/event tracking (the SDK has none;
 `test_track_event` is dropped, not reimplemented); removing the server's `/api/evaluate/{key}`
-alias; `examples/rust-server` (#16); publishing.
+alias; URL-encoding the flag key (#95); transport-error fallback in `get_config`/`get_variation`
+and the always-empty `Metadata` (#96); `examples/rust-server` (#16); publishing.
 
 ## 6. Architecture
 

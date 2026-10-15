@@ -71,16 +71,16 @@ green.
 
 **Model:** haiku — mechanical edits, fully specified.
 
-- [ ] **Step 1: Point the mocks at the documented contract.** In both test files, replace every
+- [x] **Step 1: Point the mocks at the documented contract.** In both test files, replace every
   `path("/api/evaluate/<key>")` with `path("/api/flags/<key>/evaluate")` (same `<key>`), and in
   every mock response body rename the `"value":` key to `"enabled":` (only the top-level field of
   the `set_body_json(json!({...}))` object; leave configuration contents alone).
 
-- [ ] **Step 2: Run, see it fail.** `cargo test --locked --test dynamic_config_test`
+- [x] **Step 2: Run, see it fail.** `cargo test --locked --test dynamic_config_test`
   Expected: FAIL (the SDK still calls `/api/evaluate/...`; wiremock 404s, so values come back
   default `false`/`None`). `override_test` still fails to compile (missing export).
 
-- [ ] **Step 3: Implement.** In `src/lib.rs` replace the `types` re-export with:
+- [x] **Step 3: Implement.** In `src/lib.rs` replace the `types` re-export with:
 
 ```rust
 pub use types::{
@@ -106,12 +106,12 @@ to
         let value = data["enabled"]
 ```
 
-- [ ] **Step 4: Run, see it pass.** `cargo test --locked --lib --test dynamic_config_test --test
+- [x] **Step 4: Run, see it pass.** `cargo test --locked --lib --test dynamic_config_test --test
   override_test` — expected lib 1, dynamic_config_test 6, override_test 8 passed, 0 ignored.
   `cargo clippy --locked --lib --test dynamic_config_test --test override_test -- -D warnings`
   exits 0; `cargo fmt --check` exits 0.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/rust-server/src packages/rust-server/tests/dynamic_config_test.rs packages/rust-server/tests/override_test.rs
@@ -131,7 +131,7 @@ git commit -m "fix(sdk): evaluate rust sdk flags on the documented route and fie
 
 **Model:** sonnet — test port with some judgment on matchers.
 
-- [ ] **Step 1: Replace the file with:**
+- [x] **Step 1: Replace the file with:**
 
 ```rust
 //! The SDK against a mock otto-flags server speaking the documented contract
@@ -349,21 +349,21 @@ fn context_builder_sets_its_fields() {
 
 Then run `cargo fmt` (the file must match rustfmt output).
 
-- [ ] **Step 2: Run, see it pass.** `cargo test --locked --test integration_test` — expected 10
+- [x] **Step 2: Run, see it pass.** `cargo test --locked --test integration_test` — expected 10
   passed, 0 ignored. (Its tests cannot fail first: before Task 1 the file does not compile, and the
   regression they guard is proven by Step 3.)
 
-- [ ] **Step 3: Prove the guards.** Temporarily revert `"enabled"` to `"value"` in
+- [x] **Step 3: Prove the guards.** Temporarily revert `"enabled"` to `"value"` in
   `src/client.rs`: `is_enabled_returns_true_when_the_server_enables_the_flag`,
   `evaluate_sends_the_context_and_reports_the_server_result`, and
   `get_variation_returns_the_server_variation` must fail. Restore it. Temporarily revert the URL
   to `/api/evaluate/{}`: the same tests must fail. Restore it; `git diff src/` must be empty.
 
-- [ ] **Step 4: Full gates.** `cargo fmt --check`; `cargo clippy --locked --all-targets -- -D
+- [x] **Step 4: Full gates.** `cargo fmt --check`; `cargo clippy --locked --all-targets -- -D
   warnings`; `cargo test --locked` (lib 1, dynamic_config_test 6, integration_test 10,
   override_test 8, doc-tests 1 passed — the `no_run` quick start compiles).
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
 ```bash
 git add packages/rust-server/tests/integration_test.rs
@@ -382,7 +382,7 @@ git commit -m "test(sdk): port the rust sdk integration tests to the current api
 
 **Model:** haiku — fully specified.
 
-- [ ] **Step 1: Create `.github/workflows/rust-sdk.yml`:**
+- [x] **Step 1: Create `.github/workflows/rust-sdk.yml`:**
 
 ```yaml
 name: Rust SDK
@@ -436,7 +436,7 @@ jobs:
         run: cargo test --locked
 ```
 
-- [ ] **Step 2: Edit `CLAUDE.md`.**
+- [x] **Step 2: Edit `CLAUDE.md`.**
   - Gates: `cargo clippy --locked --all-targets --keep-going -- -D warnings` (rust-server line)
     becomes `cargo clippy --locked --all-targets -- -D warnings`; delete the line
     ``- known red: Rust SDK `cargo clippy --all-targets` and `cargo test` (two integration test files do not compile; every other target must stay clean) — #4``.
@@ -449,10 +449,10 @@ jobs:
     `.github/workflows/rust-sdk.yml`. The Go, Python, Java, Swift, and Kotlin SDKs have none;
     their local gates are under Gates.``
 
-- [ ] **Step 3: Validate.** `python3 -c "import yaml,sys;yaml.safe_load(open('.github/workflows/rust-sdk.yml'))"`
+- [x] **Step 3: Validate.** `python3 -c "import yaml,sys;yaml.safe_load(open('.github/workflows/rust-sdk.yml'))"`
   exits 0; `grep -n "#4\|keep-going" CLAUDE.md` prints nothing.
 
-- [ ] **Step 4: Commit.**
+- [x] **Step 4: Commit.**
 
 ```bash
 git add .github/workflows/rust-sdk.yml CLAUDE.md
