@@ -108,7 +108,7 @@ body's `user_id` or attribute):
 `client.py`, `async_client.py`, `tests/test_cache.py`, `tests/test_client.py`,
 `tests/test_async_client.py`, `README.md` (all under `packages/python-server/`).
 
-- [ ] **Step 1: failing tests.**
+- [x] **Step 1: failing tests.**
   - `tests/test_client.py`, new class `TestContextCache` using `mock_api` (respx) and
     `server_body` from `conftest.py`: a route on
     `POST https://otto-flags.savvagent.com/api/flags/checkout/evaluate` with a `side_effect` that
@@ -131,9 +131,9 @@ body's `user_id` or attribute):
     `cache._max_contexts_per_flag = 4`, insert 10 distinct context keys for `f`, assert
     `len(cache._cache["f"]) <= 4` after each insert and the last one is retrievable; same for
     `AsyncFlagCache`. Existing tests (no `context_key`) keep passing unchanged.
-- [ ] **Step 2: run the Python gate; see the new tests fail** (A/B returns `cached` true for `b`;
+- [x] **Step 2: run the Python gate; see the new tests fail** (A/B returns `cached` true for `b`;
   cache tests fail on the unknown kwarg).
-- [ ] **Step 3: implement.**
+- [x] **Step 3: implement.**
   - `_context_key.py`: `def context_key(context: dict[str, Any]) -> str | None` returning
     `json.dumps(context, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`, `None` on
     `TypeError` or `ValueError`. Docstring: why (cache correctness, #127; order-independent).
@@ -162,8 +162,8 @@ body's `user_id` or attribute):
     `environment`) and `await`s.
   - `README.md`: in the features/cache text, one sentence: results are cached per flag and per
     evaluation context (the context as sent), for `cache_ttl` seconds.
-- [ ] **Step 4: run the Python gate; all tests pass, mypy clean.**
-- [ ] **Step 5: commit** `fix(sdk): cache python evaluations per flag and context` (body: why;
+- [x] **Step 4: run the Python gate; all tests pass, mypy clean.**
+- [x] **Step 5: commit** `fix(sdk): cache python evaluations per flag and context` (body: why;
   `Refs #127`).
 
 ### Task 2: Node server SDK
@@ -174,7 +174,7 @@ body's `user_id` or attribute):
 modify `src/cache.ts`, `src/cache.test.ts`, `src/client.ts`, `src/client.test.ts`, `README.md`;
 create `/.changeset/node-server-context-cache.md` (worktree root `.changeset/`).
 
-- [ ] **Step 1: failing tests.**
+- [x] **Step 1: failing tests.**
   - `src/client.test.ts`, new `describe('context cache (#127)')`: `global.fetch` mocked with an
     implementation that parses `init.body` and returns `{ ok: true, json: async () => ({ key:
     'checkout', enabled: <by user_id or attributes.plan>, scope: 'application', variation: null,
@@ -192,8 +192,8 @@ create `/.changeset/node-server-context-cache.md` (worktree root `.changeset/`).
   - `src/cache.test.ts`: per-context miss, `invalidate(key)` drops all contexts, bound (lower
     via `(cache as any).maxContextsPerFlag = 4`, insert 10, inner map size ≤ 4, newest
     retrievable). Existing tests unchanged.
-- [ ] **Step 2: run `cd packages/node-server && pnpm test`; see the new tests fail.**
-- [ ] **Step 3: implement.**
+- [x] **Step 2: run `cd packages/node-server && pnpm test`; see the new tests fail.**
+- [x] **Step 3: implement.**
   - `src/context-key.ts`: `export function contextKey(value: unknown): string | null` —
     `JSON.parse(JSON.stringify(value))` (drops `undefined`, applies `toJSON`), recursively
     rebuild plain objects with keys sorted (arrays keep order), `JSON.stringify` the result;
@@ -214,8 +214,8 @@ create `/.changeset/node-server-context-cache.md` (worktree root `.changeset/`).
   - `.changeset/node-server-context-cache.md`: `"@otto-flags/node-server": patch` — "Cache each
     evaluation per flag and evaluation context, so one context's result is never returned for
     another; `getAllFlags` no longer fills the evaluation cache."
-- [ ] **Step 4: run the pnpm gate from the worktree root; all pass.**
-- [ ] **Step 5: commit** `fix(sdk): cache node evaluations per flag and context` (`Refs #127`).
+- [x] **Step 4: run the pnpm gate from the worktree root; all pass.**
+- [x] **Step 5: commit** `fix(sdk): cache node evaluations per flag and context` (`Refs #127`).
 
 ### Task 3: TypeScript browser SDK
 
@@ -226,7 +226,7 @@ create `/.changeset/node-server-context-cache.md` (worktree root `.changeset/`).
 `tests/client.test.ts`, `README.md`; create `.changeset/sdk-context-cache.md` at the worktree
 root.
 
-- [ ] **Step 1: failing tests** in `tests/client.test.ts`, new `describe('context cache (#127)')`
+- [x] **Step 1: failing tests** in `tests/client.test.ts`, new `describe('context cache (#127)')`
   following the file's `flag key validation (#107)` block (save/restore `global.fetch`, client
   with `enableRealtime: false, enableTelemetry: false`). Mock as in Task 2 (the browser client
   reads `data.enabled`). Cover A/B via the `context` argument, A/B via `client.setUserId('a')` /
@@ -236,15 +236,15 @@ root.
   responses so no retry delays. `tests/context-key.test.ts` and `tests/cache.test.ts` as in Task 2
   (this cache: `get(key, contextKey = '')`, `set(key, value, flagId?, contextKey = '')`,
   `keys()` = flags with at least one live entry).
-- [ ] **Step 2: `cd packages/typescript && pnpm test`; see them fail.**
-- [ ] **Step 3: implement** as Task 2, adapted: `evaluate` calls `this.buildContext(context)`
+- [x] **Step 2: `cd packages/typescript && pnpm test`; see them fail.**
+- [x] **Step 3: implement** as Task 2, adapted: `evaluate` calls `this.buildContext(context)`
   before the cache lookup (after the overrides and `authFailed` checks, which stay first) and keys
   on it; a hit returns `{ key, value, reason: 'cached' }` as today; `getAllFlags` stops seeding;
   `getCachedFlags()` unchanged in signature. Own copy of `context-key.ts` (packages share no
   code). README: one sentence under Cache Management. Changeset `"@otto-flags/sdk": patch`, same
   wording adapted.
-- [ ] **Step 4: pnpm gate from the worktree root; all pass.**
-- [ ] **Step 5: commit** `fix(sdk): cache browser evaluations per flag and context` (`Refs #127`).
+- [x] **Step 4: pnpm gate from the worktree root; all pass.**
+- [x] **Step 5: commit** `fix(sdk): cache browser evaluations per flag and context` (`Refs #127`).
 
 ### Task 4: Go SDK
 
@@ -254,7 +254,7 @@ root.
 `context_cache_test.go`. Leave `cache_test.go` alone: it already does not compile (it calls a
 two-argument `Set`), so updating it is #113's job.
 
-- [ ] **Step 1: tests (cannot be run: no Go toolchain).** `context_cache_test.go` in package
+- [x] **Step 1: tests (cannot be run: no Go toolchain).** `context_cache_test.go` in package
   `ottoflags`, modeled on `evaluate_contract_test.go` (reuse `newFlagKeyTestClient` from
   `flagkey_test.go` and the `serverBody` format from `evaluate_contract_test.go`): an `httptest.Server` that decodes `{"context": {...}}` and answers by
   `user_id` / `attributes.plan`, counting requests with `atomic.Int32`/`int32`. Cover A/B,
@@ -264,7 +264,7 @@ two-argument `Set`), so updating it is #113's job.
   Cache unit tests in the same new file: per-context miss, `Invalidate(flag)` drops all
   contexts, bound (set `c.maxContextsPerFlag = 4`, insert 10, `len(c.entries["f"]) <= 4`, newest
   present).
-- [ ] **Step 2: implement.** `cache.go`: `entries map[string]map[string]cacheEntry`,
+- [x] **Step 2: implement.** `cache.go`: `entries map[string]map[string]cacheEntry`,
   `const maxContextsPerFlag = 10000` and a `maxContextsPerFlag int` field set in `newCache`;
   `Get(key, ctxKey string)`, `GetEntry(key, ctxKey string)`, `Set(key, ctxKey string, value
   bool, configuration map[string]interface{}, variation string)` with the bound rule;
@@ -275,9 +275,9 @@ two-argument `Set`), so updating it is #113's job.
   `GetEntry`/`Set`, and build the request body from `prepared` (the body bytes:
   `json.Marshal(map[string]interface{}{"context": prepared})` as today). README: one sentence on
   per-context caching near `CacheTTL`.
-- [ ] **Step 3: self-check compile by reading:** every non-test call site of `Get`, `GetEntry`,
+- [x] **Step 3: self-check compile by reading:** every non-test call site of `Get`, `GetEntry`,
   `Set` updated; `gofmt`-style formatting (tabs).
-- [ ] **Step 4: commit** `fix(sdk): cache go evaluations per flag and context` (`Refs #127`).
+- [x] **Step 4: commit** `fix(sdk): cache go evaluations per flag and context` (`Refs #127`).
 
 ### Task 5: Java SDK
 
@@ -287,12 +287,12 @@ two-argument `Set`), so updating it is #113's job.
 `packages/java-server/README.md`; create
 `packages/java-server/src/test/java/com/savvagent/ottoflags/sdk/ContextCacheTest.java`.
 
-- [ ] **Step 1: tests (cannot be run).** `ContextCacheTest` modeled on `EvaluateContractTest`
+- [x] **Step 1: tests (cannot be run).** `ContextCacheTest` modeled on `EvaluateContractTest`
   (same imports, MockWebServer with a `Dispatcher` that parses the request body with Gson and
   answers by `context.userId`/attribute — note Gson sends Java field names, e.g. `userId`, as
   today). Cover A/B (`getRequestCount() == 2`), Attribute, Order (two `LinkedHashMap`s with the
   same entries in different insertion orders via `FlagContext.setAttributes`), Invalidate.
-- [ ] **Step 2: implement.** `cache` becomes `ConcurrentHashMap<String,
+- [x] **Step 2: implement.** `cache` becomes `ConcurrentHashMap<String,
   ConcurrentHashMap<String, CacheEntry>>`; `MAX_CONTEXTS_PER_FLAG = 10_000` (package-private
   static final). In `evaluate`, move "Prepare context" above the cache lookup; then
   `JsonElement contextJson = gson.toJsonTree(context)`; `String ctxKey = canonicalJson
@@ -304,9 +304,9 @@ two-argument `Set`), so updating it is #113's job.
   ctxKey)` and `setCachedValue(flagKey, ctxKey, …)` apply TTL and the bound (sweep under
   `synchronized (inner)`); `invalidateCache(flagKey)` removes the inner map. README: one sentence
   near `cacheTtl`.
-- [ ] **Step 3: self-check compile by reading** (imports: `JsonArray`, `TreeSet`; Java 11 — no
+- [x] **Step 3: self-check compile by reading** (imports: `JsonArray`, `TreeSet`; Java 11 — no
   records, no `var` in fields).
-- [ ] **Step 4: commit** `fix(sdk): cache java evaluations per flag and context` (`Refs #127`).
+- [x] **Step 4: commit** `fix(sdk): cache java evaluations per flag and context` (`Refs #127`).
 
 ### Task 6: iOS SDK
 
@@ -316,13 +316,13 @@ two-argument `Set`), so updating it is #113's job.
 `packages/ios-sdk/README.md`; create
 `packages/ios-sdk/Tests/OttoFlagsSDKTests/ContextCacheTests.swift`.
 
-- [ ] **Step 1: tests (cannot be run).** Modeled on `EvaluateContractTests.swift` (client built
+- [x] **Step 1: tests (cannot be run).** Modeled on `EvaluateContractTests.swift` (client built
   with `init(config:session:)` and `MockURLProtocol`, polling and WebSocket off as that file
   does). The handler parses the request body (`httpBody` or `httpBodyStream`, as that file reads
   it) and answers by `context.user_id`/attribute, counting requests. Cover A/B (reasons and a
   request count of 2), Attribute, Invalidate via `setConfigOverride`/`clearConfigOverride` (both
   users re-request). The cache write becomes `queue.sync` (Step 2), so no sleeps are needed.
-- [ ] **Step 2: implement.** `flagCache: [String: [String: CacheEntry]]`;
+- [x] **Step 2: implement.** `flagCache: [String: [String: CacheEntry]]`;
   `private static let maxContextsPerFlag = 10_000`. In `evaluate`: build `evaluateBody`, run the
   existing `isValidJSONObject` guard, then `let contextKey = (evaluateBody["context"]).flatMap {
   try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }.flatMap { String(data:
@@ -335,9 +335,9 @@ two-argument `Set`), so updating it is #113's job.
   and `refreshFlags`: remove `flagCache[flagKey]` (all contexts) instead of writing an entry; keep
   their parsing guards (only the key is needed). Do not change endpoint paths (#125), the
   `session.data(for:)` calls (#119) or `track`. README Caching section: one sentence.
-- [ ] **Step 3: self-check compile by reading** (optional chaining types; `[String: Any]` cast of
+- [x] **Step 3: self-check compile by reading** (optional chaining types; `[String: Any]` cast of
   `evaluateBody["context"]`).
-- [ ] **Step 4: commit** `fix(sdk): cache ios evaluations per flag and context` (`Refs #127`).
+- [x] **Step 4: commit** `fix(sdk): cache ios evaluations per flag and context` (`Refs #127`).
 
 ### Task 7: Android SDK
 
@@ -348,7 +348,7 @@ two-argument `Set`), so updating it is #113's job.
 `packages/android-sdk/README.md` (if it describes caching); create
 `packages/android-sdk/src/test/kotlin/com/savvagent/ottoflags/sdk/OttoFlagsClientContextCacheTest.kt`.
 
-- [ ] **Step 1: tests (cannot be run).** Modeled on `OttoFlagsClientNetworkTest.kt` (its
+- [x] **Step 1: tests (cannot be run).** Modeled on `OttoFlagsClientNetworkTest.kt` (its
   MockWebServer setup, client construction with polling/WebSocket off, `runTest`). A
   `Dispatcher` answering by the body's `context.user_id`/attribute. Cover A/B (`requestCount ==
   2`), Attribute, Order (`linkedMapOf` in two orders), Invalidate via
@@ -356,19 +356,19 @@ two-argument `Set`), so updating it is #113's job.
   the last evaluation's value. Also a pure test of `contextKey` (internal) for order independence.
   These depend on `org.json` working in local JVM unit tests, the existing setup gap (#113): do
   not add a test dependency for it.
-- [ ] **Step 2: implement.** `flagCache = ConcurrentHashMap<String,
+- [x] **Step 2: implement.** `flagCache = ConcurrentHashMap<String,
   ConcurrentHashMap<String, CacheEntry>>()`; `MAX_CONTEXTS_PER_FLAG = 10_000` in the companion.
   `internal fun contextKey(body: JSONObject): String` = `canonicalJson(body.get("context"))`
   with a private recursive `canonicalJson(value: Any?)` (spec §6). In `evaluate`: build `json =
   evaluationBody(userContext)` and `val ctxKey = contextKey(json)` before the cache lookup; lookup
   `flagCache[flagKey]?.get(ctxKey)`; store with the bound (synchronized on the inner map: if size
   `>= MAX` and key new, clear) then `_flagUpdates.value = _flagUpdates.value + (flagKey to
-  enabled)`. Delete `updateFlagFlow()` and its other calls. `handleWebSocketMessage` and
+  enabled)` (as `_flagUpdates.update { it + (flagKey to enabled) }`, atomic). Delete `updateFlagFlow()` and its other calls. `handleWebSocketMessage` and
   `refreshFlags`: `flagCache.remove(key)` per flag instead of writing; no flow publish. Override
   setters and `clearAllOverrides` unchanged (`remove`/`clear` now drop inner maps). Do not change
   endpoint paths (#125) or test setup (#113).
-- [ ] **Step 3: self-check compile by reading.**
-- [ ] **Step 4: commit** `fix(sdk): cache android evaluations per flag and context` (`Refs #127`).
+- [x] **Step 3: self-check compile by reading.**
+- [x] **Step 4: commit** `fix(sdk): cache android evaluations per flag and context` (`Refs #127`).
 
 ### Task 8: SDK guide
 
@@ -376,11 +376,11 @@ two-argument `Set`), so updating it is #113's job.
 
 **Files:** modify `docs/SDK-DEVELOPER-GUIDE.md`.
 
-- [ ] **Step 1:** under "Suggested Cache Key Format", replace the `flag:{org_id}:{flag_key}:
+- [x] **Step 1:** under "Suggested Cache Key Format", replace the `flag:{org_id}:{flag_key}:
   {user_id}:{version}` guidance with: key a cached evaluation by the flag key and the full context
   sent in the request body (canonical JSON, keys sorted), never by flag key alone or by `user_id`
   alone (attributes and other fields change the answer); bound entries per flag; invalidate all of
   a flag's entries on an SSE event for it. Mention that the list endpoint's `enabled` is the
   environment switch, not a context's result, so it must not fill the evaluation cache.
-- [ ] **Step 2:** commit `docs(sdk): describe the per-context evaluation cache key`, body ending
+- [x] **Step 2:** commit `docs(sdk): describe the per-context evaluation cache key`, body ending
   `Fixes #127` (last commit of the implementation).

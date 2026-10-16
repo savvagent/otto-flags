@@ -1,6 +1,6 @@
 # Non-Rust SDKs cache evaluations per flag and context
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#128)
 **Issue:** #127
 
 ## 1. Brief
@@ -63,6 +63,11 @@ suites do not compile, Android unit-test setup) or #119 (iOS build), but do not 
   key only costs hit rate, a narrower one would silently break when the server reads another field.
 - **If the context cannot be serialized, the call skips the cache** (reads and writes nothing) and
   goes on as before; the request then fails as it does today, through the SDK's failure path.
+  Go and iOS cannot build the request either, so they fail the call at that point instead (Go
+  returns the default and the error, as its body-marshal failure already did; iOS throws
+  `invalidContext`, now before the cache lookup). JS keys keep an attribute named `__proto__`
+  (the sorted copy is built on a prototype-less object), and Android quotes every value that is
+  not a number or boolean, as the request body does.
 - **Per-flag bound, as in Rust:** at most `MAX_CONTEXTS_PER_FLAG = 10 000` entries per flag. When
   a flag's map is full and the key is new: drop that flag's expired entries; if more than half the
   bound is still live, clear the flag's map. Either way at least half the bound is free after, so
@@ -77,8 +82,11 @@ suites do not compile, Android unit-test setup) or #119 (iOS build), but do not 
   they are (#125). Android's public `flagUpdates` flow publishes, per flag, the value of the most
   recent evaluation (any context); poll and stream no longer publish into it.
 - **`track_error` / `trackError` look up `flag_enabled` for the prepared context passed to them**
-  (same preparation as evaluate, without mutating the caller's context); no entry → `false`, as
-  today for a flag never evaluated.
+  (same preparation as evaluate, without mutating the caller's context). With no entry for that
+  context they report the flag's most recent evaluated value (any context; an error is often
+  reported without the context it was evaluated with, and `false` would count flag-on errors as
+  flag-off in `flag_health`); `false` only for a flag never evaluated. Python's `track_error`
+  never raises on a context it cannot prepare (review on #128).
 - **Context preparation moves before the cache lookup** and stops mutating the caller's context in
   Python and Go (a copy is prepared). Java keeps its existing mutation (a `FlagContext` has no copy
   constructor; the body it sends is unchanged), now also on a cache hit.
@@ -173,7 +181,8 @@ Per SDK:
   `evaluate` prepares the context (existing mutation) before the cache lookup, builds
   `gson.toJsonTree(context)`, and keys on a canonical string from a private
   `canonicalJson(JsonElement)` (objects re-emitted with sorted keys, recursively); a
-  serialization failure skips the cache. The bound is applied in `setCachedValue` under a lock on
+  canonicalization failure skips the cache (a `toJsonTree` failure takes the existing failure
+  path, as before). The bound is applied in `setCachedValue` under a lock on
   the flag's inner map.
 - **iOS.** `flagCache: [String: [String: CacheEntry]]`. `evaluate` builds `evaluationBody(for:)`,
   validates it (existing `isValidJSONObject` guard, now before the cache lookup), and keys on
@@ -232,8 +241,9 @@ publishing is Rob's and not automated). No recurring-cost impact.
 - Concurrency: Python sync uses the existing `RLock`, async the existing `asyncio.Lock`, Go the
   existing `RWMutex` (expired entries are not deleted under `RLock`, as today), Java a
   `ConcurrentHashMap` per flag with the bound's sweep under `synchronized (inner)`, Android the
-  same, iOS keeps its existing `queue` discipline (writes on `queue`; reads are unsynchronized
-  today and stay so — not made worse).
+  same, iOS reads, writes and the override setters' cache removals all go through `queue.sync`
+  (no caller runs on `queue`, so no deadlock). In-flight requests can still store a result after
+  an invalidation (pre-existing in every SDK; #137).
 
 ## 11. Testing approach
 
@@ -275,7 +285,9 @@ Tests per SDK, against that SDK's mock server (respx, jest `fetch` mock, `httpte
 - Go, Java, iOS and Android changes are not compiled or tested here. Mitigation: changes kept
   small and in the style of each file; language-reviewer passes; the PR body records the gates as
   not run.
-- iOS reads `flagCache` off `queue` while writes go through `queue` (pre-existing race); the
-  two-level map does not change that. Recorded, not fixed (out of scope).
+- iOS reads the override dictionaries off `queue` while the setters write them (pre-existing
+  race; #138). The flag cache itself is now read and written under `queue.sync`.
+- The bound is per flag and keys hold the raw context JSON, as in Rust (#136 for a digest key and
+  a total bound across flags).
 - `anonymous_id` in the TypeScript SDK is per browser, so different browsers already keyed
   differently; in a non-browser runtime it is generated per client, unchanged.
