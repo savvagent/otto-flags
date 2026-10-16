@@ -748,6 +748,9 @@ async fn check_size(
     state: &NewState<'_>,
     check: SizeCheck,
 ) -> Result<()> {
+    if check == SizeCheck::DisableOnly {
+        return Ok(());
+    }
     let org = tx.org();
     let (new, old, was_active, others): (i64, Option<i64>, Option<bool>, i64) =
         sqlx::query_as(&format!(
@@ -821,16 +824,14 @@ async fn commit_change(
     check: SizeCheck,
 ) -> Result<FeatureFlag> {
     let reason = validate_text("reason", meta.reason.clone(), MAX_REASON)?;
-    if check != SizeCheck::DisableOnly {
-        let state = NewState {
-            key: &flag.key,
-            active: flag.status == FlagStatus::Active,
-            environments: &flag.environments,
-            variations: &flag.variations,
-            configuration: flag.configuration.as_ref(),
-        };
-        check_size(tx, app, Some(flag.id), &state, check).await?;
-    }
+    let state = NewState {
+        key: &flag.key,
+        active: flag.status == FlagStatus::Active,
+        environments: &flag.environments,
+        variations: &flag.variations,
+        configuration: flag.configuration.as_ref(),
+    };
+    check_size(tx, app, Some(flag.id), &state, check).await?;
     let org = tx.org();
     // The caller holds the row lock, so this is the state being replaced.
     let before: Value =
