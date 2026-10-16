@@ -51,15 +51,20 @@ not "invalid key", and is never cached as unknown.
 
 ## 3. Assumptions
 
-- **The probe sets the timeouts only when asked.** `unpinned::enter` gains an optional pair of
-  timeouts, bound as two text parameters; each is applied by a `set_config(…, true)` in its own
+- **The probe sets the timeouts only when asked.** `unpinned::enter` gains optional
+  timeouts (`lock_timeout`, `statement_timeout`, `idle_in_transaction_session_timeout`), bound as
+  text parameters; each is applied by a `set_config(…, true)` in its own
   CASE column, exactly like the maintenance marker. Every other unpinned and maintenance
   transaction binds NULL and runs unchanged, so the shared probe is not affected. One statement
   text for every caller, so no extra entry in a connection's statement cache.
 - **Values.** `lock_timeout` 500 ms, `statement_timeout` 1 s, a client-side deadline of 2 s on the
   whole transaction (BEGIN to COMMIT), and 1 s on the release. A healthy lookup takes a few
   milliseconds; a lock wait shows as `lock_not_available` (55P03) in the logs, distinct from a
-  slow statement's `query_canceled` (57014). Worst case a permit is held: the pool's 5 s acquire
+  slow statement's `query_canceled` (57014). `idle_in_transaction_session_timeout` is set to the
+  transaction deadline (2 s): a lookup is never idle inside its transaction for long, and when the
+  client gives up on a half-open link the backend, still holding its `AccessShareLock` on
+  `app_keys` (which would block the very `ALTER TABLE` this is about), ends itself instead of
+  lingering until the kernel notices. Worst case a permit is held: the pool's 5 s acquire
   timeout (unchanged, already bounded), plus 2 s, plus 1 s.
 - **Server-side timeouts stay as they are mapped today.** 55P03 and 57014 are already transient
   (`error::TRANSIENT_SQLSTATES`), internal, and answered `503 temporarily_unavailable` with
@@ -109,12 +114,13 @@ settings; changing how database errors are logged.
 
 ## 6. Architecture
 
-- `unpinned::enter(tx, db, maintenance, timeouts: Option<Timeouts>)`: two extra columns,
+- `unpinned::enter(tx, db, maintenance, timeouts: Option<Timeouts>)`: three extra columns,
   `CASE WHEN $4::text IS NOT NULL THEN set_config('lock_timeout', $4::text, true) END` and the
-  same for `statement_timeout` with `$5`. `begin`/`begin_as_tenant_role` pass `None`;
+  the same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`). `begin`/`begin_as_tenant_role` pass `None`;
   `Held::begin(db, timeouts)` passes what it is given. Values are whole milliseconds rendered as
   `"<n>ms"`.
-- `unpinned::Held::release(self, within: Duration) -> bool` (true if returned to the pool):
+- `unpinned::Held::release(self, within: Duration) -> bool` (true if sqlx's return finished
+  within the bound, whether it pooled or closed the connection; false if it was cut short):
   `tokio::time::timeout(within, self.0.return_to_pool())`. `Held::discard(self)`: detach and drop.
 - `keys::LookupBounds { lock, statement, transaction, release }`, `LookupBounds::DEFAULT`
   (500 ms, 1 s, 2 s, 1 s). `KeyLookups` stores one; `KeyLookups::with_bounds(self, b)`;
@@ -122,7 +128,9 @@ settings; changing how database errors are logged.
 - `keys::resolve_hash(db, hash)` = `resolve_hash_within(db, hash, &LookupBounds::DEFAULT)`
   (private helper). It acquires, runs `lookup` under `tokio::time::timeout(bounds.transaction)`,
   then either releases within `bounds.release` and returns the answer, or discards the
-  connection and returns `Error::Db(Io(TimedOut))`. A release that times out logs one `warn` with
+  connection, logs one `warn` with the fixed reason `transaction_timed_out` (so on-call can tell
+  it from a broken socket, which the API also logs as `io`), and returns
+  `Error::Db(Io(TimedOut))`. A release that times out logs one `warn` with
   a fixed reason and still returns the answer. `resolve_cached` calls it with `limit`'s bounds.
 
 No public interface removed; `KeyLookups::with_bounds`, `KeyLookups::bounds`, `LookupBounds` are
@@ -164,7 +172,8 @@ None.
   with a transient error (`is_transient`), the permit is back, nothing is remembered; the #120
   tests use long bounds.
 - `tests/key_round_trips.rs`: the six-round-trip tests unchanged (they now cover the timeout
-  columns); a stalling switch in the counting proxy shows (a) a lookup stalled mid-transaction
+  columns); a stalling switch (the client sends one synchronisation point, 'Q' or 'S', per round
+  trip and waits for its answer, so counting them picks the boundary deterministically) in the counting proxy shows (a) a lookup stalled mid-transaction
   fails by `bounds.transaction` with the connection closed and the permit free, (b) a lookup
   stalled at the release ping answers by `bounds.release` with the connection closed.
 - `flags-api/tests/key_lookups.rs`: a request whose lookup is blocked on the lock answers `503
