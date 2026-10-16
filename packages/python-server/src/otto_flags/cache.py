@@ -85,6 +85,8 @@ class FlagCache:
         configuration: Any = None,
         variation: str | None = None,
         *,
+        version: int | None = None,
+        scope: str | None = None,
         context_key: str = "",
     ) -> None:
         """
@@ -96,6 +98,8 @@ class FlagCache:
             flag_id: Optional flag ID for reference.
             configuration: Optional configuration data.
             variation: Optional variation identifier.
+            version: Optional flag version that produced the value.
+            scope: Optional flag scope (``"application"`` or ``"enterprise"``).
             context_key: Canonical key of the evaluation context.
         """
         with self._lock:
@@ -114,6 +118,8 @@ class FlagCache:
                 variation=variation,
                 expires_at=time.time() + self._ttl,
                 flag_id=flag_id,
+                version=version,
+                scope=scope,
             )
 
     def invalidate(self, key: str | None = None) -> None:
@@ -230,6 +236,8 @@ class AsyncFlagCache:
         configuration: Any = None,
         variation: str | None = None,
         *,
+        version: int | None = None,
+        scope: str | None = None,
         context_key: str = "",
     ) -> None:
         """
@@ -241,6 +249,8 @@ class AsyncFlagCache:
             flag_id: Optional flag ID for reference.
             configuration: Optional configuration data.
             variation: Optional variation identifier.
+            version: Optional flag version that produced the value.
+            scope: Optional flag scope (``"application"`` or ``"enterprise"``).
             context_key: Canonical key of the evaluation context.
         """
         async with self._lock:
@@ -259,6 +269,8 @@ class AsyncFlagCache:
                 variation=variation,
                 expires_at=time.time() + self._ttl,
                 flag_id=flag_id,
+                version=version,
+                scope=scope,
             )
 
     async def invalidate(self, key: str | None = None) -> None:

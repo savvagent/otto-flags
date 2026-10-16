@@ -21,3 +21,17 @@ def evaluate_payload(data: Any) -> tuple[dict[str, Any], bool]:
     if not isinstance(enabled, bool):
         raise OttoFlagsError("the evaluate response has no boolean `enabled`")
     return data, enabled
+
+
+def response_metadata(data: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Return the response's ``version`` and ``scope``; a field of the wrong type is ``None``.
+
+    Malformed metadata never fails a lookup: ``enabled`` is the only field that does. A JSON
+    boolean is not a version, though ``bool`` is an ``int`` in Python.
+    """
+    version = data.get("version")
+    scope = data.get("scope")
+    return (
+        version if isinstance(version, int) and not isinstance(version, bool) else None,
+        scope if isinstance(scope, str) else None,
+    )
