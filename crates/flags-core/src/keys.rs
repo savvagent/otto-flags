@@ -22,10 +22,12 @@
 //! lookup per request (#104). Behind that cache, [`KeyLookups`] caps how many
 //! lookups hold a pool connection at once, so a flood of distinct well-formed
 //! unknown keys cannot take the whole small pool; a lookup that cannot start
-//! within [`KEY_LOOKUP_WAIT`] is refused with [`Error::Busy`] (#120). The
+//! within [`KEY_LOOKUP_WAIT`] is refused with [`Error::Busy`] (#120). One that
+//! starts runs under [`LookupBounds`], so a lock on `app_keys`, a slow
+//! statement, or a dead connection cannot hold its permit for long (#130). The
 //! stream's periodic re-check of a key that resolved stays on [`resolve_hash`],
-//! ungated and uncached, so it notices revocation and a flood cannot end an
-//! authenticated stream.
+//! ungated and uncached (under [`LookupBounds::DEFAULT`]), so it notices
+//! revocation and a flood cannot end an authenticated stream.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -40,7 +42,7 @@ use tokio::sync::Semaphore;
 
 use crate::error::{Error, Result};
 use crate::ids::FlagAppId;
-use crate::unpinned::Held;
+use crate::unpinned::{Held, Timeouts};
 
 pub const CLIENT_PREFIX: &str = "sdk_";
 pub const SERVER_PREFIX: &str = "srv_";
@@ -151,25 +153,86 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 /// in clear (a long-lived stream).
 ///
 /// Returns only once its connection is back in the pool, release ping
-/// included, so a caller holding a [`KeyLookups`] permit across this call
-/// covers the connection's whole checkout (#120).
+/// included, or closed, so a caller holding a [`KeyLookups`] permit across
+/// this call covers the connection's whole checkout (#120). Runs under
+/// [`LookupBounds::DEFAULT`]: a lookup that misses its transaction deadline
+/// closes its connection and fails with a transient `sqlx::Error::Io`
+/// (#130).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
-    let mut conn = Held::acquire(db).await?;
-    // No `?` and no early return between the acquire and `release`: dropping
-    // a pool connection hands its release (rolling back an open transaction,
-    // the ping) to a task sqlx spawns, so this would return, and its caller
-    // free its permit, while the connection is still checked out. (A panic in
-    // `lookup` still takes that path; the permit is then freed by the unwind.)
-    let owner = lookup(db, &mut conn, key_hash).await;
-    conn.release().await;
-    owner
+    resolve_hash_within(db, key_hash, &LookupBounds::DEFAULT).await
 }
 
+/// [`resolve_hash`] under `bounds`.
+async fn resolve_hash_within(
+    db: &Db,
+    key_hash: &[u8],
+    bounds: &LookupBounds,
+) -> Result<Option<KeyOwner>> {
+    let mut conn = Held::acquire(db).await?;
+    // No `?` and no early return between the acquire and `release` or
+    // `discard`: dropping a pool connection hands its release (rolling back
+    // an open transaction, the ping) to a task sqlx spawns, so this would
+    // return, and its caller free its permit, while the connection is still
+    // checked out. (A panic in `lookup` still takes that path; the permit is
+    // then freed by the unwind.)
+    //
+    // Both steps are bounded on the client (#130): the server-side timeouts
+    // the probe sets cannot reach a client whose connection went half-open.
+    // A transaction that misses its deadline may have left the connection
+    // mid-protocol, so it is closed, never returned; a release that misses
+    // its deadline is cut short, which also closes it (`Held::release`).
+    // Either way the connection is gone before this returns.
+    match tokio::time::timeout(bounds.transaction, lookup(db, &mut conn, key_hash, bounds)).await {
+        Ok(owner) => {
+            if !conn.release(bounds.release).await {
+                // The answer was already read: still give it.
+                tracing::warn!(
+                    reason = "release_timed_out",
+                    within = ?bounds.release,
+                    "sdk key lookup's connection did not return to the pool in time; closed it"
+                );
+            }
+            owner
+        }
+        Err(_) => {
+            conn.discard();
+            // A fixed reason of its own: the API logs the error below as
+            // `io`, the same as a broken socket.
+            tracing::warn!(
+                reason = "transaction_timed_out",
+                within = ?bounds.transaction,
+                "sdk key lookup's transaction did not finish in time; closed its connection"
+            );
+            Err(Error::Db(sqlx::Error::Io(
+                std::io::ErrorKind::TimedOut.into(),
+            )))
+        }
+    }
+}
+
+/// How far past the client-side transaction deadline the server's
+/// `idle_in_transaction_session_timeout` is set: the client gives up first,
+/// with its own reason, and the server's timeout is only the backstop for a
+/// client that went quiet (a half-open link), never a race with it (#130).
+const IDLE_PAST_DEADLINE: Duration = Duration::from_millis(500);
+
 /// [`resolve_hash`]'s query, on the connection it holds.
-async fn lookup(db: &Db, conn: &mut Held, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+async fn lookup(
+    db: &Db,
+    conn: &mut Held,
+    key_hash: &[u8],
+    bounds: &LookupBounds,
+) -> Result<Option<KeyOwner>> {
     // No org yet: finding it is the point. Unpinned, as the tenant role
-    // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
-    let mut tx = conn.begin(db).await?;
+    // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS. The
+    // probe sets the server-side timeouts, so the lookup that follows gives
+    // up on a lock or a slow statement (#130).
+    let timeouts = Timeouts {
+        lock: bounds.lock,
+        statement: bounds.statement,
+        idle: bounds.transaction + IDLE_PAST_DEADLINE,
+    };
+    let mut tx = conn.begin(db, Some(timeouts)).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
@@ -197,7 +260,7 @@ async fn lookup(db: &Db, conn: &mut Held, key_hash: &[u8]) -> Result<Option<KeyO
 /// A malformed key and a remembered one take no permit. Any other waits up to
 /// the limit's wait for one, then fails with [`Error::Busy`]. The lookup runs
 /// in a task that owns the permit and frees it only after its connection is
-/// back in the pool, so a caller dropped mid-lookup (a client that hung up)
+/// back in the pool or closed, so a caller dropped mid-lookup (a client that hung up)
 /// neither frees the permit early nor loses the answer: the task still
 /// remembers an unknown key.
 pub async fn resolve_cached(
@@ -219,9 +282,9 @@ pub async fn resolve_cached(
         // A timeout, or a closed semaphore, which nothing here ever closes.
         Ok(Err(_)) | Err(_) => return Err(Error::Busy),
     };
-    let (db, unknown) = (db.clone(), Arc::clone(unknown));
+    let (db, unknown, limit_bounds) = (db.clone(), Arc::clone(unknown), limit.bounds);
     let task = tokio::spawn(async move {
-        let owner = resolve_hash(&db, &hash).await;
+        let owner = resolve_hash_within(&db, &hash, &limit_bounds).await;
         if matches!(owner, Ok(None)) {
             unknown.insert(hash, Instant::now());
         }
@@ -261,18 +324,73 @@ pub const KEY_LOOKUP_WAIT: Duration = Duration::from_secs(2);
 /// sqlx returns a dropped `PoolConnection` to the pool in a task it spawns,
 /// after a release ping, so a permit freed when the query returned would be
 /// free while the connection is still out: [`resolve_hash`] awaits the return
-/// itself. And a request future dropped mid-lookup would drop its permit at
+/// itself, or closes the connection, before it returns. And a request future dropped mid-lookup would drop its permit at
 /// once: [`resolve_cached`] runs the lookup in a task that owns the permit.
 #[derive(Debug)]
 pub struct KeyLookups {
     permits: Arc<Semaphore>,
     size: usize,
     wait: Duration,
+    bounds: LookupBounds,
+}
+
+/// How long an SDK key lookup may take once it has its connection (#130), so
+/// that neither its [`KeyLookups`] permit nor its pool connection is held for
+/// as long as a lock on `app_keys` lasts or a dead connection takes to notice.
+///
+/// `lock` and `statement` are set on the server for the rest of the lookup's
+/// transaction (the lookup's statement and `COMMIT`):
+/// a lock wait fails with `lock_not_available` (55P03) and a slow statement
+/// with `query_canceled` (57014), both transient (`503` on the SDK API) and
+/// never remembered as an unknown key. They cannot bound a half-open
+/// connection, which never hears the server's answer: `transaction` is a
+/// client-side deadline on the whole transaction, `BEGIN` to `COMMIT`, and
+/// `release` one on returning the connection to the pool. A connection that
+/// misses either is closed, never returned. Half a second past `transaction`
+/// is also the server's `idle_in_transaction_session_timeout`, so a backend
+/// whose client gave up ends itself rather than keep its lock on `app_keys`.
+/// (Between `BEGIN` and the probe only the client deadline applies; the
+/// backend holds no lock on `app_keys` yet.)
+///
+/// A discarded connection frees its pool slot at once, while its backend may
+/// live up to about `statement` longer, so the pool can briefly open a
+/// replacement beside it: at most one extra backend per permit, and only
+/// while the database is already slow or `app_keys` locked.
+///
+/// Every bound must be non-zero: a zero client-side bound would close the
+/// connection on every lookup.
+///
+/// ```
+/// use flags_core::keys::{KeyLookups, LookupBounds, KEY_LOOKUP_WAIT};
+/// assert_eq!(KeyLookups::new(1, KEY_LOOKUP_WAIT).bounds(), LookupBounds::DEFAULT);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LookupBounds {
+    /// `lock_timeout` for the lookup's statement.
+    pub lock: Duration,
+    /// `statement_timeout` for the lookup's statement.
+    pub statement: Duration,
+    /// Client-side deadline on the transaction; half a second more is the
+    /// server's `idle_in_transaction_session_timeout`.
+    pub transaction: Duration,
+    /// Client-side deadline on returning the connection to the pool.
+    pub release: Duration,
+}
+
+impl LookupBounds {
+    /// Production's bounds. A healthy lookup takes a few milliseconds; with
+    /// the pool's 5 s acquire timeout a permit is held at most about 8 s.
+    pub const DEFAULT: Self = Self {
+        lock: Duration::from_millis(500),
+        statement: Duration::from_secs(1),
+        transaction: Duration::from_secs(2),
+        release: Duration::from_secs(1),
+    };
 }
 
 impl KeyLookups {
     /// At most `permits` lookups at once, each waiting up to `wait` for its
-    /// turn.
+    /// turn, under [`LookupBounds::DEFAULT`].
     ///
     /// # Panics
     ///
@@ -283,7 +401,20 @@ impl KeyLookups {
             permits: Arc::new(Semaphore::new(permits)),
             size: permits,
             wait,
+            bounds: LookupBounds::DEFAULT,
         }
+    }
+
+    /// The same limit, with each lookup under `bounds` instead of
+    /// [`LookupBounds::DEFAULT`]. Every bound must be non-zero
+    /// ([`LookupBounds`]).
+    pub fn with_bounds(self, bounds: LookupBounds) -> Self {
+        Self { bounds, ..self }
+    }
+
+    /// The bounds each lookup runs under.
+    pub fn bounds(&self) -> LookupBounds {
+        self.bounds
     }
 
     /// The limit for a pool of `max_connections`: half of what the listener's

@@ -1,4 +1,5 @@
-//! SDK key lookups hold a bounded share of the pool (#120).
+//! SDK key lookups hold a bounded share of the pool (#120), for a bounded
+//! time (#130).
 //!
 //! A connection outside the pool under test holds `app_keys` in ACCESS
 //! EXCLUSIVE mode, so every lookup that gets a permit blocks in the database
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use flags_api::AppState;
-use flags_core::keys::{KeyKind, KeyLookups, NewKey};
+use flags_core::keys::{KeyKind, KeyLookups, LookupBounds, NewKey};
 use flags_core::notify::Listener;
 use flags_core::rollback::Hints;
 use http::{Request, StatusCode};
@@ -41,6 +42,18 @@ async fn state_on_a_pool_of_five(pool: &PgPool, limit: KeyLookups) -> (AppState,
     assert_eq!(state.key_lookups.permits(), 2);
     state.key_lookups = Arc::new(limit);
     (state, five)
+}
+
+/// Bounds long enough that a lookup blocked behind [`lock_app_keys`] stays
+/// blocked until [`unlock`], for the tests that need its permit held (#130).
+fn long_bounds() -> LookupBounds {
+    let long = Duration::from_secs(30);
+    LookupBounds {
+        lock: long,
+        statement: long,
+        transaction: long,
+        release: long,
+    }
 }
 
 /// A connection outside the pool under test that holds `app_keys` locked
@@ -145,8 +158,11 @@ async fn next(answers: &mut mpsc::UnboundedReceiver<Answer>) -> Answer {
 /// and the 2 in flight answer `401` once the database moves again.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_flood_of_unknown_keys_leaves_connections_free(pool: PgPool) {
-    let (state, five) =
-        state_on_a_pool_of_five(&pool, KeyLookups::new(2, Duration::from_millis(300))).await;
+    let (state, five) = state_on_a_pool_of_five(
+        &pool,
+        KeyLookups::new(2, Duration::from_millis(300)).with_bounds(long_bounds()),
+    )
+    .await;
     let mut lock = lock_app_keys(&pool).await;
     let (tx, mut answers) = mpsc::unbounded_channel();
     for _ in 0..20 {
@@ -190,8 +206,11 @@ async fn a_flood_of_unknown_keys_leaves_connections_free(pool: PgPool) {
 /// still holds a connection until it finishes.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_dropped_request_keeps_its_permit_until_the_lookup_ends(pool: PgPool) {
-    let (state, five) =
-        state_on_a_pool_of_five(&pool, KeyLookups::new(1, Duration::from_millis(300))).await;
+    let (state, five) = state_on_a_pool_of_five(
+        &pool,
+        KeyLookups::new(1, Duration::from_millis(300)).with_bounds(long_bounds()),
+    )
+    .await;
     let mut lock = lock_app_keys(&pool).await;
     let (tx, _answers) = mpsc::unbounded_channel();
     let req = request(&state, tx);
@@ -204,6 +223,38 @@ async fn a_dropped_request_keeps_its_permit_until_the_lookup_ends(pool: PgPool) 
         "the dropped request's lookup still holds its permit"
     );
     unlock(&mut lock).await;
+    until_released(&state).await;
+    five.close().await;
+    lock.close().await.unwrap();
+}
+
+/// With the default bounds, a request whose key lookup is blocked on the lock
+/// gives up at `lock_timeout` and answers `503 temporarily_unavailable` with
+/// `Retry-After`, freeing its permit, instead of waiting out the lock (#130).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_blocked_on_a_lock_answers_503_within_the_bound(pool: PgPool) {
+    let (state, five) =
+        state_on_a_pool_of_five(&pool, KeyLookups::new(2, flags_core::keys::KEY_LOOKUP_WAIT)).await;
+    assert_eq!(state.key_lookups.bounds(), LookupBounds::DEFAULT);
+    let mut lock = lock_app_keys(&pool).await;
+    let (tx, mut answers) = mpsc::unbounded_channel();
+    let started = Instant::now();
+    request(&state, tx);
+    let answer = next(&mut answers).await;
+    let elapsed = started.elapsed();
+    unlock(&mut lock).await;
+    assert_eq!(
+        answer,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("5".to_string()),
+            Some("temporarily_unavailable".to_string())
+        )
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "answered after {elapsed:?}"
+    );
     until_released(&state).await;
     five.close().await;
     lock.close().await.unwrap();

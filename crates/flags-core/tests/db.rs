@@ -5855,6 +5855,18 @@ async fn unlock_app_keys(mut lock: sqlx::PgConnection) {
     lock.close().await.unwrap();
 }
 
+/// Bounds long enough that a lookup blocked behind [`lock_app_keys`] stays
+/// blocked for the whole test, for the #120 tests that need it held (#130).
+fn long_bounds() -> keys::LookupBounds {
+    let long = std::time::Duration::from_secs(30);
+    keys::LookupBounds {
+        lock: long,
+        statement: long,
+        transaction: long,
+        release: long,
+    }
+}
+
 /// Poll `check` every 10 ms until it holds; panics with `what` after 5 s.
 async fn within_5s(what: &str, mut check: impl FnMut() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -5873,7 +5885,7 @@ async fn a_lookup_waits_for_a_permit_and_is_refused_after_the_wait(pool: PgPool)
     let db = db(pool.clone()).await;
     let unknown = Arc::new(keys::UnknownKeys::new());
     let wait = std::time::Duration::from_millis(200);
-    let limit = Arc::new(keys::KeyLookups::new(1, wait));
+    let limit = Arc::new(keys::KeyLookups::new(1, wait).with_bounds(long_bounds()));
     let remembered = keys::NewKey::mint(KeyKind::Client).key;
     assert!(keys::resolve_cached(&db, &unknown, &limit, &remembered)
         .await
@@ -5911,6 +5923,86 @@ async fn a_lookup_waits_for_a_permit_and_is_refused_after_the_wait(pool: PgPool)
     assert!(blocked.await.unwrap().unwrap().is_none());
     within_5s("the permit comes back", || limit.available() == 1).await;
     assert_eq!(unknown.len(), 2, "the remembered key and the blocked one");
+}
+
+/// With the default bounds, a lookup blocked on a lock on `app_keys` gives up
+/// within `lock_timeout` plus slack, with a transient error that is not
+/// remembered as an unknown key, and frees its permit (#130).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_blocked_on_a_lock_gives_up_within_the_bound(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
+    assert_eq!(limit.bounds(), keys::LookupBounds::DEFAULT);
+    let lock = lock_app_keys(&pool).await;
+    let key = keys::NewKey::mint(KeyKind::Client).key;
+    let started = std::time::Instant::now();
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        keys::resolve_cached(&db, &unknown, &limit, &key),
+    )
+    .await
+    .expect("the blocked lookup never gave up");
+    let elapsed = started.elapsed();
+    unlock_app_keys(lock).await;
+    let err = answer.expect_err("a lookup blocked on the lock answered");
+    assert!(err.is_transient(), "{err:?}");
+    assert_eq!(err.failure_reason().reason, "lock_not_available", "{err:?}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1500),
+        "gave up after {elapsed:?}"
+    );
+    assert_eq!(limit.available(), 1, "the permit is free");
+    assert!(unknown.is_empty(), "an error is not remembered");
+    assert_eq!(
+        db.pool().num_idle(),
+        db.pool().size() as usize,
+        "the connection is back in the pool"
+    );
+}
+
+/// A lookup whose statement runs past `statement_timeout` gives up with
+/// `query_canceled`, a transient error, frees its permit, and remembers
+/// nothing (#130). The lock bound is long here so the statement timeout,
+/// not the lock timeout, is what fires: a mix-up between the two settings
+/// would fail this test.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_slow_lookup_gives_up_at_the_statement_timeout(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let unknown = Arc::new(keys::UnknownKeys::new());
+    let long = std::time::Duration::from_secs(30);
+    let statement = std::time::Duration::from_millis(150);
+    let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT).with_bounds(keys::LookupBounds {
+        lock: long,
+        statement,
+        transaction: long,
+        release: long,
+    });
+    let lock = lock_app_keys(&pool).await;
+    let started = std::time::Instant::now();
+    let answer = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        keys::resolve_cached(
+            &db,
+            &unknown,
+            &limit,
+            &keys::NewKey::mint(KeyKind::Client).key,
+        ),
+    )
+    .await
+    .expect("the slow lookup never gave up");
+    let elapsed = started.elapsed();
+    unlock_app_keys(lock).await;
+    let err = answer.expect_err("a slow lookup answered");
+    assert!(err.is_transient(), "{err:?}");
+    assert_eq!(err.failure_reason().reason, "query_canceled", "{err:?}");
+    assert!(elapsed >= statement, "gave up after {elapsed:?}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(1500),
+        "gave up after {elapsed:?}"
+    );
+    assert_eq!(limit.available(), 1, "the permit is free");
+    assert!(unknown.is_empty(), "an error is not remembered");
 }
 
 /// A lookup answers only once its connection is back in the pool, release
@@ -5953,7 +6045,8 @@ async fn a_lookup_returns_its_connection_before_it_answers(pool: PgPool) {
 async fn a_dropped_lookup_still_remembers_its_unknown_key(pool: PgPool) {
     let db = db(pool.clone()).await;
     let unknown = Arc::new(keys::UnknownKeys::new());
-    let limit = Arc::new(keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT));
+    let limit =
+        Arc::new(keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT).with_bounds(long_bounds()));
     let lock = lock_app_keys(&pool).await;
     let caller = tokio::spawn({
         let (db, unknown, limit) = (db.clone(), unknown.clone(), limit.clone());
