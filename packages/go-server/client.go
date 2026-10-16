@@ -166,6 +166,11 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		Variation     string                 `json:"variation"`
 		Version       json.RawMessage        `json:"version"`
 		Scope         json.RawMessage        `json:"scope"`
+
+		// Never sent by the otto-flags server; still read for compatibility.
+		FlagID      json.RawMessage `json:"flag_id"`
+		Description json.RawMessage `json:"description"`
+		Variant     json.RawMessage `json:"variant"`
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -187,12 +192,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 			version = 0
 		}
 	}
-	var scope string
-	if len(response.Scope) > 0 {
-		if json.Unmarshal(response.Scope, &scope) != nil {
-			scope = ""
-		}
-	}
+	scope := metadataString(response.Scope)
 
 	// Cache the result (including configuration, variation, version and scope)
 	c.cache.Set(flagKey, ctxKey, enabled, response.Configuration, response.Variation, version, scope)
@@ -221,10 +221,23 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		Variation:     finalVariation,
 		Reason:        "evaluated",
 		Metadata: &Metadata{
-			Version: version,
-			Scope:   scope,
+			FlagID:      metadataString(response.FlagID),
+			Description: metadataString(response.Description),
+			Variant:     metadataString(response.Variant),
+			Version:     version,
+			Scope:       scope,
 		},
 	}, nil
+}
+
+// metadataString decodes a metadata field that should be a JSON string. Anything else (absent,
+// null, another type) is "": metadata is informational and never fails a lookup.
+func metadataString(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // IsEnabled checks if a flag is enabled (convenience method)
