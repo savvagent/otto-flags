@@ -111,7 +111,8 @@ Per SDK, on a successful evaluate response:
   `string` and ignored on error.
 - **Java.** `Metadata` gains `Long version` and `String scope` with getters and setters.
   `FlagClient` reads them with `isJsonPrimitive()` + `isNumber()` (and an integral value) /
-  `isString()`. `CacheEntry` gains `Metadata metadata`; the cached path returns it.
+  `isString()`. `CacheEntry` gains `Long version` and `String scope`; the cached path returns a
+  fresh `Metadata` with them (the class is mutable, so the entry never shares one).
 
 Public API: additive only (new optional fields, new optional/keyword parameters, Go struct fields
 and a new unexported-cache parameter). Behavior change: a cache hit returns a metadata object

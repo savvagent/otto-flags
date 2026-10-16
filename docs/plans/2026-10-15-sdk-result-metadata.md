@@ -76,7 +76,8 @@ Test matrix (each SDK, against its mock server returning the server's exact shap
 
 - [ ] **Step 1: failing tests.** In `tests/test_client.py` and `tests/test_async_client.py`, a
   new class (e.g. `TestResultMetadata`) with the matrix, using `mock_api`/respx and
-  `server_body` from `conftest.py` (extend the body dict per test for the malformed cases).
+  `server_body` from `conftest.py` (a function: build each malformed body as
+  `{**server_body("checkout", True), "version": "3", "scope": 7}`, never mutate a shared dict).
 - [ ] **Step 2: run the Python gate; see them fail.**
 - [ ] **Step 3: implement.** `types.py`: `FlagMetadata` gains `version: int | None = None` and
   `scope: str | None = None` after the existing fields; docstrings: `flag_id`, `description`,
@@ -137,7 +138,9 @@ Test matrix (each SDK, against its mock server returning the server's exact shap
   { if json.Unmarshal(response.Version, &version) != nil { version = 0 } }` and the same for
   `scope` into a `string`; pass them to `Set` and `Metadata`; the cached path returns `Metadata:
   &Metadata{Version: cachedEntry.Version, Scope: cachedEntry.Scope}`. README: the result shape.
-- [ ] **Step 3: self-check compile by reading** (every `Set` call site; imports).
+- [ ] **Step 3: self-check compile by reading:** every `Set` call site, including the five in
+  `context_cache_test.go` (lines ~140-173, which compile today: append `, 0, ""`); leave
+  `cache_test.go` alone (#113); imports.
 - [ ] **Step 4: commit** `fix(sdk): report the server's version and scope in go results`.
 
 ### Task 4: Java SDK
@@ -145,7 +148,7 @@ Test matrix (each SDK, against its mock server returning the server's exact shap
 **Model:** sonnet
 
 - [ ] **Step 1: tests (cannot run).** `MetadataTest.java` modeled on `EvaluateContractTest.java`
-  (MockWebServer, the same client construction). Matrix: evaluated, cached, malformed.
+  (MockWebServer; copy its private `client(...)` and `serverBody(...)` helpers). Matrix: evaluated, cached, malformed.
 - [ ] **Step 2: implement.** `FlagEvaluationResult.Metadata` gains `private Long version;
   private String scope;` with `getVersion/setVersion`, `getScope/setScope`; Javadoc on the old
   getters: not sent by the otto-flags server. `FlagClient`: after the existing metadata reads,
