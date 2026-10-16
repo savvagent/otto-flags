@@ -10,25 +10,63 @@
 //!
 //! A change to the count must be deliberate: update the expectation here with
 //! the reason.
+//!
+//! The same proxy can stop forwarding at a chosen round trip
+//! ([`RoundTrips::stall_after`]), which is what a half-open connection looks
+//! like to the client: the request leaves and no answer ever comes. That
+//! shows the lookup's client-side deadlines (#130).
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use flags_core::apps::AppsExt;
-use flags_core::keys::{self, KeyLookups, UnknownKeys, KEY_LOOKUP_WAIT};
+use flags_core::keys::{self, KeyLookups, LookupBounds, UnknownKeys, KEY_LOOKUP_WAIT};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Notify;
 
-/// Round trips the client started, across every proxied connection.
-#[derive(Clone, Default)]
-struct RoundTrips(Arc<AtomicUsize>);
+/// Round trips the client started, across every proxied connection, and the
+/// switch that stops forwarding them.
+#[derive(Clone)]
+struct RoundTrips {
+    count: Arc<AtomicUsize>,
+    /// A round trip whose number since the last `take` exceeds this is not
+    /// forwarded: its connection's forwarder parks until `unstall`.
+    stall_after: Arc<AtomicUsize>,
+    unstall: Arc<Notify>,
+}
+
+impl Default for RoundTrips {
+    fn default() -> Self {
+        Self {
+            count: Arc::default(),
+            stall_after: Arc::new(AtomicUsize::new(usize::MAX)),
+            unstall: Arc::default(),
+        }
+    }
+}
 
 impl RoundTrips {
+    /// Forward the next `n` round trips, then stop.
+    fn stall_after(&self, n: usize) {
+        self.stall_after.store(n, Ordering::SeqCst);
+    }
+
+    /// End every parked forwarder. Each drops its write half to the server,
+    /// so the backend sees EOF and ends: left alone, a backend stalled
+    /// mid-transaction would keep its lock on `app_keys`, and sqlx could not
+    /// drop the test database.
+    fn unstall(&self) {
+        self.stall_after.store(usize::MAX, Ordering::SeqCst);
+        self.unstall.notify_waiters();
+    }
+
     /// The round trips since the last `take`, once `db`'s connection is back
     /// in the pool. sqlx returns a connection in a spawned task that pings it
     /// first, after the caller already has its answer, so the release ping
@@ -41,13 +79,14 @@ impl RoundTrips {
         })
         .await
         .expect("the pool's connection was never returned");
-        self.0.swap(0, Ordering::SeqCst)
+        self.count.swap(0, Ordering::SeqCst)
     }
 }
 
 /// Forward the client's side of one connection to the server, counting each
 /// 'Q' and 'S' message after the untyped startup packet (TLS is off, so
-/// there is no `SSLRequest` before it).
+/// there is no `SSLRequest` before it). One past `trips.stall_after` is held
+/// back, and the forwarder parks until `trips.unstall`.
 async fn forward_client(
     mut client: tokio::net::tcp::OwnedReadHalf,
     mut server: tokio::net::tcp::OwnedWriteHalf,
@@ -69,7 +108,11 @@ async fn forward_client(
         let mut body = vec![0u8; usize::try_from(len - 4).expect("message length")];
         client.read_exact(&mut body).await?;
         if kind == b'Q' || kind == b'S' {
-            trips.0.fetch_add(1, Ordering::SeqCst);
+            let n = trips.count.fetch_add(1, Ordering::SeqCst) + 1;
+            if n > trips.stall_after.load(Ordering::SeqCst) {
+                trips.unstall.notified().await;
+                return Ok(());
+            }
         }
         server.write_u8(kind).await?;
         server.write_i32(len).await?;
@@ -201,5 +244,86 @@ async fn a_cached_unknown_key_takes_no_round_trips(pool: PgPool) {
         assert_eq!(trips.take(&db).await, 6, "known key, attempt {attempt}");
     }
     assert_eq!(unknown.len(), 1);
+    db.pool().close().await;
+}
+
+/// Bounds short enough for a test, in the same order as production's.
+fn short_bounds() -> LookupBounds {
+    LookupBounds {
+        lock: Duration::from_millis(100),
+        statement: Duration::from_millis(200),
+        transaction: Duration::from_millis(300),
+        release: Duration::from_millis(300),
+    }
+}
+
+/// A lookup whose connection stops answering mid-transaction (the lookup
+/// statement leaves, no answer comes) gives up at the transaction deadline
+/// with a transient error, and its connection is closed, not returned,
+/// before its permit is freed (#130).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_stalled_mid_transaction_closes_its_connection(pool: PgPool) {
+    let (db, trips) = counted_db(&pool).await;
+    let unknown = Arc::new(UnknownKeys::new());
+    let limit = KeyLookups::new(1, KEY_LOOKUP_WAIT).with_bounds(short_bounds());
+    keys::resolve(&db, &unknown_key()).await.unwrap();
+    trips.take(&db).await;
+    // The acquire ping, BEGIN, and the probe go through; the lookup stalls.
+    trips.stall_after(3);
+    let started = Instant::now();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(5),
+        keys::resolve_cached(&db, &unknown, &limit, &unknown_key()),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    let (size, available) = (db.pool().size(), limit.available());
+    trips.unstall();
+    let err = answer
+        .expect("the stalled lookup never gave up")
+        .expect_err("a stalled lookup answered");
+    assert!(err.is_transient(), "{err:?}");
+    assert_eq!(err.failure_reason().reason, "io", "{err:?}");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "gave up after {elapsed:?}"
+    );
+    assert_eq!(size, 0, "the stalled connection was closed");
+    assert_eq!(available, 1, "the permit is free");
+    assert!(unknown.is_empty(), "an error is not remembered");
+    db.pool().close().await;
+}
+
+/// A lookup whose connection stops answering at the release ping, after the
+/// answer was read, still answers by the release deadline, with the
+/// connection closed rather than left checked out (#130).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_stalled_at_the_release_ping_still_answers(pool: PgPool) {
+    let (db, trips) = counted_db(&pool).await;
+    let unknown = Arc::new(UnknownKeys::new());
+    let limit = KeyLookups::new(1, KEY_LOOKUP_WAIT).with_bounds(short_bounds());
+    keys::resolve(&db, &unknown_key()).await.unwrap();
+    trips.take(&db).await;
+    // Everything through COMMIT goes through; the release ping stalls.
+    trips.stall_after(5);
+    let started = Instant::now();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(5),
+        keys::resolve_cached(&db, &unknown, &limit, &unknown_key()),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    let (size, available) = (db.pool().size(), limit.available());
+    trips.unstall();
+    let owner = answer
+        .expect("the stalled release never gave up")
+        .expect("the lookup's answer was read before the release");
+    assert!(owner.is_none());
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "answered after {elapsed:?}"
+    );
+    assert_eq!(size, 0, "the stalled connection was closed");
+    assert_eq!(available, 1, "the permit is free");
     db.pool().close().await;
 }

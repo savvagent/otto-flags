@@ -153,8 +153,11 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 /// in clear (a long-lived stream).
 ///
 /// Returns only once its connection is back in the pool, release ping
-/// included, so a caller holding a [`KeyLookups`] permit across this call
-/// covers the connection's whole checkout (#120).
+/// included, or closed, so a caller holding a [`KeyLookups`] permit across
+/// this call covers the connection's whole checkout (#120). Runs under
+/// [`LookupBounds::DEFAULT`]: a lookup that misses its transaction deadline
+/// closes its connection and fails with a transient `sqlx::Error::Io`
+/// (#130).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
     resolve_hash_within(db, key_hash, &LookupBounds::DEFAULT).await
 }
@@ -166,14 +169,45 @@ async fn resolve_hash_within(
     bounds: &LookupBounds,
 ) -> Result<Option<KeyOwner>> {
     let mut conn = Held::acquire(db).await?;
-    // No `?` and no early return between the acquire and `release`: dropping
-    // a pool connection hands its release (rolling back an open transaction,
-    // the ping) to a task sqlx spawns, so this would return, and its caller
-    // free its permit, while the connection is still checked out. (A panic in
-    // `lookup` still takes that path; the permit is then freed by the unwind.)
-    let owner = lookup(db, &mut conn, key_hash, bounds).await;
-    conn.release().await;
-    owner
+    // No `?` and no early return between the acquire and `release` or
+    // `discard`: dropping a pool connection hands its release (rolling back
+    // an open transaction, the ping) to a task sqlx spawns, so this would
+    // return, and its caller free its permit, while the connection is still
+    // checked out. (A panic in `lookup` still takes that path; the permit is
+    // then freed by the unwind.)
+    //
+    // Both steps are bounded on the client (#130): the server-side timeouts
+    // the probe sets cannot reach a client whose connection went half-open.
+    // A transaction that misses its deadline may have left the connection
+    // mid-protocol, so it is closed, never returned; a release that misses
+    // its deadline is cut short, which also closes it (`Held::release`).
+    // Either way the connection is gone before this returns.
+    match tokio::time::timeout(bounds.transaction, lookup(db, &mut conn, key_hash, bounds)).await {
+        Ok(owner) => {
+            if !conn.release(bounds.release).await {
+                // The answer was already read: still give it.
+                tracing::warn!(
+                    reason = "release_timed_out",
+                    within = ?bounds.release,
+                    "sdk key lookup's connection did not return to the pool in time; closed it"
+                );
+            }
+            owner
+        }
+        Err(_) => {
+            conn.discard();
+            // A fixed reason of its own: the API logs the error below as
+            // `io`, the same as a broken socket.
+            tracing::warn!(
+                reason = "transaction_timed_out",
+                within = ?bounds.transaction,
+                "sdk key lookup's transaction did not finish in time; closed its connection"
+            );
+            Err(Error::Db(sqlx::Error::Io(
+                std::io::ErrorKind::TimedOut.into(),
+            )))
+        }
+    }
 }
 
 /// [`resolve_hash`]'s query, on the connection it holds.

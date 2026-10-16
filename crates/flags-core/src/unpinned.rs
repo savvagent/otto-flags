@@ -121,8 +121,33 @@ impl Held {
     /// rollback of any transaction left open and sqlx's release ping run
     /// inside this call, not in the task sqlx spawns when a `PoolConnection`
     /// is dropped. A connection that fails the ping is closed instead.
-    pub(crate) async fn release(mut self) {
-        self.0.return_to_pool().await;
+    ///
+    /// Waits at most `within` (#130): a half-open connection never answers
+    /// the ping, and the kernel can take many minutes to notice. True if
+    /// sqlx's return finished in time, whether it pooled the connection or
+    /// closed it; false if it was cut short. Cutting it short never leaves
+    /// the connection checked out once this returns: `return_to_pool` takes
+    /// the connection out of the `PoolConnection` before it returns its
+    /// future, and the future owns it, so dropping the future drops the
+    /// connection, closing its socket, and its pool slot, decrementing the
+    /// pool's size (sqlx-core 0.8.6 `pool/connection.rs`: `return_to_pool`,
+    /// `Floating`, `DecrementSizeGuard`'s `Drop`). The emptied
+    /// `PoolConnection` then drops with nothing to return.
+    pub(crate) async fn release(mut self, within: Duration) -> bool {
+        tokio::time::timeout(within, self.0.return_to_pool())
+            .await
+            .is_ok()
+    }
+
+    /// Close the connection instead of returning it (#130), for one that
+    /// missed a deadline and may be mid-protocol. Detaching it frees its pool
+    /// slot at once, so a replacement may open, and dropping it closes its
+    /// socket, both before this returns (sqlx-core 0.8.6
+    /// `pool/connection.rs`: `PoolConnection::detach`, `Floating::detach`).
+    /// A backend left mid-transaction ends itself when it sees the socket
+    /// close, or at its `idle_in_transaction_session_timeout`.
+    pub(crate) fn discard(self) {
+        drop(self.0.detach());
     }
 }
 
@@ -326,7 +351,7 @@ pub(crate) mod tests {
             ("250ms".into(), "750ms".into(), "1500ms".into())
         );
         tx.commit().await.unwrap();
-        conn.release().await;
+        assert!(conn.release(Duration::from_secs(5)).await);
         let mut tx = begin(&db).await.unwrap();
         assert_eq!(timeouts(&mut tx).await, unset());
         tx.rollback().await.unwrap();
