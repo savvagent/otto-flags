@@ -1,4 +1,5 @@
-//! SDK key lookups hold a bounded share of the pool (#120).
+//! SDK key lookups hold a bounded share of the pool (#120), for a bounded
+//! time (#130).
 //!
 //! A connection outside the pool under test holds `app_keys` in ACCESS
 //! EXCLUSIVE mode, so every lookup that gets a permit blocks in the database
@@ -222,6 +223,38 @@ async fn a_dropped_request_keeps_its_permit_until_the_lookup_ends(pool: PgPool) 
         "the dropped request's lookup still holds its permit"
     );
     unlock(&mut lock).await;
+    until_released(&state).await;
+    five.close().await;
+    lock.close().await.unwrap();
+}
+
+/// With the default bounds, a request whose key lookup is blocked on the lock
+/// gives up at `lock_timeout` and answers `503 temporarily_unavailable` with
+/// `Retry-After`, freeing its permit, instead of waiting out the lock (#130).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_lookup_blocked_on_a_lock_answers_503_within_the_bound(pool: PgPool) {
+    let (state, five) =
+        state_on_a_pool_of_five(&pool, KeyLookups::new(2, flags_core::keys::KEY_LOOKUP_WAIT)).await;
+    assert_eq!(state.key_lookups.bounds(), LookupBounds::DEFAULT);
+    let mut lock = lock_app_keys(&pool).await;
+    let (tx, mut answers) = mpsc::unbounded_channel();
+    let started = Instant::now();
+    request(&state, tx);
+    let answer = next(&mut answers).await;
+    let elapsed = started.elapsed();
+    unlock(&mut lock).await;
+    assert_eq!(
+        answer,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("5".to_string()),
+            Some("temporarily_unavailable".to_string())
+        )
+    );
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "answered after {elapsed:?}"
+    );
     until_released(&state).await;
     five.close().await;
     lock.close().await.unwrap();
