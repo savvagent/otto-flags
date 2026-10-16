@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeSet;
@@ -117,8 +118,11 @@ public class FlagClient implements AutoCloseable {
                 }
 
                 logger.debug("Flag '{}' returned from cache: {}", flagKey, cachedEntry.value);
+                FlagEvaluationResult.Metadata cachedMetadata = new FlagEvaluationResult.Metadata();
+                cachedMetadata.setVersion(cachedEntry.version);
+                cachedMetadata.setScope(cachedEntry.scope);
                 return new FlagEvaluationResult(flagKey, cachedEntry.value, configuration,
-                        variation, "cached", null);
+                        variation, "cached", cachedMetadata);
             }
 
             // Call API
@@ -160,16 +164,19 @@ public class FlagClient implements AutoCloseable {
 
                 // Parse everything before caching, so a failure here caches nothing.
                 FlagEvaluationResult.Metadata metadata = new FlagEvaluationResult.Metadata();
-                JsonElement flagId = presentOrNull(data.get("flagId"));
-                if (flagId != null) metadata.setFlagId(flagId.getAsString());
-                JsonElement description = presentOrNull(data.get("description"));
-                if (description != null) metadata.setDescription(description.getAsString());
-                JsonElement variant = presentOrNull(data.get("variant"));
-                if (variant != null) metadata.setVariant(variant.getAsString());
+                // The server never sends flagId, description or variant; read them only if
+                // present, and never let a malformed value fail the lookup.
+                metadata.setFlagId(stringOrNull(data.get("flagId")));
+                metadata.setDescription(stringOrNull(data.get("description")));
+                metadata.setVariant(stringOrNull(data.get("variant")));
+                // What the server does send: the flag's version and the evaluation scope.
+                metadata.setVersion(integralOrNull(data.get("version")));
+                metadata.setScope(stringOrNull(data.get("scope")));
 
                 // Cache the result (including configuration and variation)
                 if (ctxKey != null) {
-                    setCachedValue(flagKey, ctxKey, value, configuration, variation);
+                    setCachedValue(flagKey, ctxKey, value, configuration, variation,
+                            metadata.getVersion(), metadata.getScope());
                 }
 
                 // Apply overrides to evaluated result
@@ -243,6 +250,34 @@ public class FlagClient implements AutoCloseable {
     /** {@code element}, or null when it is absent or JSON {@code null}. */
     private static JsonElement presentOrNull(JsonElement element) {
         return element == null || element.isJsonNull() ? null : element;
+    }
+
+    /** The string value of {@code element}, or null unless it is a JSON string. */
+    private static String stringOrNull(JsonElement element) {
+        JsonElement present = presentOrNull(element);
+        if (present == null || !present.isJsonPrimitive()
+                || !present.getAsJsonPrimitive().isString()) {
+            return null;
+        }
+        return present.getAsString();
+    }
+
+    /** The value of {@code element} when it is a JSON number with an integral value, else null. */
+    private static Long integralOrNull(JsonElement element) {
+        JsonElement present = presentOrNull(element);
+        if (present == null || !present.isJsonPrimitive()
+                || !present.getAsJsonPrimitive().isNumber()) {
+            return null;
+        }
+        try {
+            BigDecimal number = present.getAsBigDecimal();
+            if (number.stripTrailingZeros().scale() > 0) {
+                return null;
+            }
+            return number.longValueExact();
+        } catch (ArithmeticException | NumberFormatException e) {
+            return null;
+        }
     }
 
     private boolean defaultFor(String flagKey) {
@@ -374,7 +409,7 @@ public class FlagClient implements AutoCloseable {
     }
 
     private void setCachedValue(String flagKey, String ctxKey, boolean value,
-            Object configuration, String variation) {
+            Object configuration, String variation, Long version, String scope) {
         ConcurrentHashMap<String, CacheEntry> contexts =
                 cache.computeIfAbsent(flagKey, k -> new ConcurrentHashMap<>());
         long now = System.currentTimeMillis();
@@ -386,7 +421,7 @@ public class FlagClient implements AutoCloseable {
                 }
             }
             contexts.put(ctxKey, new CacheEntry(value, configuration, variation,
-                    now + config.getCacheTtl()));
+                    version, scope, now + config.getCacheTtl()));
         }
     }
 
@@ -528,12 +563,17 @@ public class FlagClient implements AutoCloseable {
         final boolean value;
         final Object configuration;
         final String variation;
+        final Long version;
+        final String scope;
         final long expiresAt;
 
-        CacheEntry(boolean value, Object configuration, String variation, long expiresAt) {
+        CacheEntry(boolean value, Object configuration, String variation,
+                Long version, String scope, long expiresAt) {
             this.value = value;
             this.configuration = configuration;
             this.variation = variation;
+            this.version = version;
+            this.scope = scope;
             this.expiresAt = expiresAt;
         }
     }

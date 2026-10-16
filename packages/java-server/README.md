@@ -244,8 +244,16 @@ Evaluate a feature flag and return detailed results.
 
 ```java
 FlagEvaluationResult result = client.evaluate("my-flag", context);
-// Returns: FlagEvaluationResult with key, value, reason, metadata
+// Returns: FlagEvaluationResult with key, value, configuration, variation, reason, metadata
+
+result.getMetadata().getVersion(); // Long: the flag version the server evaluated
+result.getMetadata().getScope();   // String: the evaluation scope, e.g. "application"
 ```
+
+`getVersion()` and `getScope()` are null when the server sent none or a malformed value.
+`getFlagId()`, `getDescription()` and `getVariant()` are not sent by the otto-flags server and
+stay null. A result with reason `cached` carries the same version and scope as the evaluation
+it came from; a result with reason `error` has null metadata.
 
 ##### isEnabled(String flagKey, FlagContext context)
 
