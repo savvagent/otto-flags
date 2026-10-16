@@ -1,7 +1,17 @@
 # An SDK key lookup holds its permit for a bounded time
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#134)
 **Issue:** #130
+
+The code is authoritative where this sketch differs in detail. As built after review: the
+server's `idle_in_transaction_session_timeout` is the transaction deadline plus 500 ms
+(`keys::IDLE_PAST_DEADLINE`), so the client always gives up first with its own reason and the
+server's timeout is only the backstop for a half-open link. Setting values round up to whole
+milliseconds, at least 1 ms and at most `i32::MAX` ms (`unpinned::millis`). `Held::release`
+returns whether sqlx's return finished in time, not whether the connection was pooled. Tests pin
+the `statement_timeout` path (`a_slow_lookup_gives_up_at_the_statement_timeout`) and the
+connection's return after a lock timeout. The stream re-check's remaining gaps (dropped mid-check,
+uncapped concurrency, errors not logged, no tests) are #133.
 
 ## 1. Brief
 

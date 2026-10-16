@@ -73,7 +73,7 @@ Task 2 passes `Some`.
 
 **Model:** sonnet
 
-- [ ] **Step 1: Write the failing tests** in `unpinned.rs`'s `tests` module:
+- [x] **Step 1: Write the failing tests** in `unpinned.rs`'s `tests` module:
   `a_held_connection_sets_the_lookup_timeouts` (begin a `Held` transaction with
   `Timeouts { lock: 250ms, statement: 750ms, idle: 1500ms }`; `current_setting` reports `250ms`,
   `750ms`, `1500ms` for `lock_timeout`, `statement_timeout`, `idle_in_transaction_session_timeout`;
@@ -81,18 +81,18 @@ Task 2 passes `Some`.
   `begin_leaves_the_timeouts_alone` (plain `begin` and `begin_as_tenant_role(_, true)` report `0`
   for all three). Update
   `a_held_connection_begins_as_the_tenant_role_without_the_marker` to pass timeouts.
-- [ ] **Step 2: Run, see them fail to compile:**
+- [x] **Step 2: Run, see them fail to compile:**
   `DATABASE_URL=… cargo test -p flags-core --lib unpinned`
-- [ ] **Step 3: Implement.** `enter(tx, db, maintenance, timeouts: Option<Timeouts>)`; bind
+- [x] **Step 3: Implement.** `enter(tx, db, maintenance, timeouts: Option<Timeouts>)`; bind
   `$4`/`$5`/`$6` as `Option<String>` (`format!("{}ms", d.as_millis())`); three more select-list columns,
   `CASE WHEN $4::text IS NOT NULL THEN set_config('lock_timeout', $4::text, true) END` and the
   same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`), each in its own column (the comment explains why: they
   take effect from the next statement, the lookup; the lookup's lock is taken when it is bound,
   so setting them in the lookup itself would be too late). Extend the destructured tuple.
   `begin_as_tenant_role` passes `None`; `Held::begin` passes its argument through.
-- [ ] **Step 4: Run, see them pass;** also `cargo test -p flags-core --test key_round_trips`
+- [x] **Step 4: Run, see them pass;** also `cargo test -p flags-core --test key_round_trips`
   (still 6 round trips).
-- [ ] **Step 5: Commit** `feat(core): let the unpinned probe set a lookup's lock and statement timeouts`.
+- [x] **Step 5: Commit** `feat(core): let the unpinned probe set a lookup's lock and statement timeouts`.
 
 ### Task 2: Key lookups run under the server-side timeouts
 
@@ -107,7 +107,7 @@ Task 3 consumes `transaction`/`release`.
 
 **Model:** sonnet
 
-- [ ] **Step 1: Failing test** in `tests/db.rs`:
+- [x] **Step 1: Failing test** in `tests/db.rs`:
   `a_lookup_blocked_on_a_lock_gives_up_within_the_bound`: with `KeyLookups::new(1, KEY_LOOKUP_WAIT)`
   (default bounds), lock `app_keys` (`lock_app_keys`), call `resolve_cached` with a fresh key;
   it returns `Err(e)` with `e.is_transient()` and `e.failure_reason().reason ==
@@ -118,13 +118,13 @@ Task 3 consumes `transaction`/`release`.
   `.with_bounds(long)` where `long` is 30 s for every bound, so they stay blocked until unlocked.
   Wrap the new test's `resolve_cached` call in `tokio::time::timeout(Duration::from_secs(5), …)`
   so that before the implementation it fails with an assertion instead of hanging.
-- [ ] **Step 2: Run, see it fail** (compile error for `with_bounds`, then the 5 s outer timeout).
-- [ ] **Step 3: Implement** `LookupBounds`, store it in `KeyLookups` (`new` uses `DEFAULT`),
+- [x] **Step 2: Run, see it fail** (compile error for `with_bounds`, then the 5 s outer timeout).
+- [x] **Step 3: Implement** `LookupBounds`, store it in `KeyLookups` (`new` uses `DEFAULT`),
   `with_bounds`, `bounds`. Private `resolve_hash_within(db, hash, &LookupBounds)`; `resolve_hash`
   calls it with `DEFAULT`; `resolve_cached` with `limit.bounds()`; `lookup` passes
   `Timeouts { lock, statement, idle: transaction }` to `Held::begin`. Update the module and `KeyLookups` docs.
-- [ ] **Step 4: Run** `cargo test -p flags-core --test db` and `-p flags-api --test key_lookups`: pass.
-- [ ] **Step 5: Commit** `feat(core): give up on an sdk key lookup blocked on a lock`.
+- [x] **Step 4: Run** `cargo test -p flags-core --test db` and `-p flags-api --test key_lookups`: pass.
+- [x] **Step 5: Commit** `feat(core): give up on an sdk key lookup blocked on a lock`.
 
 ### Task 3: Client-side deadline and release timeout
 
@@ -134,7 +134,7 @@ Task 3 consumes `transaction`/`release`.
 
 **Model:** opus — cancellation and connection-ownership reasoning.
 
-- [ ] **Step 1: Failing tests** in `key_round_trips.rs`. Give `RoundTrips` a `stall_after:
+- [x] **Step 1: Failing tests** in `key_round_trips.rs`. Give `RoundTrips` a `stall_after:
   Arc<AtomicUsize>` (default `usize::MAX`); in `forward_client`, a 'Q' or 'S' whose count (after
   increment) exceeds it is not forwarded and the forwarder parks until a `tokio::sync::Notify`
   on `RoundTrips` (`unstall`) is notified, then returns, dropping its server write half so the
@@ -150,9 +150,9 @@ Task 3 consumes `transaction`/`release`.
   - `a_lookup_stalled_at_the_release_ping_still_answers`: `stall_after = 5` (the 6th, the release
     ping, stalls); `resolve_cached` returns `Ok(None)` within 1 s; right after,
     `db.pool().size() == 0`, `limit.available() == 1`.
-- [ ] **Step 2: Run, see them fail** (they hang until the test's own outer timeout: wrap each call
+- [x] **Step 2: Run, see them fail** (they hang until the test's own outer timeout: wrap each call
   in `tokio::time::timeout(5s)` so the failure is an assertion, not a hang).
-- [ ] **Step 3: Implement.** `Held::release(self, within: Duration) -> bool`:
+- [x] **Step 3: Implement.** `Held::release(self, within: Duration) -> bool`:
   `tokio::time::timeout(within, self.0.return_to_pool()).await.is_ok()` (true: sqlx's return finished in time, pooled or closed; false: cut short); the doc says why a
   timeout here never frees the permit with the connection out (the future owns the floating
   connection; dropping it closes the socket and decrements the pool's size; cite sqlx-core 0.8.6
@@ -162,9 +162,9 @@ Task 3 consumes `transaction`/`release`.
   return owner; `Err(_)` → `conn.discard()`, `warn!(reason = "transaction_timed_out", …)`,
   return `Err(Error::Db(sqlx::Error::Io(io::ErrorKind::TimedOut.into())))`. Keep the "no `?`
   between acquire and release" comment accurate.
-- [ ] **Step 4: Run** `cargo test -p flags-core --test key_round_trips --test db` and `--lib`: pass;
+- [x] **Step 4: Run** `cargo test -p flags-core --test key_round_trips --test db` and `--lib`: pass;
   the six-round-trip tests unchanged.
-- [ ] **Step 5: Commit** `feat(core): bound an sdk key lookup's transaction and release ping`.
+- [x] **Step 5: Commit** `feat(core): bound an sdk key lookup's transaction and release ping`.
 
 ### Task 4: The SDK API answers a blocked lookup with a transient 503
 
@@ -173,15 +173,15 @@ Task 3 consumes `transaction`/`release`.
 
 **Model:** sonnet
 
-- [ ] **Step 1: Test** `a_lookup_blocked_on_a_lock_answers_503_within_the_bound`: default bounds
+- [x] **Step 1: Test** `a_lookup_blocked_on_a_lock_answers_503_within_the_bound`: default bounds
   (`KeyLookups::new(2, KEY_LOOKUP_WAIT)`), lock `app_keys`, one request with a fresh unknown key;
   it answers `(503, Some("5"), Some("temporarily_unavailable"))` within 2 s; permits back to 2.
   (Passes already after Task 2: it pins the mapping; record that it was written after the
   implementation.)
-- [ ] **Step 2: Run** `cargo test -p flags-api --test key_lookups`: pass.
-- [ ] **Step 3: Commit** `test(api): pin the 503 for an sdk key lookup that gives up`.
+- [x] **Step 2: Run** `cargo test -p flags-api --test key_lookups`: pass.
+- [x] **Step 3: Commit** `test(api): pin the 503 for an sdk key lookup that gives up`.
 
 ### Task 5: Full gates and record as shipped (before merge)
 
-- [ ] Run every gate in Global Constraints; record counts.
-- [ ] Final commit before merge: spec `**Status:** IMPLEMENTED (#<PR>)`, plan boxes ticked.
+- [x] Run every gate in Global Constraints; record counts.
+- [x] Final commit before merge: spec `**Status:** IMPLEMENTED (#<PR>)`, plan boxes ticked.
