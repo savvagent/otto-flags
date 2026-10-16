@@ -79,6 +79,9 @@ class FlagClient:
 
         self._config = config
         self._cache = FlagCache(config.cache_ttl)
+        # The most recent evaluated value per flag, for track_error when the error's
+        # context has no cached entry of its own (bounded by the host's flag keys).
+        self._last_values: dict[str, bool] = {}
         self._telemetry = TelemetryService(
             config.base_url,
             config.api_key,
@@ -180,6 +183,7 @@ class FlagClient:
                     reason="cached",
                 )
 
+                self._last_values[flag_key] = cached_entry.value
                 self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
 
@@ -195,6 +199,7 @@ class FlagClient:
             response.raise_for_status()
 
             data, value = evaluate_payload(response.json())
+            self._last_values[flag_key] = value
 
             # Cache the result (including configuration and variation)
             if ctx_key is not None:
@@ -353,10 +358,20 @@ class FlagClient:
             error: The exception that was raised.
             context: Optional context for the evaluation.
         """
-        ctx_key = context_key(self._prepare_context(context).to_dict())
-        flag_enabled = (
-            self._cache.get(flag_key, context_key=ctx_key) if ctx_key is not None else None
-        ) or False
+        # The value cached for this error's own context; else the flag's most recent
+        # evaluation (an error is often reported without the context it was evaluated
+        # with, and reporting False would count flag-on errors as flag-off); else False
+        # for a flag never evaluated. Never raise into the caller's error handling.
+        cached: bool | None = None
+        try:
+            ctx_key = context_key(self._prepare_context(context).to_dict())
+            if ctx_key is not None:
+                cached = self._cache.get(flag_key, context_key=ctx_key)
+        except Exception:
+            cached = None
+        if cached is None:
+            cached = self._last_values.get(flag_key)
+        flag_enabled = bool(cached)
 
         self._telemetry.track_error(
             ErrorEvent(
@@ -391,6 +406,7 @@ class FlagClient:
         self._config.environment = environment
         # Clear cache when environment changes since flag values may differ
         self._cache.clear()
+        self._last_values.clear()
 
     def get_environment(self) -> str:
         """
@@ -407,6 +423,7 @@ class FlagClient:
         if self._realtime:
             self._realtime.close()
         self._cache.clear()
+        self._last_values.clear()
         self._client.close()
 
     # Override methods
@@ -538,6 +555,7 @@ class FlagClient:
         self._config_overrides.clear()
         self._variation_overrides.clear()
         self._cache.clear()
+        self._last_values.clear()
 
     def get_all_flags(self, environment: str = "development") -> list[FlagDefinition]:
         """

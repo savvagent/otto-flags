@@ -35,6 +35,11 @@ function isValidFlagKey(key: unknown): boolean {
 export class FlagClient {
   private config: Required<FlagClientConfig>;
   private cache: FlagCache;
+  /**
+   * The most recent evaluated value per flag, for trackError when the error's context has no
+   * cached entry of its own (bounded by the host's flag keys).
+   */
+  private lastValues: Map<string, boolean> = new Map();
   private telemetry: TelemetryService;
   private realtime: RealtimeService | null = null;
   private configOverrides: Map<string, ConfigOverrideEntry> = new Map();
@@ -149,6 +154,8 @@ export class FlagClient {
           reason: 'cached',
         };
 
+        this.lastValues.set(flagKey, cachedEntry.value);
+
         // Track evaluation
         this.telemetry.trackEvaluation({
           flagKey,
@@ -197,6 +204,7 @@ export class FlagClient {
         throw new Error(`The evaluate response for ${JSON.stringify(flagKey)} has no boolean \`enabled\``);
       }
       const value = data.enabled;
+      this.lastValues.set(flagKey, value);
       // The server sends both as null when the flag has none; the SDK's types say undefined.
       const configuration = data.configuration ?? undefined;
       const variation = data.variation ?? undefined;
@@ -339,8 +347,12 @@ export class FlagClient {
    * Track an error that occurred in flagged code
    */
   trackError(flagKey: string, error: Error, context?: FlagContext): void {
+    // The value cached for this error's own context; else the flag's most recent evaluation (an
+    // error is often reported without the context it was evaluated with, and reporting false
+    // would count flag-on errors as flag-off); else false for a flag never evaluated.
     const ctxKey = contextKey(this.prepareContext(context));
-    const flagEnabled = (ctxKey === null ? null : this.cache.get(flagKey, ctxKey)) ?? false;
+    const cached = ctxKey === null ? null : this.cache.get(flagKey, ctxKey);
+    const flagEnabled = cached ?? this.lastValues.get(flagKey) ?? false;
 
     this.telemetry.trackError({
       flagKey,
@@ -362,6 +374,7 @@ export class FlagClient {
     this.config.environment = environment;
     // Clear cache when environment changes since flag values may differ
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**
@@ -387,6 +400,7 @@ export class FlagClient {
       this.realtime.close();
     }
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**
@@ -504,6 +518,7 @@ export class FlagClient {
     this.configOverrides.clear();
     this.variationOverrides.clear();
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**

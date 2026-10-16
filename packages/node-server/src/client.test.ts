@@ -660,6 +660,8 @@ describe('FlagClient', () => {
         }),
       }));
       await client.getAllFlags();
+      // The list's `enabled` is the environment switch, not a context's result.
+      expect((client as any).cache.cache.size).toBe(0);
       const r = await client.evaluate('checkout', { user_id: 'b' });
       expect(r.value).toBe(false);
       expect(r.reason).toBe('evaluated');
@@ -675,6 +677,27 @@ describe('FlagClient', () => {
       client.trackError('checkout', new Error('x'), { user_id: 'b' });
       expect((spy.mock.calls[0][0] as any).flagEnabled).toBe(true);
       expect((spy.mock.calls[1][0] as any).flagEnabled).toBe(false);
+      client.close();
+    });
+
+    it('trackError without its context reports the flag\'s last evaluation', async () => {
+      const client = makeClient();
+      const spy = jest.spyOn((client as any).telemetry, 'trackError').mockImplementation(() => {});
+      await client.evaluate('checkout', { user_id: 'a' });
+      client.trackError('checkout', new Error('x'));
+      client.trackError('other', new Error('x'));
+      expect((spy.mock.calls[0][0] as any).flagEnabled).toBe(true);
+      expect((spy.mock.calls[1][0] as any).flagEnabled).toBe(false);
+      client.close();
+    });
+
+    it('an unserializable context skips the cache and returns the default', async () => {
+      const client = makeClient();
+      const cyclic: Record<string, unknown> = {};
+      cyclic.self = cyclic;
+      const r = await client.evaluate('checkout', { user_id: 'a', attributes: cyclic });
+      expect(r.reason).toBe('error');
+      expect((client as any).cache.cache.size).toBe(0);
       client.close();
     });
   });

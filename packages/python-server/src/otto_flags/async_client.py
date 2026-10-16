@@ -80,6 +80,9 @@ class AsyncFlagClient:
 
         self._config = config
         self._cache = AsyncFlagCache(config.cache_ttl)
+        # The most recent evaluated value per flag, for track_error when the error's
+        # context has no cached entry of its own (bounded by the host's flag keys).
+        self._last_values: dict[str, bool] = {}
         self._telemetry = AsyncTelemetryService(
             config.base_url,
             config.api_key,
@@ -201,6 +204,7 @@ class AsyncFlagClient:
                     reason="cached",
                 )
 
+                self._last_values[flag_key] = cached_entry.value
                 await self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
 
@@ -216,6 +220,7 @@ class AsyncFlagClient:
             response.raise_for_status()
 
             data, value = evaluate_payload(response.json())
+            self._last_values[flag_key] = value
 
             # Cache the result (including configuration and variation)
             if ctx_key is not None:
@@ -374,10 +379,20 @@ class AsyncFlagClient:
             error: The exception that was raised.
             context: Optional context for the evaluation.
         """
-        ctx_key = context_key(self._prepare_context(context).to_dict())
-        flag_enabled = (
-            await self._cache.get(flag_key, context_key=ctx_key) if ctx_key is not None else None
-        ) or False
+        # The value cached for this error's own context; else the flag's most recent
+        # evaluation (an error is often reported without the context it was evaluated
+        # with, and reporting False would count flag-on errors as flag-off); else False
+        # for a flag never evaluated. Never raise into the caller's error handling.
+        cached: bool | None = None
+        try:
+            ctx_key = context_key(self._prepare_context(context).to_dict())
+            if ctx_key is not None:
+                cached = await self._cache.get(flag_key, context_key=ctx_key)
+        except Exception:
+            cached = None
+        if cached is None:
+            cached = self._last_values.get(flag_key)
+        flag_enabled = bool(cached)
 
         await self._telemetry.track_error(
             ErrorEvent(
@@ -406,6 +421,7 @@ class AsyncFlagClient:
         if self._realtime:
             await self._realtime.close()
         await self._cache.clear()
+        self._last_values.clear()
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -535,6 +551,7 @@ class AsyncFlagClient:
         self._config_overrides.clear()
         self._variation_overrides.clear()
         await self._cache.clear()
+        self._last_values.clear()
 
     async def get_all_flags(self, environment: str = "development") -> list[FlagDefinition]:
         """

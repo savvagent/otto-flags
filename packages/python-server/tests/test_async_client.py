@@ -521,6 +521,8 @@ class TestAsyncContextCache:
             mock.post(FLAG_URL).mock(side_effect=_answer_by_user)
             async with AsyncFlagClient(async_config) as client:
                 await client.get_all_flags("production")
+                # The list's `enabled` is the environment switch, not a context's result.
+                assert await client._cache.keys() == []
                 result = await client.evaluate("checkout", FlagContext(user_id="b"))
         assert result.value is False
         assert result.reason == "evaluated"

@@ -215,6 +215,8 @@ describe('FlagClient', () => {
       const client = makeClient();
       const flags = await client.getAllFlags('production');
       expect(flags).toHaveLength(1);
+      // The list's `enabled` is the environment switch, not a context's result.
+      expect(client.getCachedFlags()).toEqual([]);
       const result = await client.evaluate('checkout', { user_id: 'b' });
       expect(result.value).toBe(false);
       expect(result.reason).toBe('evaluated');
