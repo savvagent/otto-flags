@@ -121,4 +121,105 @@ describe('FlagClient', () => {
       expect(fetchMock.mock.calls[0][0]).toBe(`${baseUrl}/api/flags/${key}/evaluate`);
     });
   });
+
+  describe('context cache (#127)', () => {
+    const baseUrl = 'https://flags.example.test';
+    let fetchMock: jest.Mock;
+    let originalFetch: typeof global.fetch;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      fetchMock = jest.fn(async (url: string, init?: { body?: string }) => {
+        if (String(url).endsWith('/evaluate')) {
+          const ctx = JSON.parse(init!.body as string).context;
+          const enabled = ctx.user_id === 'a' || ctx.attributes?.plan === 'pro';
+          return { ok: true, status: 200, json: async () => ({ key: 'checkout', enabled }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            flags: [{ key: 'checkout', enabled: true, scope: 'application', environments: {}, version: 1 }],
+            count: 1,
+          }),
+        };
+      });
+      global.fetch = fetchMock as any;
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    const makeClient = () =>
+      new FlagClient({
+        apiKey: 'sdk_test_key',
+        baseUrl,
+        enableRealtime: false,
+        enableTelemetry: false,
+      });
+
+    const evalCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/evaluate'));
+
+    test('caches per context argument', async () => {
+      const client = makeClient();
+      const r = [];
+      for (const id of ['a', 'b', 'a', 'b']) {
+        r.push(await client.evaluate('checkout', { user_id: id }));
+      }
+      expect(r.map((x) => x.value)).toEqual([true, false, true, false]);
+      expect(r.map((x) => x.reason)).toEqual(['evaluated', 'evaluated', 'cached', 'cached']);
+      expect(evalCalls()).toHaveLength(2);
+    });
+
+    test('caches per setUserId', async () => {
+      const client = makeClient();
+      const r = [];
+      for (const id of ['a', 'b', 'a', 'b']) {
+        client.setUserId(id);
+        r.push(await client.evaluate('checkout'));
+      }
+      expect(r.map((x) => x.value)).toEqual([true, false, true, false]);
+      expect(r.map((x) => x.reason)).toEqual(['evaluated', 'evaluated', 'cached', 'cached']);
+      expect(evalCalls()).toHaveLength(2);
+    });
+
+    test('attributes take part in the key', async () => {
+      const client = makeClient();
+      const pro = await client.evaluate('checkout', { attributes: { plan: 'pro' } });
+      const free = await client.evaluate('checkout', { attributes: { plan: 'free' } });
+      expect(pro.value).toBe(true);
+      expect(free.value).toBe(false);
+      expect(evalCalls()).toHaveLength(2);
+    });
+
+    test('attribute insertion order does not matter', async () => {
+      const client = makeClient();
+      await client.evaluate('checkout', { attributes: { plan: 'pro', region: 'eu' } });
+      const second = await client.evaluate('checkout', { attributes: { region: 'eu', plan: 'pro' } });
+      expect(second.reason).toBe('cached');
+      expect(evalCalls()).toHaveLength(1);
+    });
+
+    test('clearCache makes every context re-request', async () => {
+      const client = makeClient();
+      await client.evaluate('checkout', { user_id: 'a' });
+      await client.evaluate('checkout', { user_id: 'b' });
+      client.clearCache();
+      await client.evaluate('checkout', { user_id: 'a' });
+      await client.evaluate('checkout', { user_id: 'b' });
+      expect(evalCalls()).toHaveLength(4);
+    });
+
+    test('getAllFlags does not seed the evaluation cache', async () => {
+      const client = makeClient();
+      const flags = await client.getAllFlags('production');
+      expect(flags).toHaveLength(1);
+      // The list's `enabled` is the environment switch, not a context's result.
+      expect(client.getCachedFlags()).toEqual([]);
+      const result = await client.evaluate('checkout', { user_id: 'b' });
+      expect(result.value).toBe(false);
+      expect(result.reason).toBe('evaluated');
+    });
+  });
 });

@@ -93,6 +93,8 @@ if err != nil {
 defer client.Close()
 ```
 
+Evaluations are cached per flag and per evaluation context for `CacheTTL`, so two users never share a cached result. At most 10,000 contexts are cached per flag.
+
 ## Usage Examples
 
 ### HTTP Handler

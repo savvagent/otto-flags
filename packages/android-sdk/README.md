@@ -98,6 +98,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun FeatureScreen(client: OttoFlagsClient) {
+    // flagUpdates carries a flag once something has evaluated it (see Caching below)
     val flags by client.flagUpdates.collectAsStateWithLifecycle()
     val isNewUIEnabled = flags["new-ui"] ?: false
 
@@ -222,6 +223,10 @@ lifecycleScope.launch {
 
 ### Real-time Flag Updates
 
+`flagUpdates` publishes, per flag, the result of each evaluation fetched from the server. Stream
+and poll messages drop the flag's cached results, so the next `evaluate` asks the server; they do
+not publish into `flagUpdates` themselves.
+
 ```kotlin
 // Observe flag updates using Flow
 lifecycleScope.launch {
@@ -268,13 +273,17 @@ Enable WebSocket for real-time flag updates:
 ```kotlin
 val config = OttoFlagsConfig(
     sdkKey = "your-sdk-key",
-    enableWebSocket = true  // Flags update in real-time
+    enableWebSocket = true  // Stream messages drop cached results for the changed flag
 )
 ```
 
 ### Caching
 
-The SDK automatically caches flag evaluations to improve performance. Configure polling interval:
+The SDK automatically caches flag evaluations to improve performance. The cache is kept per
+flag and per evaluation context (the whole context sent: user id, environment and attributes), so
+one user's result is never returned for another. `flagUpdates` holds, per flag, the value of the
+most recent evaluation fetched from the server (cache hits do not publish). Configure polling
+interval:
 
 ```kotlin
 val config = OttoFlagsConfig(

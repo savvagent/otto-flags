@@ -147,4 +147,31 @@ describe('FlagCache', () => {
       expect(cache.get('flag-99')).toBe(true);
     });
   });
+
+  describe('Per-context entries (#127)', () => {
+    it('misses for a context that was not cached', () => {
+      cache.set('f', true, undefined, undefined, undefined, 'ctx-a');
+      expect(cache.get('f', 'ctx-a')).toBe(true);
+      expect(cache.get('f', 'ctx-b')).toBeNull();
+    });
+
+    it('invalidate(key) drops every context of the flag', () => {
+      cache.set('f', true, undefined, undefined, undefined, 'ctx-a');
+      cache.set('f', false, undefined, undefined, undefined, 'ctx-b');
+      cache.set('g', true, undefined, undefined, undefined, 'ctx-a');
+      cache.invalidate('f');
+      expect(cache.get('f', 'ctx-a')).toBeNull();
+      expect(cache.get('f', 'ctx-b')).toBeNull();
+      expect(cache.get('g', 'ctx-a')).toBe(true);
+    });
+
+    it('bounds the contexts held per flag and keeps the newest', () => {
+      (cache as any).maxContextsPerFlag = 4;
+      for (let i = 0; i < 10; i++) {
+        cache.set('f', i % 2 === 0, undefined, undefined, undefined, `ctx-${i}`);
+        expect((cache as any).cache.get('f').size).toBeLessThanOrEqual(4);
+      }
+      expect(cache.get('f', 'ctx-9')).toBe(false);
+    });
+  });
 });

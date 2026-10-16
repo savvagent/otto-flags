@@ -1,6 +1,7 @@
 package com.savvagent.ottoflags.sdk;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import okhttp3.*;
@@ -10,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -23,12 +25,26 @@ public class FlagClient implements AutoCloseable {
     private final FlagClientConfig config;
     private final OkHttpClient httpClient;
     private final Gson gson;
-    private final ConcurrentHashMap<String, CacheEntry> cache;
+    /**
+     * Most contexts cached for one flag. When a new context finds its flag full, expired entries
+     * are swept, and if more than half the bound is still live the flag is cleared. The cost of
+     * the bound is cache misses, never a wrong answer.
+     */
+    static final int MAX_CONTEXTS_PER_FLAG = 10_000;
+
+    private final int maxContextsPerFlag;
+    /** Flag key to (context key to entry). The context key is the canonical JSON of the context. */
+    private final ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>> cache;
     private final ConcurrentHashMap<String, ConfigOverrideEntry> configOverrides;
     private final ConcurrentHashMap<String, VariationOverrideEntry> variationOverrides;
 
     public FlagClient(FlagClientConfig config) {
+        this(config, MAX_CONTEXTS_PER_FLAG);
+    }
+
+    FlagClient(FlagClientConfig config, int maxContextsPerFlag) {
         this.config = config;
+        this.maxContextsPerFlag = maxContextsPerFlag;
         this.gson = new Gson();
         this.cache = new ConcurrentHashMap<>();
         this.configOverrides = new ConcurrentHashMap<>();
@@ -61,8 +77,26 @@ public class FlagClient implements AutoCloseable {
         }
 
         try {
+            // Prepare context
+            if (context == null) {
+                context = new FlagContext();
+            }
+            if (context.getApplicationId() == null && !config.getApplicationId().isEmpty()) {
+                context.setApplicationId(config.getApplicationId());
+            }
+
+            // The cache is keyed by flag and context: the answer depends on the context. The
+            // request body carries this same tree. A context that cannot be keyed is not cached.
+            JsonElement contextJson = gson.toJsonTree(context);
+            String ctxKey;
+            try {
+                ctxKey = canonicalJson(contextJson);
+            } catch (RuntimeException e) {
+                ctxKey = null;
+            }
+
             // Check cache first
-            CacheEntry cachedEntry = getCachedEntry(flagKey);
+            CacheEntry cachedEntry = ctxKey == null ? null : getCachedEntry(flagKey, ctxKey);
             if (cachedEntry != null) {
                 Object configuration = cachedEntry.configuration;
                 String variation = cachedEntry.variation;
@@ -87,14 +121,6 @@ public class FlagClient implements AutoCloseable {
                         variation, "cached", null);
             }
 
-            // Prepare context
-            if (context == null) {
-                context = new FlagContext();
-            }
-            if (context.getApplicationId() == null && !config.getApplicationId().isEmpty()) {
-                context.setApplicationId(config.getApplicationId());
-            }
-
             // Call API
             // Build the URL segment by segment so the key is encoded as one path segment.
             HttpUrl url = HttpUrl.get(config.getBaseUrl()).newBuilder()
@@ -104,7 +130,7 @@ public class FlagClient implements AutoCloseable {
                     .addPathSegment("evaluate")
                     .build();
             JsonObject requestBody = new JsonObject();
-            requestBody.add("context", gson.toJsonTree(context));
+            requestBody.add("context", contextJson);
 
             Request request = new Request.Builder()
                     .url(url)
@@ -142,7 +168,9 @@ public class FlagClient implements AutoCloseable {
                 if (variant != null) metadata.setVariant(variant.getAsString());
 
                 // Cache the result (including configuration and variation)
-                setCachedValue(flagKey, value, configuration, variation);
+                if (ctxKey != null) {
+                    setCachedValue(flagKey, ctxKey, value, configuration, variation);
+                }
 
                 // Apply overrides to evaluated result
                 ConfigOverrideEntry configOverride = configOverrides.get(flagKey);
@@ -298,21 +326,68 @@ public class FlagClient implements AutoCloseable {
         }
     }
 
-    private CacheEntry getCachedEntry(String flagKey) {
-        CacheEntry entry = cache.get(flagKey);
+    /** Number of contexts currently cached for a flag (for tests). */
+    int cachedContextCount(String flagKey) {
+        ConcurrentHashMap<String, CacheEntry> contexts = cache.get(flagKey);
+        return contexts == null ? 0 : contexts.size();
+    }
+
+    /**
+     * The JSON text of {@code element} with every object's keys sorted, so two contexts that
+     * carry the same data share a key whatever the iteration order of their attribute maps.
+     */
+    private static String canonicalJson(JsonElement element) {
+        return sorted(element).toString();
+    }
+
+    private static JsonElement sorted(JsonElement element) {
+        if (element.isJsonObject()) {
+            JsonObject source = element.getAsJsonObject();
+            JsonObject result = new JsonObject();
+            for (String key : new TreeSet<>(source.keySet())) {
+                result.add(key, sorted(source.get(key)));
+            }
+            return result;
+        }
+        if (element.isJsonArray()) {
+            JsonArray result = new JsonArray();
+            for (JsonElement item : element.getAsJsonArray()) {
+                result.add(sorted(item));
+            }
+            return result;
+        }
+        return element;
+    }
+
+    private CacheEntry getCachedEntry(String flagKey, String ctxKey) {
+        ConcurrentHashMap<String, CacheEntry> contexts = cache.get(flagKey);
+        if (contexts == null) return null;
+        CacheEntry entry = contexts.get(ctxKey);
         if (entry == null) return null;
 
         if (System.currentTimeMillis() > entry.expiresAt) {
-            cache.remove(flagKey);
+            contexts.remove(ctxKey, entry);
             return null;
         }
 
         return entry;
     }
 
-    private void setCachedValue(String flagKey, boolean value, Object configuration, String variation) {
-        cache.put(flagKey, new CacheEntry(value, configuration, variation,
-                System.currentTimeMillis() + config.getCacheTtl()));
+    private void setCachedValue(String flagKey, String ctxKey, boolean value,
+            Object configuration, String variation) {
+        ConcurrentHashMap<String, CacheEntry> contexts =
+                cache.computeIfAbsent(flagKey, k -> new ConcurrentHashMap<>());
+        long now = System.currentTimeMillis();
+        synchronized (contexts) {
+            if (contexts.size() >= maxContextsPerFlag && !contexts.containsKey(ctxKey)) {
+                contexts.values().removeIf(e -> e.expiresAt < now);
+                if (contexts.size() > maxContextsPerFlag / 2) {
+                    contexts.clear();
+                }
+            }
+            contexts.put(ctxKey, new CacheEntry(value, configuration, variation,
+                    now + config.getCacheTtl()));
+        }
     }
 
     /**

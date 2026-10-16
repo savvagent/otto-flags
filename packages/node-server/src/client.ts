@@ -1,4 +1,5 @@
 import { FlagCache } from './cache';
+import { contextKey } from './context-key';
 import { TelemetryService } from './telemetry';
 import { RealtimeService } from './realtime';
 import {
@@ -34,6 +35,11 @@ function isValidFlagKey(key: unknown): boolean {
 export class FlagClient {
   private config: Required<FlagClientConfig>;
   private cache: FlagCache;
+  /**
+   * The most recent evaluated value per flag, for trackError when the error's context has no
+   * cached entry of its own (bounded by the host's flag keys).
+   */
+  private lastValues: Map<string, boolean> = new Map();
   private telemetry: TelemetryService;
   private realtime: RealtimeService | null = null;
   private configOverrides: Map<string, ConfigOverrideEntry> = new Map();
@@ -115,8 +121,12 @@ export class FlagClient {
       // Check for variation override first
       const variationOverride = this.variationOverrides.get(flagKey);
 
+      // The cache is keyed by flag and by the context the request will carry.
+      const evalContext = this.prepareContext(context);
+      const ctxKey = contextKey(evalContext);
+
       // Check cache
-      const cachedEntry = this.cache.getEntry(flagKey);
+      const cachedEntry = ctxKey === null ? null : this.cache.getEntry(flagKey, ctxKey);
       if (cachedEntry !== null) {
         let configuration = cachedEntry.configuration;
         let variation = cachedEntry.variation;
@@ -144,6 +154,8 @@ export class FlagClient {
           reason: 'cached',
         };
 
+        this.lastValues.set(flagKey, cachedEntry.value);
+
         // Track evaluation
         this.telemetry.trackEvaluation({
           flagKey,
@@ -155,13 +167,6 @@ export class FlagClient {
 
         return result;
       }
-
-      // Prepare context - inject environment from config if not provided
-      const evalContext: FlagContext = {
-        ...context,
-        application_id: context?.application_id || this.config.applicationId,
-        environment: context?.environment || this.config.environment,
-      };
 
       // Call API
       const controller = new AbortController();
@@ -199,12 +204,15 @@ export class FlagClient {
         throw new Error(`The evaluate response for ${JSON.stringify(flagKey)} has no boolean \`enabled\``);
       }
       const value = data.enabled;
+      this.lastValues.set(flagKey, value);
       // The server sends both as null when the flag has none; the SDK's types say undefined.
       const configuration = data.configuration ?? undefined;
       const variation = data.variation ?? undefined;
 
       // Cache the result (including configuration and variation)
-      this.cache.set(flagKey, value, data.flagId, configuration, variation);
+      if (ctxKey !== null) {
+        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey);
+      }
 
       // Apply overrides to evaluated result
       let finalConfiguration = configuration;
@@ -325,10 +333,26 @@ export class FlagClient {
   }
 
   /**
+   * Inject the configured application and environment into a context when it has none.
+   */
+  private prepareContext(context?: FlagContext): FlagContext {
+    return {
+      ...context,
+      application_id: context?.application_id || this.config.applicationId,
+      environment: context?.environment || this.config.environment,
+    };
+  }
+
+  /**
    * Track an error that occurred in flagged code
    */
   trackError(flagKey: string, error: Error, context?: FlagContext): void {
-    const flagEnabled = this.cache.get(flagKey) ?? false;
+    // The value cached for this error's own context; else the flag's most recent evaluation (an
+    // error is often reported without the context it was evaluated with, and reporting false
+    // would count flag-on errors as flag-off); else false for a flag never evaluated.
+    const ctxKey = contextKey(this.prepareContext(context));
+    const cached = ctxKey === null ? null : this.cache.get(flagKey, ctxKey);
+    const flagEnabled = cached ?? this.lastValues.get(flagKey) ?? false;
 
     this.telemetry.trackError({
       flagKey,
@@ -350,6 +374,7 @@ export class FlagClient {
     this.config.environment = environment;
     // Clear cache when environment changes since flag values may differ
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**
@@ -375,6 +400,7 @@ export class FlagClient {
       this.realtime.close();
     }
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**
@@ -492,6 +518,7 @@ export class FlagClient {
     this.configOverrides.clear();
     this.variationOverrides.clear();
     this.cache.clear();
+    this.lastValues.clear();
   }
 
   /**
@@ -537,7 +564,8 @@ export class FlagClient {
    * Use cases:
    * - Local override UI: Display all available flags for developers to toggle
    * - Offline mode: Pre-fetch flags for mobile/desktop apps
-   * - SDK initialization: Bootstrap SDK with all flag values on startup
+   * - SDK initialization: list the flags on startup (this does not fill the evaluation
+   *   cache: a listed `enabled` is the environment switch, not a context's result)
    * - DevTools integration: Show available flags in browser dev panels
    *
    * @param environment - Environment to evaluate enabled state for (default: 'development')
@@ -548,7 +576,7 @@ export class FlagClient {
    * // Fetch all flags for development
    * const flags = await client.getAllFlags('development');
    *
-   * // Bootstrap local cache
+   * // List the flags and their environment switches
    * flags.forEach(flag => {
    *   console.log(`${flag.key}: ${flag.enabled}`);
    * });
@@ -577,11 +605,6 @@ export class FlagClient {
       }
 
       const data = (await response.json()) as FlagListResponse;
-
-      // Cache all flags
-      data.flags.forEach((flag) => {
-        this.cache.set(flag.key, flag.enabled, flag.key, flag.configuration);
-      });
 
       return data.flags;
     } catch (error) {

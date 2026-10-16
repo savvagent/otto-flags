@@ -6,6 +6,7 @@ Otto Flags Server Client for feature flag evaluation with AI-powered error detec
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import time
@@ -16,6 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
+from ._context_key import context_key
 from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
 from ._response import evaluate_payload
 from .cache import FlagCache
@@ -77,6 +79,9 @@ class FlagClient:
 
         self._config = config
         self._cache = FlagCache(config.cache_ttl)
+        # The most recent evaluated value per flag, for track_error when the error's
+        # context has no cached entry of its own (bounded by the host's flag keys).
+        self._last_values: dict[str, bool] = {}
         self._telemetry = TelemetryService(
             config.base_url,
             config.api_key,
@@ -142,8 +147,16 @@ class FlagClient:
             # Check for variation override first
             variation_override = self._variation_overrides.get(flag_key)
 
+            # The cache key is the context as sent, computed before the lookup.
+            eval_context = self._prepare_context(context)
+            ctx_key = context_key(eval_context.to_dict())
+
             # Check cache
-            cached_entry = self._cache.get_entry(flag_key)
+            cached_entry = (
+                self._cache.get_entry(flag_key, context_key=ctx_key)
+                if ctx_key is not None
+                else None
+            )
             if cached_entry is not None:
                 configuration = cached_entry.configuration
                 variation = cached_entry.variation
@@ -170,15 +183,9 @@ class FlagClient:
                     reason="cached",
                 )
 
+                self._last_values[flag_key] = cached_entry.value
                 self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
-
-            # Prepare context - inject environment from config if not provided
-            eval_context = context or FlagContext()
-            if not eval_context.application_id and self._config.application_id:
-                eval_context.application_id = self._config.application_id
-            if not eval_context.environment:
-                eval_context.environment = self._config.environment
 
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = self._client.post(
@@ -192,15 +199,18 @@ class FlagClient:
             response.raise_for_status()
 
             data, value = evaluate_payload(response.json())
+            self._last_values[flag_key] = value
 
             # Cache the result (including configuration and variation)
-            self._cache.set(
-                flag_key,
-                value,
-                data.get("flagId"),
-                data.get("configuration"),
-                data.get("variation"),
-            )
+            if ctx_key is not None:
+                self._cache.set(
+                    flag_key,
+                    value,
+                    data.get("flagId"),
+                    data.get("configuration"),
+                    data.get("variation"),
+                    context_key=ctx_key,
+                )
 
             # Apply overrides to evaluated result
             final_configuration = data.get("configuration")
@@ -348,7 +358,20 @@ class FlagClient:
             error: The exception that was raised.
             context: Optional context for the evaluation.
         """
-        flag_enabled = self._cache.get(flag_key) or False
+        # The value cached for this error's own context; else the flag's most recent
+        # evaluation (an error is often reported without the context it was evaluated
+        # with, and reporting False would count flag-on errors as flag-off); else False
+        # for a flag never evaluated. Never raise into the caller's error handling.
+        cached: bool | None = None
+        try:
+            ctx_key = context_key(self._prepare_context(context).to_dict())
+            if ctx_key is not None:
+                cached = self._cache.get(flag_key, context_key=ctx_key)
+        except Exception:
+            cached = None
+        if cached is None:
+            cached = self._last_values.get(flag_key)
+        flag_enabled = bool(cached)
 
         self._telemetry.track_error(
             ErrorEvent(
@@ -383,6 +406,7 @@ class FlagClient:
         self._config.environment = environment
         # Clear cache when environment changes since flag values may differ
         self._cache.clear()
+        self._last_values.clear()
 
     def get_environment(self) -> str:
         """
@@ -399,6 +423,7 @@ class FlagClient:
         if self._realtime:
             self._realtime.close()
         self._cache.clear()
+        self._last_values.clear()
         self._client.close()
 
     # Override methods
@@ -530,6 +555,7 @@ class FlagClient:
         self._config_overrides.clear()
         self._variation_overrides.clear()
         self._cache.clear()
+        self._last_values.clear()
 
     def get_all_flags(self, environment: str = "development") -> list[FlagDefinition]:
         """
@@ -540,7 +566,9 @@ class FlagClient:
         Use cases:
         - Local override UI: Display all available flags for developers to toggle
         - Offline mode: Pre-fetch flags for mobile/desktop apps
-        - SDK initialization: Bootstrap SDK with all flag values on startup
+        - SDK initialization: list the flags on startup (this does not fill the
+          evaluation cache: a listed `enabled` is the environment switch, not a
+          context's result)
         - DevTools integration: Show available flags in browser dev panels
 
         Args:
@@ -570,10 +598,6 @@ class FlagClient:
                 )
                 for f in data.get("flags", [])
             ]
-
-            # Cache all flags
-            for flag in flags:
-                self._cache.set(flag.key, flag.enabled, flag.key, flag.configuration)
 
             return flags
 
@@ -622,6 +646,20 @@ class FlagClient:
             if self._config.on_error:
                 self._config.on_error(e)
             return []
+
+    def _prepare_context(self, context: FlagContext | None) -> FlagContext:
+        """
+        Copy the caller's context and fill in the configured defaults.
+
+        The copy keeps the caller's object unmodified, so the same object can
+        be reused without its filled-in fields leaking into later calls.
+        """
+        eval_context = dataclasses.replace(context) if context is not None else FlagContext()
+        if not eval_context.application_id and self._config.application_id:
+            eval_context.application_id = self._config.application_id
+        if not eval_context.environment:
+            eval_context.environment = self._config.environment
+        return eval_context
 
     def _track_evaluation(
         self,

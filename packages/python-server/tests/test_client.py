@@ -1,5 +1,8 @@
 """Tests for the synchronous FlagClient."""
 
+import json
+from typing import Any
+
 import httpx
 import pytest
 import respx
@@ -493,3 +496,119 @@ class TestEvaluateContract:
         assert len(errors) == 2
         # Not cached: the second lookup asks the server again.
         assert route.call_count == 2
+
+
+FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+
+
+def _answer_by_user(request: httpx.Request) -> httpx.Response:
+    """Server stand-in: true for user a, false for anyone else."""
+    context = json.loads(request.content)["context"]
+    return httpx.Response(200, json=server_body("checkout", context.get("user_id") == "a"))
+
+
+def _answer_by_plan(request: httpx.Request) -> httpx.Response:
+    context = json.loads(request.content)["context"]
+    pro = context.get("attributes", {}).get("plan") == "pro"
+    return httpx.Response(200, json=server_body("checkout", pro))
+
+
+class TestContextCache:
+    """The cache is keyed by flag and evaluation context (#127)."""
+
+    def test_ab(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
+        route = mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        results = [
+            client.evaluate("checkout", FlagContext(user_id=u)) for u in ("a", "b", "a", "b")
+        ]
+        assert [r.value for r in results] == [True, False, True, False]
+        assert [r.reason for r in results] == ["evaluated", "evaluated", "cached", "cached"]
+        assert route.call_count == 2
+
+    def test_attribute(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
+        route = mock_api.post(FLAG_URL).mock(side_effect=_answer_by_plan)
+        pro = client.evaluate("checkout", FlagContext(user_id="u", attributes={"plan": "pro"}))
+        free = client.evaluate("checkout", FlagContext(user_id="u", attributes={"plan": "free"}))
+        assert (pro.value, pro.reason) == (True, "evaluated")
+        assert (free.value, free.reason) == (False, "evaluated")
+        assert route.call_count == 2
+
+    def test_attribute_order(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
+        route = mock_api.post(FLAG_URL).mock(side_effect=_answer_by_plan)
+        client.evaluate("checkout", FlagContext(attributes={"plan": "pro", "region": "eu"}))
+        second = client.evaluate(
+            "checkout", FlagContext(attributes={"region": "eu", "plan": "pro"})
+        )
+        assert second.reason == "cached"
+        assert route.call_count == 1
+
+    def test_invalidate(self, client: FlagClient, mock_api: respx.MockRouter) -> None:
+        route = mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        for u in ("a", "b"):
+            client.evaluate("checkout", FlagContext(user_id=u))
+        client.invalidate_cache("checkout")
+        for u in ("a", "b"):
+            assert client.evaluate("checkout", FlagContext(user_id=u)).reason == "evaluated"
+        assert route.call_count == 4
+
+    def test_list_fetch_does_not_seed(
+        self, client: FlagClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_flags_list_response(
+            mock_api,
+            [{"key": "checkout", "enabled": True, "scope": "application", "environments": {}}],
+        )
+        mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        client.get_all_flags("production")
+        # The list's `enabled` is the environment switch, not a context's result.
+        assert client._cache.keys() == []
+        result = client.evaluate("checkout", FlagContext(user_id="b"))
+        assert result.value is False
+        assert result.reason == "evaluated"
+
+    def test_track_error_uses_the_callers_context(
+        self, client: FlagClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        recorded: list[Any] = []
+        client._telemetry.track_error = recorded.append  # type: ignore[method-assign]
+        for u in ("a", "b"):
+            client.evaluate("checkout", FlagContext(user_id=u))
+        err = RuntimeError("boom")
+        client.track_error("checkout", err, FlagContext(user_id="b"))
+        client.track_error("checkout", err, FlagContext(user_id="a"))
+        assert [e.flag_enabled for e in recorded] == [False, True]
+
+    def test_track_error_without_its_context_reports_the_last_evaluation(
+        self, client: FlagClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        recorded: list[Any] = []
+        client._telemetry.track_error = recorded.append  # type: ignore[method-assign]
+        client.evaluate("checkout", FlagContext(user_id="a"))
+        err = RuntimeError("boom")
+        # Reported with no context: the flag's most recent evaluation (on), not False.
+        client.track_error("checkout", err)
+        # A flag never evaluated is reported off.
+        client.track_error("other", err)
+        assert [e.flag_enabled for e in recorded] == [True, False]
+
+    def test_unserializable_context_skips_the_cache(
+        self, client: FlagClient, mock_api: respx.MockRouter
+    ) -> None:
+        route = mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        context = FlagContext(user_id="a", attributes={"when": object()})
+        result = client.evaluate("checkout", context)
+        # The request cannot be sent either: the default, reason "error", nothing cached.
+        assert result.reason == "error"
+        assert client._cache.keys() == []
+        assert route.call_count == 0
+
+    def test_caller_context_is_not_modified(
+        self, client: FlagClient, mock_api: respx.MockRouter
+    ) -> None:
+        mock_api.post(FLAG_URL).mock(side_effect=_answer_by_user)
+        context = FlagContext(user_id="a")
+        client.evaluate("checkout", context)
+        assert context.application_id is None
+        assert context.environment is None

@@ -135,6 +135,8 @@ unsubscribe();
 
 ### Cache Management
 
+Evaluations are cached per flag and evaluation context (including the user ID), so one user's result is never returned for another; `getAllFlags()` does not fill the cache.
+
 ```typescript
 // Get all cached flags
 const cachedFlags = client.getCachedFlags();
@@ -457,7 +459,7 @@ const client = new FlagClient({
 - `getEnvironment()`: Get the current environment
 - `setUserId(userId)`: Set the user ID for targeted rollouts
 - `getUserId()`: Get the current user ID
-- `getCachedFlags()`: Get all cached flag keys
+- `getCachedFlags()`: Get the keys of flags with at least one live cached evaluation
 - `clearCache()`: Clear the flag cache
 - `isRealtimeConnected()`: Check real-time connection status
 - `close()`: Close client and cleanup resources

@@ -74,8 +74,23 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		return c.getDefaultResult(flagKey, err), err
 	}
 
+	// Prepare the context on a copy, so the caller's value is never modified. Its JSON (map
+	// keys sorted by encoding/json) is the cache key and the request body.
+	prepared := Context{}
+	if ctx != nil {
+		prepared = *ctx
+	}
+	if prepared.ApplicationID == "" && c.config.ApplicationID != "" {
+		prepared.ApplicationID = c.config.ApplicationID
+	}
+	ctxJSON, err := json.Marshal(prepared)
+	if err != nil {
+		return c.getDefaultResult(flagKey, err), err
+	}
+	ctxKey := string(ctxJSON)
+
 	// Check cache first
-	if cachedEntry, found := c.cache.GetEntry(flagKey); found {
+	if cachedEntry, found := c.cache.GetEntry(flagKey, ctxKey); found {
 		configuration := cachedEntry.Configuration
 		variation := cachedEntry.Variation
 
@@ -102,17 +117,9 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		}, nil
 	}
 
-	// Prepare context
-	if ctx == nil {
-		ctx = &Context{}
-	}
-	if ctx.ApplicationID == "" && c.config.ApplicationID != "" {
-		ctx.ApplicationID = c.config.ApplicationID
-	}
-
 	// Prepare request
 	requestBody := map[string]interface{}{
-		"context": ctx,
+		"context": prepared,
 	}
 	jsonData, err := json.Marshal(requestBody)
 	if err != nil {
@@ -173,7 +180,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 	enabled := *response.Enabled
 
 	// Cache the result (including configuration and variation)
-	c.cache.Set(flagKey, enabled, response.Configuration, response.Variation)
+	c.cache.Set(flagKey, ctxKey, enabled, response.Configuration, response.Variation)
 
 	// Apply overrides to evaluated result
 	finalConfiguration := response.Configuration
