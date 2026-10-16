@@ -85,16 +85,20 @@ pub(crate) struct Timeouts {
     pub idle: Duration,
 }
 
-/// A setting's value in whole milliseconds, as Postgres reads it, rounded up
-/// and never below 1 ms: Postgres reads `0` as "no timeout", so a bound under a
+/// A setting's value in whole milliseconds, as Postgres reads it, rounded up,
+/// at most `i32::MAX` ms, and never below 1 ms: Postgres reads `0` as "no timeout", so a bound under a
 /// millisecond must not round down to switching the timeout off.
 fn millis(d: Duration) -> String {
-    format!("{}ms", d.as_nanos().div_ceil(1_000_000).max(1))
+    // Postgres takes at most `i32::MAX` ms; a longer bound is "as long as it
+    // allows" rather than an error that would fail every lookup.
+    let ms = d.as_nanos().div_ceil(1_000_000).clamp(1, i32::MAX as u128);
+    format!("{ms}ms")
 }
 
 /// A pool connection held across one unpinned transaction, for the key
 /// lookup ([`crate::keys::resolve_hash`]), which must await the connection's
-/// return to the pool itself so its permit covers the whole checkout (#120).
+/// return to the pool (or close it) itself so its permit covers the whole
+/// checkout (#120, #130).
 ///
 /// Opaque on purpose: the raw connection never leaves this module, so the
 /// only thing a holder can run on it is [`Held::begin`]'s probed transaction,
@@ -338,6 +342,7 @@ pub(crate) mod tests {
         assert_eq!(millis(Duration::from_micros(1)), "1ms");
         assert_eq!(millis(Duration::from_micros(1500)), "2ms");
         assert_eq!(millis(Duration::from_millis(500)), "500ms");
+        assert_eq!(millis(Duration::MAX), format!("{}ms", i32::MAX));
     }
 
     fn unset() -> (String, String, String) {

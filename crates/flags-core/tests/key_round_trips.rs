@@ -108,9 +108,14 @@ async fn forward_client(
         let mut body = vec![0u8; usize::try_from(len - 4).expect("message length")];
         client.read_exact(&mut body).await?;
         if kind == b'Q' || kind == b'S' {
+            // Registered before the check, so an `unstall` between the check
+            // and the wait cannot be missed.
+            let unstalled = trips.unstall.notified();
+            tokio::pin!(unstalled);
+            unstalled.as_mut().enable();
             let n = trips.count.fetch_add(1, Ordering::SeqCst) + 1;
             if n > trips.stall_after.load(Ordering::SeqCst) {
-                trips.unstall.notified().await;
+                unstalled.await;
                 return Ok(());
             }
         }
@@ -247,12 +252,15 @@ async fn a_cached_unknown_key_takes_no_round_trips(pool: PgPool) {
     db.pool().close().await;
 }
 
-/// Bounds short enough for a test, in the same order as production's.
+/// Client-side bounds short enough for a test, with headroom for the real
+/// round trips on a loaded host. The server-side ones are long: these tests
+/// stall on the client's side, and a server timeout firing first would be a
+/// different failure from the one under test.
 fn short_bounds() -> LookupBounds {
     LookupBounds {
-        lock: Duration::from_millis(100),
-        statement: Duration::from_millis(200),
-        transaction: Duration::from_millis(300),
+        lock: Duration::from_secs(30),
+        statement: Duration::from_secs(30),
+        transaction: Duration::from_secs(1),
         release: Duration::from_millis(300),
     }
 }
@@ -285,7 +293,7 @@ async fn a_lookup_stalled_mid_transaction_closes_its_connection(pool: PgPool) {
     assert!(err.is_transient(), "{err:?}");
     assert_eq!(err.failure_reason().reason, "io", "{err:?}");
     assert!(
-        elapsed < Duration::from_secs(1),
+        elapsed < Duration::from_millis(2500),
         "gave up after {elapsed:?}"
     );
     assert_eq!(size, 0, "the stalled connection was closed");
@@ -320,7 +328,7 @@ async fn a_lookup_stalled_at_the_release_ping_still_answers(pool: PgPool) {
         .expect("the lookup's answer was read before the release");
     assert!(owner.is_none());
     assert!(
-        elapsed < Duration::from_secs(1),
+        elapsed < Duration::from_millis(2500),
         "answered after {elapsed:?}"
     );
     assert_eq!(size, 0, "the stalled connection was closed");

@@ -210,6 +210,12 @@ async fn resolve_hash_within(
     }
 }
 
+/// How far past the client-side transaction deadline the server's
+/// `idle_in_transaction_session_timeout` is set: the client gives up first,
+/// with its own reason, and the server's timeout is only the backstop for a
+/// client that went quiet (a half-open link), never a race with it (#130).
+const IDLE_PAST_DEADLINE: Duration = Duration::from_millis(500);
+
 /// [`resolve_hash`]'s query, on the connection it holds.
 async fn lookup(
     db: &Db,
@@ -224,7 +230,7 @@ async fn lookup(
     let timeouts = Timeouts {
         lock: bounds.lock,
         statement: bounds.statement,
-        idle: bounds.transaction,
+        idle: bounds.transaction + IDLE_PAST_DEADLINE,
     };
     let mut tx = conn.begin(db, Some(timeouts)).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
@@ -254,7 +260,7 @@ async fn lookup(
 /// A malformed key and a remembered one take no permit. Any other waits up to
 /// the limit's wait for one, then fails with [`Error::Busy`]. The lookup runs
 /// in a task that owns the permit and frees it only after its connection is
-/// back in the pool, so a caller dropped mid-lookup (a client that hung up)
+/// back in the pool or closed, so a caller dropped mid-lookup (a client that hung up)
 /// neither frees the permit early nor loses the answer: the task still
 /// remembers an unknown key.
 pub async fn resolve_cached(
@@ -318,7 +324,7 @@ pub const KEY_LOOKUP_WAIT: Duration = Duration::from_secs(2);
 /// sqlx returns a dropped `PoolConnection` to the pool in a task it spawns,
 /// after a release ping, so a permit freed when the query returned would be
 /// free while the connection is still out: [`resolve_hash`] awaits the return
-/// itself. And a request future dropped mid-lookup would drop its permit at
+/// itself, or closes the connection, before it returns. And a request future dropped mid-lookup would drop its permit at
 /// once: [`resolve_cached`] runs the lookup in a task that owns the permit.
 #[derive(Debug)]
 pub struct KeyLookups {
@@ -340,9 +346,19 @@ pub struct KeyLookups {
 /// connection, which never hears the server's answer: `transaction` is a
 /// client-side deadline on the whole transaction, `BEGIN` to `COMMIT`, and
 /// `release` one on returning the connection to the pool. A connection that
-/// misses either is closed, never returned. `transaction` is also the
-/// server's `idle_in_transaction_session_timeout`, so a backend whose client
-/// gave up ends itself rather than keep its lock on `app_keys`.
+/// misses either is closed, never returned. Half a second past `transaction`
+/// is also the server's `idle_in_transaction_session_timeout`, so a backend
+/// whose client gave up ends itself rather than keep its lock on `app_keys`.
+/// (Between `BEGIN` and the probe only the client deadline applies; the
+/// backend holds no lock on `app_keys` yet.)
+///
+/// A discarded connection frees its pool slot at once, while its backend may
+/// live up to about `statement` longer, so the pool can briefly open a
+/// replacement beside it: at most one extra backend per permit, and only
+/// while the database is already slow or `app_keys` locked.
+///
+/// Every bound must be non-zero: a zero client-side bound would close the
+/// connection on every lookup.
 ///
 /// ```
 /// use flags_core::keys::{KeyLookups, LookupBounds, KEY_LOOKUP_WAIT};
@@ -354,8 +370,8 @@ pub struct LookupBounds {
     pub lock: Duration,
     /// `statement_timeout` for the lookup's statement.
     pub statement: Duration,
-    /// Client-side deadline on the transaction, and the server's
-    /// `idle_in_transaction_session_timeout`.
+    /// Client-side deadline on the transaction; half a second more is the
+    /// server's `idle_in_transaction_session_timeout`.
     pub transaction: Duration,
     /// Client-side deadline on returning the connection to the pool.
     pub release: Duration,
@@ -390,7 +406,8 @@ impl KeyLookups {
     }
 
     /// The same limit, with each lookup under `bounds` instead of
-    /// [`LookupBounds::DEFAULT`].
+    /// [`LookupBounds::DEFAULT`]. Every bound must be non-zero
+    /// ([`LookupBounds`]).
     pub fn with_bounds(self, bounds: LookupBounds) -> Self {
         Self { bounds, ..self }
     }
