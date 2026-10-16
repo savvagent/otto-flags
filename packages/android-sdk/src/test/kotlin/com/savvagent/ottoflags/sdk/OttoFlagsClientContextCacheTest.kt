@@ -26,9 +26,9 @@ class OttoFlagsClientContextCacheTest {
         mockWebServer.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val context = JSONObject(request.body.readUtf8()).getJSONObject("context")
-                val attributes = context.getJSONObject("attributes")
-                val enabled = context.getString("user_id") == "a" ||
-                    attributes.optString("plan") == "pro"
+                val attributes = context.optJSONObject("attributes")
+                val enabled = context.optString("user_id") == "a" ||
+                    attributes?.optString("plan") == "pro"
                 return MockResponse()
                     .setResponseCode(200)
                     .setBody("""{"enabled": $enabled, "key": "checkout"}""")

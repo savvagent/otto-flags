@@ -566,7 +566,9 @@ class FlagClient:
         Use cases:
         - Local override UI: Display all available flags for developers to toggle
         - Offline mode: Pre-fetch flags for mobile/desktop apps
-        - SDK initialization: Bootstrap SDK with all flag values on startup
+        - SDK initialization: list the flags on startup (this does not fill the
+          evaluation cache: a listed `enabled` is the environment switch, not a
+          context's result)
         - DevTools integration: Show available flags in browser dev panels
 
         Args:

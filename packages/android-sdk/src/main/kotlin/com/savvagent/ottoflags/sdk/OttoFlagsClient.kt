@@ -592,8 +592,10 @@ class OttoFlagsClient(
         is JSONArray -> (0 until value.length()).joinToString(",", "[", "]") { i ->
             canonicalJson(value.opt(i))
         }
-        is String -> JSONObject.quote(value)
-        else -> value.toString()
+        // Only numbers and booleans are bare in the request body; anything else (a String, a
+        // Char) is sent quoted, so it is quoted here too and cannot share a key with a number.
+        is Number, is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
     }
 
     private fun invalidKeyMessage(flagKey: String): String =

@@ -575,7 +575,8 @@ const evaluate = async (key, context, options = {}) => {
     ]);
     return result.enabled;
   } catch (error) {
-    return cache.get(key) ?? defaultValue;
+    // The cache is keyed by flag and context (see Suggested Cache Key Format)
+    return cache.get(key, canonicalContext(context)) ?? defaultValue;
   }
 };
 ```
