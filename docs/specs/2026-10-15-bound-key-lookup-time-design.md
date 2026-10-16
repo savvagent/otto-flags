@@ -116,8 +116,8 @@ settings; changing how database errors are logged.
 
 - `unpinned::enter(tx, db, maintenance, timeouts: Option<Timeouts>)`: three extra columns,
   `CASE WHEN $4::text IS NOT NULL THEN set_config('lock_timeout', $4::text, true) END` and the
-  the same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`). `begin`/`begin_as_tenant_role` pass `None`;
-  `Held::begin(db, timeouts)` passes what it is given. Values are whole milliseconds rendered as
+  same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`). `begin`/`begin_as_tenant_role` pass `None`;
+  `Held::begin(db, timeouts)` passes what it is given. Values are whole milliseconds, rounded up and never below 1 (`0` would mean "off"), rendered as
   `"<n>ms"`.
 - `unpinned::Held::release(self, within: Duration) -> bool` (true if sqlx's return finished
   within the bound, whether it pooled or closed the connection; false if it was cut short):
@@ -139,7 +139,7 @@ additive. No SDK wire change: the 503 body and header already exist.
 ## 7. Invariants impact
 
 - **No SQL outside flags-core; runtime queries only:** the probe stays a runtime `query_as`.
-- **Tenant isolation:** the probe's role logic is unchanged; the new columns only set two
+- **Tenant isolation:** the probe's role logic is unchanged; the new columns only set three
   transaction-local GUCs. The probe still runs first in every unpinned transaction.
 - **Small shared database:** strictly better; a lookup's hold time is now bounded.
 - **SDK REST contract:** unchanged (503 `temporarily_unavailable` already documented).

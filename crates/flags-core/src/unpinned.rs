@@ -85,9 +85,11 @@ pub(crate) struct Timeouts {
     pub idle: Duration,
 }
 
-/// A setting's value in whole milliseconds, as Postgres reads it.
+/// A setting's value in whole milliseconds, as Postgres reads it, rounded up
+/// and never below 1 ms: Postgres reads `0` as "no timeout", so a bound under a
+/// millisecond must not round down to switching the timeout off.
 fn millis(d: Duration) -> String {
-    format!("{}ms", d.as_millis())
+    format!("{}ms", d.as_nanos().div_ceil(1_000_000).max(1))
 }
 
 /// A pool connection held across one unpinned transaction, for the key
@@ -326,6 +328,16 @@ pub(crate) mod tests {
         .fetch_one(&mut **tx)
         .await
         .unwrap()
+    }
+
+    /// A bound under a millisecond rounds up rather than down to `0`, which
+    /// Postgres reads as "no timeout".
+    #[test]
+    fn a_sub_millisecond_bound_never_switches_the_timeout_off() {
+        assert_eq!(millis(Duration::ZERO), "1ms");
+        assert_eq!(millis(Duration::from_micros(1)), "1ms");
+        assert_eq!(millis(Duration::from_micros(1500)), "2ms");
+        assert_eq!(millis(Duration::from_millis(500)), "500ms");
     }
 
     fn unset() -> (String, String, String) {

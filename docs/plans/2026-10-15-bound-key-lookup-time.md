@@ -7,7 +7,7 @@
 bound: server-side `lock_timeout`/`statement_timeout` set by the existing probe, a client-side
 deadline on the transaction, and a timeout on the release ping.
 
-**Architecture:** `unpinned::enter`'s probe gains two optional `set_config` columns (NULL for
+**Architecture:** `unpinned::enter`'s probe gains three optional `set_config` columns (NULL for
 every caller but the key lookup), so the timeouts cost no round trip. `keys::LookupBounds` holds
 the four bounds; `resolve_hash` runs the transaction under a client-side deadline and the release
 under a timeout, closing the connection (never returning it) when either expires, before the

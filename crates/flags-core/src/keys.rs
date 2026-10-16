@@ -332,7 +332,8 @@ pub struct KeyLookups {
 /// that neither its [`KeyLookups`] permit nor its pool connection is held for
 /// as long as a lock on `app_keys` lasts or a dead connection takes to notice.
 ///
-/// `lock` and `statement` are set on the server for the lookup's statement:
+/// `lock` and `statement` are set on the server for the rest of the lookup's
+/// transaction (the lookup's statement and `COMMIT`):
 /// a lock wait fails with `lock_not_available` (55P03) and a slow statement
 /// with `query_canceled` (57014), both transient (`503` on the SDK API) and
 /// never remembered as an unknown key. They cannot bound a half-open
