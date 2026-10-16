@@ -82,7 +82,7 @@ and `Held::begin(&mut self, db: &Db, timeouts: Timeouts)`, used by Task 2.
 - [ ] **Step 2: Run, see them fail to compile:**
   `DATABASE_URL=… cargo test -p flags-core --lib unpinned`
 - [ ] **Step 3: Implement.** `enter(tx, db, maintenance, timeouts: Option<Timeouts>)`; bind
-  `$4`/`$5`/`$6` as `Option<String>` (`format!("{}ms", d.as_millis())`); two more select-list columns,
+  `$4`/`$5`/`$6` as `Option<String>` (`format!("{}ms", d.as_millis())`); three more select-list columns,
   `CASE WHEN $4::text IS NOT NULL THEN set_config('lock_timeout', $4::text, true) END` and the
   same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`), each in its own column (the comment explains why: they
   take effect from the next statement, the lookup; the lookup's lock is taken when it is bound,
