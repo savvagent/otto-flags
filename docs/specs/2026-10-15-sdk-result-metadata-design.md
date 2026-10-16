@@ -40,7 +40,8 @@ From #124:
 - **Metadata is lenient.** `version` is used only when it is a JSON integer (not a boolean, not a
   float with a fraction), `scope` only when it is a JSON string; anything else leaves the field
   unset. A malformed metadata field never fails a lookup whose `enabled` is valid (the result is
-  the server's; metadata is informational).
+  the server's; metadata is informational). Java's existing old-field reads call `getAsString()`,
+  which throws on an object or array and would fail the lookup; they get the same guard.
 - **Types:** Python `version: int | None`, `scope: str | None` on `FlagMetadata`; Node
   `version?: number`, `scope?: string`; Go `Version int64` (`json:"version,omitempty"`, 0 means
   not sent: the server's versions start at 1) and `Scope string` (`json:"scope,omitempty"`);
@@ -50,7 +51,13 @@ From #124:
   `variant`), so a server or proxy that does send them still reaches the caller; their docs say
   the otto-flags server never sends them.
 - **Cached results return the metadata of the evaluation they cache** (version and scope), as
-  Rust does. Error results keep no metadata.
+  Rust does: a hit now returns a metadata object where it returned none. Of the old fields, a hit
+  carries only what the entry already stores (Python and Node: `flag_id`/`flagId`; Go and Java:
+  none); the server never sends them, so this differs only for a non-otto server. Java stores
+  `version` and `scope` as entry fields and builds a fresh `Metadata` per hit (the class is
+  mutable). Error results keep no metadata.
+- An integral float such as `3.0` (which the server never sends) may be read as a version in
+  Node and Java and not in Python and Go; accepted, and no test pins it.
 - The exported cache classes stay source-compatible: Python `FlagCache.set`/`AsyncFlagCache.set`
   gain keyword-only `version` and `scope` (default `None`); Node `FlagCache.set` gains a trailing
   optional `metadata?: { version?: number; scope?: string }`; `CacheEntry` gains optional fields.
@@ -107,7 +114,8 @@ Per SDK, on a successful evaluate response:
   `isString()`. `CacheEntry` gains `Metadata metadata`; the cached path returns it.
 
 Public API: additive only (new optional fields, new optional/keyword parameters, Go struct fields
-and a new unexported-cache parameter).
+and a new unexported-cache parameter). Behavior change: a cache hit returns a metadata object
+(`version`, `scope`) instead of none.
 
 ## 7. Invariants impact
 
@@ -133,8 +141,9 @@ recurring-cost impact.
 
 ## 11. Testing approach
 
-Gates: the Python gate (pytest + mypy) and the pnpm gate; tests fail before and pass after. Go,
-Java: no toolchain (known red #17, #113); not run, reported in the PR body. New tests next to each
+Gates: the Python gate (pytest + mypy) and the pnpm gate; tests fail before and pass after. Go
+and Java: not run, no toolchain on the host (Go is also known red, #17; both test suites have
+files that do not compile, #113); reported in the PR body. New tests next to each
 package's evaluate-contract tests (`tests/test_client.py`, `tests/test_async_client.py`,
 `src/client.test.ts`, `packages/go-server/metadata_test.go`, `MetadataTest.java`), using the
 server-shaped body each package already has (`server_body` in Python's `conftest.py`,
