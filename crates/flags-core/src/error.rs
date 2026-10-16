@@ -19,7 +19,12 @@ pub enum Error {
     #[error("no flag {key:?} in app {app:?}; call list_flags to see the app's flags")]
     FlagNotFound { app: String, key: String },
 
-    #[error("flag {key:?} has no version {version}; call flag_history to see its versions")]
+    #[error(
+        "flag {key:?} has no version {version}; versions older than {days} days are removed \
+         once a flag has {kept} newer ones. Call flag_history to see the versions kept",
+        days = crate::flags::VERSION_RETENTION_DAYS,
+        kept = crate::flags::MIN_RETAINED_VERSIONS
+    )]
     VersionNotFound { key: String, version: i32 },
 
     #[error("a flag app named {name:?} already exists in this organization")]

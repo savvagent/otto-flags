@@ -55,8 +55,9 @@ impl Flags {
     #[tool(
         name = "flag_history",
         description = "Every version of a flag, newest first: what changed, who changed it, why, \
-                       and the full state at that version. rollback_flag can restore any of them. \
-                       Free.",
+                       and the full state at that version. Versions older than 90 days are \
+                       removed once the flag has 100 newer ones. rollback_flag can restore any \
+                       of them. Free.",
         annotations(read_only_hint = true)
     )]
     pub async fn flag_history(
@@ -149,5 +150,34 @@ impl Flags {
             health,
             provenance: out::HEALTH_PROVENANCE,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flags_core::flags::{MIN_RETAINED_VERSIONS, VERSION_RETENTION_DAYS};
+
+    fn description(name: &str) -> String {
+        crate::tools::router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.description)
+            .unwrap_or_else(|| panic!("no description for {name}"))
+            .to_string()
+    }
+
+    /// The descriptions state the history retention in prose (a `#[tool]`
+    /// description must be a literal), so they are pinned to the constants.
+    #[test]
+    fn history_tools_state_the_retention() {
+        let rule = format!(
+            "older than {VERSION_RETENTION_DAYS} days are removed once the flag has \
+             {MIN_RETAINED_VERSIONS} newer ones"
+        );
+        for name in ["flag_history", "rollback_flag"] {
+            let text = description(name);
+            assert!(text.contains(&rule), "{name} does not say {rule:?}: {text}");
+        }
     }
 }

@@ -152,7 +152,8 @@ fn join_failure_reason(e: &tokio::task::JoinError) -> &'static str {
 }
 
 /// Hourly retention: platform-event markers, removed-member tombstones, error
-/// reports, old evaluation buckets, and rejected usage events.
+/// reports, old evaluation buckets, old flag versions, and rejected usage
+/// events.
 async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
     loop {
         match flags_core::platform_events::sweep(&db, PLATFORM_EVENT_RETENTION_DAYS).await {
@@ -185,6 +186,22 @@ async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
                     "telemetry sweep failed"
                 );
                 tracing::debug!(code = e.code(), reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "telemetry sweep failed");
+            }
+        }
+        match flags_core::flags::sweep_versions(&db).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(rows = n, "swept expired flag versions"),
+            Err(e) => {
+                let f = e.failure_reason();
+                tracing::warn!(
+                    code = e.code(),
+                    reason = f.reason,
+                    status = f.status,
+                    sqlstate = f.sqlstate(),
+                    transport = f.transport,
+                    "flag-version sweep failed"
+                );
+                tracing::debug!(code = e.code(), reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "flag-version sweep failed");
             }
         }
         match flags_core::usage::sweep_rejected(&db).await {

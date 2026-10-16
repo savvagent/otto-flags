@@ -6394,3 +6394,305 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
     assert_eq!(back.configuration, Some(big));
     assert_eq!(back.variations, big_variations);
 }
+
+/// Make `n` changes to flag `key` (renames `{key}{i}`), so it gains `n` versions.
+async fn bump(
+    tx: &mut otto_tenant::Tx<'_>,
+    app: &flags_core::apps::FlagApp,
+    key: &str,
+    n: usize,
+    actor: UserId,
+) {
+    for i in 1..=n {
+        tx.update_flag(
+            app,
+            key,
+            FlagPatch {
+                name: Some(format!("{key}{i}")),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    }
+}
+
+/// (rows, min version, max version) of one flag's history, read as the
+/// superuser pool (RLS-exempt) so it sees every org.
+async fn versions_of(
+    pool: &PgPool,
+    flag: flags_core::ids::FlagId,
+) -> (i64, Option<i32>, Option<i32>) {
+    sqlx::query_as(
+        "SELECT count(*), min(version), max(version) FROM flag_versions WHERE flag_id = $1",
+    )
+    .bind(flag)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// #123: history is removed only by the background sweep, and only for
+/// versions both older than `VERSION_RETENTION_DAYS` and outside the flag's
+/// newest `MIN_RETAINED_VERSIONS`. However many writes follow a change, it
+/// stays on record for 90 days: writes cannot push recent history out.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_versions_are_swept_by_age_beyond_the_newest_100(pool: PgPool) {
+    use flags_core::flags::{sweep_versions, MIN_RETAINED_VERSIONS, VERSION_RETENTION_DAYS};
+    assert_eq!((VERSION_RETENTION_DAYS, MIN_RETAINED_VERSIONS), (90, 100));
+    let db = db(pool.clone()).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let actor = UserId::new();
+
+    let mut tx = db.begin(a).await.unwrap();
+    let (app_a, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let mut ids = vec![];
+    for key in ["f", "recent"] {
+        let flag = tx
+            .create_flag(
+                &app_a,
+                NewFlag {
+                    key: key.into(),
+                    ..Default::default()
+                },
+                actor,
+                None,
+            )
+            .await
+            .unwrap();
+        bump(&mut tx, &app_a, key, 104, actor).await;
+        ids.push(flag.id);
+    }
+    tx.commit().await.unwrap();
+    let (f, recent) = (ids[0], ids[1]);
+
+    let mut tx = db.begin(b).await.unwrap();
+    let (app_b, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let flag_b = tx
+        .create_flag(
+            &app_b,
+            NewFlag {
+                key: "b".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    bump(&mut tx, &app_b, "b", 2, actor).await;
+    tx.commit().await.unwrap();
+
+    // Age f's versions 1..=103 and all of b's past the retention window.
+    sqlx::query(
+        "UPDATE flag_versions SET created_at = now() - interval '91 days' \
+         WHERE (flag_id = $1 AND version <= 103) OR flag_id = $2",
+    )
+    .bind(f)
+    .bind(flag_b.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(sweep_versions(&db).await.unwrap(), 5);
+    // Version 6 is old but among f's newest 100, so it stays.
+    assert_eq!(versions_of(&pool, f).await, (100, Some(6), Some(105)));
+    // 105 recent versions: none is old, so none goes.
+    assert_eq!(versions_of(&pool, recent).await, (105, Some(1), Some(105)));
+    // Old, but fewer than 100 versions.
+    assert_eq!(versions_of(&pool, flag_b.id).await, (3, Some(1), Some(3)));
+    assert_eq!(sweep_versions(&db).await.unwrap(), 0);
+
+    let mut tx = db.begin(a).await.unwrap();
+    let err = tx
+        .rollback_flag(&app_a, "f", Some(5), meta(actor))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "version_not_found", "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("90 days") && msg.contains("100"), "{msg}");
+    let (back, to) = tx
+        .rollback_flag(&app_a, "f", Some(6), meta(actor))
+        .await
+        .unwrap();
+    assert_eq!((to, back.version, back.name.as_str()), (6, 106, "f5"));
+    // Recent history of a heavily written flag is all still restorable.
+    let (back, _) = tx
+        .rollback_flag(&app_a, "recent", Some(1), meta(actor))
+        .await
+        .unwrap();
+    assert_eq!(back.name, "recent");
+    tx.commit().await.unwrap();
+}
+
+/// The sweep's unpinned access to `flag_versions` (migration 0006) needs the
+/// maintenance marker: a request path that forgot to pin sees and deletes
+/// nothing; pinned transactions still see only their own org (#27, #123).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_versions_need_the_maintenance_marker_unpinned(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let actor = UserId::new();
+    for org in [OrgId::new(), OrgId::new()] {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx
+            .create_app("web", &["production".into()], actor)
+            .await
+            .unwrap();
+        tx.create_flag(
+            &app,
+            NewFlag {
+                key: "f".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+        let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM flag_versions")
+            .fetch_one(tx.conn())
+            .await
+            .unwrap();
+        assert_eq!(seen, 1, "pinned sees only its own org");
+        tx.commit().await.unwrap();
+    }
+
+    let mut tx = as_app_unpinned(&pool).await;
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM flag_versions")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(seen, 0);
+    let deleted = sqlx::query("DELETE FROM flag_versions")
+        .execute(&mut *tx)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(deleted, 0);
+    tx.rollback().await.unwrap();
+
+    let mut tx = as_app_maintenance(&pool).await;
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM flag_versions")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(seen, 2);
+    tx.rollback().await.unwrap();
+}
+
+/// The sweep drains a backlog in batches across every org: 2 100 eligible
+/// rows in org A and 1 900 in org B, exactly four full batches, so the loop
+/// also ends on an empty one. A row outside the newest 100 but only 89 days
+/// old stays.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_version_sweep_drains_a_backlog_in_batches(pool: PgPool) {
+    use flags_core::flags::sweep_versions;
+    let db = db(pool.clone()).await;
+    let actor = UserId::new();
+    let mut flags = vec![];
+    for org in [OrgId::new(), OrgId::new()] {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx
+            .create_app("web", &["production".into()], actor)
+            .await
+            .unwrap();
+        let flag = tx
+            .create_flag(
+                &app,
+                NewFlag {
+                    key: "f".into(),
+                    ..Default::default()
+                },
+                actor,
+                None,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        flags.push((org, flag.id));
+    }
+    // History seeded directly (as the superuser pool): versions 2..=top, all
+    // 91 days old, on top of the real version 1.
+    for (&(org, flag), top) in flags.iter().zip([2_200, 2_001]) {
+        sqlx::query(
+            "INSERT INTO flag_versions (org_id, flag_id, version, change, snapshot, created_at) \
+             SELECT $1, $2, v, 'update', '{}'::jsonb, now() - interval '91 days' \
+               FROM generate_series(2, $3) AS v",
+        )
+        .bind(org)
+        .bind(flag)
+        .bind(top)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE flag_versions SET created_at = now() - interval '91 days' \
+             WHERE flag_id = $1 AND version = 1",
+        )
+        .bind(flag)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // One of B's eligible-by-count rows is only 89 days old.
+    sqlx::query(
+        "UPDATE flag_versions SET created_at = now() - interval '89 days' \
+         WHERE flag_id = $1 AND version = 7",
+    )
+    .bind(flags[1].1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A: 2 200 versions, 2 100 swept. B: 2 001 versions, 1 901 past the
+    // count, one of them too young, so 1 900 swept.
+    assert_eq!(sweep_versions(&db).await.unwrap(), 4_000);
+    assert_eq!(
+        versions_of(&pool, flags[0].1).await,
+        (100, Some(2_101), Some(2_200))
+    );
+    assert_eq!(
+        versions_of(&pool, flags[1].1).await,
+        (101, Some(7), Some(2_001))
+    );
+    assert_eq!(sweep_versions(&db).await.unwrap(), 0);
+}
+
+/// The sweep chooses rows by `created_at`, so tenant transactions cannot
+/// rewrite history: `otto_app` has no UPDATE on `flag_versions` (0006).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_versions_cannot_be_updated_by_the_app_role(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "f".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(org).await.unwrap();
+    let err = sqlx::query("UPDATE flag_versions SET created_at = now() - interval '1 year'")
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501", "{err}");
+}

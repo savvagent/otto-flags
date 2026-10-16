@@ -7,6 +7,14 @@
 //! transaction, so a failed call leaves no trace and a successful one leaves
 //! exactly one version.
 //!
+//! History is the audit trail of flag changes, so no request path removes or
+//! changes any of it (`otto_app` cannot update `flag_versions`, migration
+//! 0006). Only the hourly background sweep ([`sweep_versions`]) deletes, and
+//! only versions both older than [`VERSION_RETENTION_DAYS`] and outside their
+//! flag's newest [`MIN_RETAINED_VERSIONS`] (#123). Writes can make an old
+//! version eligible (100 newer ones push it out of the newest 100), but never
+//! a recent one, and those writes are themselves on record for 90 days.
+//!
 //! Writes lock the flag row (`FOR NO KEY UPDATE`) before computing the new
 //! state, so two agents changing different environments of one flag at once
 //! both land: the second waits for the first and merges into its result
@@ -19,7 +27,7 @@
 //! KEY UPDATE` conflicts with itself.
 
 use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Tx;
+use otto_tenant::{Db, Tx};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::FromRow;
@@ -144,6 +152,26 @@ pub struct ChangeMeta {
 
 const COLS: &str = "id, org_id, app_id, key, name, description, status, environments, \
                     variations, configuration, version, created_at, updated_at, archived_at";
+
+/// Flag versions younger than this are never removed (#123).
+///
+/// `flag_versions` is the audit trail of flag changes (see [`crate::audit`]),
+/// so retention is by age, not by count: however many writes follow a change,
+/// it stays on record this long, and a caller cannot erase a change by making
+/// more of them. 90 days is the retention of rollback events and evaluation
+/// rollups (`telemetry::EVAL_RETENTION_DAYS`) and `flag_health`'s longest
+/// window, so a change and the health data it can be judged by age out
+/// together.
+pub const VERSION_RETENTION_DAYS: i32 = 90;
+
+/// A flag's newest versions, which are kept however old they are (#123), so
+/// a flag changed rarely keeps its rollback depth and its last known-good
+/// state. The current version is always among them.
+pub const MIN_RETAINED_VERSIONS: i32 = 100;
+
+/// Rows [`sweep_versions`] deletes per transaction, to keep each one short on
+/// the small shared database.
+const SWEEP_BATCH: i64 = 1_000;
 
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
@@ -691,6 +719,53 @@ async fn record_version(
     .execute(tx.conn())
     .await?;
     Ok(())
+}
+
+/// Retention: delete flag versions older than [`VERSION_RETENTION_DAYS`] that
+/// are not among their flag's newest [`MIN_RETAINED_VERSIONS`], across every
+/// org. Background code only (`flags-server`'s hourly sweep): each batch of at
+/// most [`SWEEP_BATCH`] rows runs in its own maintenance transaction
+/// ([`crate::maintenance`]), which migration 0006's policies require. Returns
+/// the number of rows deleted.
+///
+/// A flag's newest version is its current one (every change records one), so
+/// the newest 100 are measured from `max(version)` without reading
+/// `feature_flags`. That maximum is a window over one scan of the table, not
+/// a subquery per row: row-level security hides the table's statistics from
+/// the planner (it estimates one row), and a correlated `max` became a nested
+/// loop over every pair of versions. Batches continue from the last one's
+/// highest `id`, so each batch deletes new rows; each one rescans the table,
+/// which costs little at hourly cadence, where one batch is the norm.
+pub async fn sweep_versions(db: &Db) -> Result<u64> {
+    let mut swept = 0;
+    let mut after: i64 = 0;
+    loop {
+        let mut tx = crate::maintenance::begin(db).await?;
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "DELETE FROM flag_versions WHERE id IN ( \
+               SELECT id FROM ( \
+                 SELECT id, created_at, version, \
+                        max(version) OVER (PARTITION BY flag_id) AS newest \
+                   FROM flag_versions) v \
+                WHERE id > $4 \
+                  AND created_at < now() - make_interval(days => $1) \
+                  AND version <= newest - $2 \
+                ORDER BY id LIMIT $3) \
+             RETURNING id",
+        )
+        .bind(VERSION_RETENTION_DAYS)
+        .bind(MIN_RETAINED_VERSIONS)
+        .bind(SWEEP_BATCH)
+        .bind(after)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        swept += ids.len() as u64;
+        match ids.iter().max() {
+            Some(&last) if ids.len() as i64 == SWEEP_BATCH => after = last,
+            _ => return Ok(swept),
+        }
+    }
 }
 
 // ------------------------------------------------------------ the SDK's view
