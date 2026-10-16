@@ -43,12 +43,14 @@ meets the first and closes #123.
 ## 3. Assumptions
 
 - **Two byte budgets, enforced on write:**
-  - **A flag's size is at most `MAX_FLAG_BYTES = 64 KiB` (65 536 bytes).** A flag's size is the
+  - **A flag's size is at most `MAX_FLAG_BYTES = 128 KiB` (131 072 bytes).** A flag's size is the
     byte length of its `environments`, `variations`, and `configuration` as stored (Postgres's
     text form of each `jsonb`, which is never shorter than the compact JSON the server sends;
-    section 9). 64 KiB is two maximal configurations, or hundreds of rules; real flags are a few
-    hundred bytes. It also bounds each history snapshot (part 1 keeps 90 days of versions and at
-    least the newest 100), so the 100 kept indefinitely are at most about 6.4 MiB per flag.
+    section 9). 128 KiB holds three maximal configurations with room for their environments
+    (#115's tests store a flag and a variation configuration of 32 KiB each, about 65.6 KiB as
+    stored, so 64 KiB would have refused what #122 accepts), or thousands of rule values; real
+    flags are a few hundred bytes. It also bounds each history snapshot (part 1 keeps 90 days of versions and at
+    least the newest 100), so the 100 kept indefinitely are at most about 12.8 MiB per flag.
   - **An app's active flags total at most `MAX_APP_FLAG_BYTES = 1 MiB` (1 048 576 bytes)**,
     counting each active flag's size plus `FLAG_OVERHEAD_BYTES = 256` (covering the per-flag
     fields the list adds: a key of up to 128 characters, `enabled`, `scope`, a 10-digit
@@ -59,7 +61,7 @@ meets the first and closes #123.
     plus overhead) an app holds about 1 500-2 000 flags. Archived flags do not count (the list
     leaves them out); restoring one is a write that counts.
   - So `GET /api/sdk/flags` is at most about 1 MiB plus a fixed ~150-byte envelope, and a stream
-    event carries at most one flag (64 KiB plus its envelope).
+    event carries at most one flag (128 KiB plus its envelope).
 - **A write is refused only if it grows past a budget.** A write is refused (`invalid_argument`,
   naming the size, the limit, and what to do) when the flag's new size exceeds `MAX_FLAG_BYTES`
   and is larger than before, or when the app's new active total exceeds `MAX_APP_FLAG_BYTES`
@@ -92,8 +94,8 @@ meets the first and closes #123.
   between flag rows and that lock. Instead the overshoot is bounded: each concurrent write adds
   at most `MAX_FLAG_BYTES + FLAG_OVERHEAD_BYTES`, at most one per open transaction (5 pool
   connections per machine), and once an app is over budget every growing write is refused. So
-  an app's active total stays under about `1 MiB + machines x 5 x 64.25 KiB` (`fly.toml` sets
-  no machine count; Fly runs one or two `app` machines today, about 1.3-1.6 MiB). The SDK guide's
+  an app's active total stays under about `1 MiB + machines x 5 x 128.25 KiB` (`fly.toml` sets
+  no machine count; Fly runs one or two `app` machines today, about 1.6-2.3 MiB). The SDK guide's
   recommended 4 MiB read cap leaves room for several machines.
 - **No migration, no constraint.** Checks are in code. The previous release, during rollout or
   after a rollback, writes without checking; this release refuses only growth beyond the
@@ -108,8 +110,8 @@ meets the first and closes #123.
 The SDK flag list and each stream event have a documented upper bound in bytes, enforced on
 every write that could exceed it.
 
-- A write that takes a flag's size over 65 536 bytes is refused with `invalid_argument`; a flag
-  of exactly 65 536 bytes is accepted.
+- A write that takes a flag's size over 131 072 bytes is refused with `invalid_argument`; a
+  flag of exactly 131 072 bytes is accepted.
 - A write that takes an app's active total over 1 048 576 bytes is refused with
   `invalid_argument`, from each write path (create, update, set environment, restore, rollback).
 - A write that shrinks a flag, an archive, and an environment patch that only disables are
@@ -132,7 +134,7 @@ from the database; per-org budgets; changing #115's per-configuration cap.
 
 ## 6. Architecture
 
-- `flags.rs` constants: `pub const MAX_FLAG_BYTES: i64 = 64 * 1024;`,
+- `flags.rs` constants: `pub const MAX_FLAG_BYTES: i64 = 128 * 1024;`,
   `pub const MAX_APP_FLAG_BYTES: i64 = 1024 * 1024;`, `pub const FLAG_OVERHEAD_BYTES: i64 = 256;`
   each with its reasoning as a doc comment.
 - A SQL fragment for a flag's size, used in one place:
@@ -152,7 +154,7 @@ from the database; per-org budgets; changing #115's per-configuration cap.
   then in Rust: `old_total = others + (was_active ? old_size + 256 : 0)`, `new_total = others +
   (new active ? new_size + 256 : 0)`; refuse per section 3. Messages:
   - flag: `flag {key:?} would be {n} bytes (its environments, variations and configurations as
-    stored); the limit is 65536 bytes. Remove rules, variations, or configuration`
+    stored); the limit is 131072 bytes. Remove rules, variations, or configuration`
   - app: `app {app:?}'s active flags would total {n} bytes; the limit is 1048576 bytes (each
     flag's size plus 256). Archive flags you no longer need, or shrink their configuration`;
     for a rollback the message adds `to stop a bad change now, turn the environment off with
@@ -206,8 +208,8 @@ None.
 ## 10. Testing
 
 - DB tests (`crates/flags-core/tests/db.rs`):
-  - `a_flag_is_capped_at_64_kib`: a flag grown with rules or variations to exactly 65 536 bytes
-    is accepted; one byte more is refused `invalid_argument` naming `65536`; refused from
+  - `a_flag_is_capped_at_128_kib`: a flag grown with variations and configuration to exactly
+    131 072 bytes is accepted; one byte more is refused `invalid_argument` naming `131072`; refused from
     `create_flag`, `update_flag`, `set_environment`.
   - `an_apps_active_flags_are_capped_at_1_mib`: fill an app near the budget with flags of known
     size; the next `create_flag` that crosses it is refused naming `1048576`; archiving one then
