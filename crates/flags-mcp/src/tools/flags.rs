@@ -57,7 +57,9 @@ pub struct CreateFlagArgs {
     #[serde(default)]
     pub variations: Option<Value>,
     /// Configuration the SDK returns with the flag (any JSON, at most 32 KiB
-    /// as JSON).
+    /// as JSON). A flag's environments, variations, and configurations
+    /// together are at most 128 KiB, and an app's active flags at most 1 MiB
+    /// (each flag plus 256 bytes), so SDKs can bound what they download.
     #[serde(default)]
     pub configuration: Option<Value>,
     /// Why this flag exists; kept in its history.
@@ -82,7 +84,8 @@ pub struct UpdateFlagArgs {
     #[serde(default)]
     pub variations: Option<Value>,
     /// Replaces the configuration (at most 32 KiB as JSON); JSON null clears
-    /// it.
+    /// it. A change that would take the flag past 128 KiB, or its app's
+    /// active flags past 1 MiB, is refused; one that shrinks it never is.
     #[serde(default)]
     pub configuration: Option<Value>,
     /// The version you last read. If the flag has changed since, the call is
@@ -291,7 +294,8 @@ impl Flags {
         description = "Turn a flag on or off in one environment, set its rollout percentage, \
                        replace its targeting rules, or choose its default variation. Only the \
                        fields you pass change. Applies to running apps within seconds. Pass \
-                       expectedVersion and a reason.",
+                       expectedVersion and a reason. Turning an environment off is never \
+                       refused, even when the flag or app is at its size limit.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

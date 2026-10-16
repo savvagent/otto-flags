@@ -2101,3 +2101,104 @@ async fn a_lapsed_claim_is_fenced_row_by_row(pool: PgPool) {
         .unwrap();
     assert_eq!(rejected, vec![r1]);
 }
+
+/// #123: the SDK flag list is bounded by the app's flag budget. The budget is
+/// measured on the stored `jsonb` text plus `FLAG_OVERHEAD_BYTES` per flag, and
+/// the body the server sends is never longer: here with the forms most likely
+/// to print longer than they are stored (non-ASCII and escaped text, a
+/// fractional percentage, numbers with many digits, empty variations, keys of
+/// 128 characters), seeded directly up to the budget.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_sdk_flag_list_is_bounded_by_the_app_budget(pool: PgPool) {
+    use flags_core::flags::{FLAG_OVERHEAD_BYTES, MAX_APP_FLAG_BYTES};
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, server_key, _) = org_with_flag(&s, &platform, org, "first").await;
+    let measure = "octet_length(environments::text) + octet_length(variations::text) \
+                   + coalesce(octet_length(configuration::text), 0)";
+    let total = || async {
+        sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT coalesce(sum({measure} + $2), 0)::bigint FROM feature_flags \
+             WHERE org_id = $1 AND status = 'active'"
+        ))
+        .bind(org)
+        .bind(FLAG_OVERHEAD_BYTES)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let seed = |from: i64, to: i64| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO feature_flags \
+                   (org_id, app_id, key, name, environments, variations, configuration) \
+                 SELECT a.org_id, a.id, lpad(i::text, 128, 'k'), 'n', \
+                        '{\"production\": {\"enabled\": true, \"rollout_percentage\": 12.5, \
+                          \"rules\": [{\"attribute\": \"país\", \"operator\": \"in\", \
+                                       \"values\": [\"ünï ✓\", \"a\\u0001b\", \"q\\\"t\"]}]}, \
+                          \"staging\": {\"enabled\": false}}'::jsonb, \
+                        '{}'::jsonb, \
+                        '{\"big\": 123456789012345678901234567890, \"tiny\": 0.0000001, \
+                          \"text\": \"日本語\"}'::jsonb \
+                   FROM flag_apps a, generate_series($2::bigint, $3::bigint) AS i \
+                  WHERE a.org_id = $1",
+            )
+            .bind(org)
+            .bind(from)
+            .bind(to)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    seed(1, 1).await;
+    let one = total().await;
+    let first_share = {
+        // The flag org_with_flag made, measured alone.
+        sqlx::query_scalar::<_, i64>(&format!(
+            "SELECT ({measure} + $2)::bigint FROM feature_flags WHERE org_id = $1 AND key = 'first'"
+        ))
+        .bind(org)
+        .bind(FLAG_OVERHEAD_BYTES)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    };
+    let per_flag = one - first_share;
+    let more = (MAX_APP_FLAG_BYTES - one) / per_flag;
+    seed(2, 1 + more).await;
+    let stored = total().await;
+    assert!(stored <= MAX_APP_FLAG_BYTES, "{stored}");
+    assert!(stored > MAX_APP_FLAG_BYTES - per_flag, "{stored}");
+
+    let res = s
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/sdk/flags?environment=production")
+                .header("host", "flags.example.com")
+                .header("authorization", format!("Bearer {server_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 1 << 22)
+        .await
+        .unwrap();
+    let list: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(list["count"], 2 + more);
+    assert!(
+        list.to_string().contains("ünï ✓"),
+        "rules are listed for a server key"
+    );
+    // The envelope (count, organization and application ids) is about 150 bytes.
+    let sent = body.len() as i64;
+    assert!(
+        sent <= stored + 256,
+        "sent {sent} bytes for {stored} stored"
+    );
+}
