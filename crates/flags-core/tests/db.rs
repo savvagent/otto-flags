@@ -6696,3 +6696,350 @@ async fn flag_versions_cannot_be_updated_by_the_app_role(pool: PgPool) {
         .unwrap_err();
     assert_eq!(sqlstate(&err), "42501", "{err}");
 }
+
+/// A flag's size as the budgets measure it (#123): its environments,
+/// variations, and configuration in Postgres's text form. Read as the
+/// superuser pool, so it sees through RLS.
+const FLAG_BYTES_SQL: &str = "octet_length(environments::text) + octet_length(variations::text) \
+                              + coalesce(octet_length(configuration::text), 0)";
+
+async fn flag_bytes(pool: &PgPool, app: flags_core::ids::FlagAppId, key: &str) -> i64 {
+    sqlx::query_scalar(&format!(
+        "SELECT ({FLAG_BYTES_SQL})::bigint FROM feature_flags WHERE app_id = $1 AND key = $2"
+    ))
+    .bind(app)
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// An app's active flags as the budget counts them: each one's size plus the
+/// per-flag overhead.
+async fn app_bytes(pool: &PgPool, app: flags_core::ids::FlagAppId) -> i64 {
+    sqlx::query_scalar(&format!(
+        "SELECT coalesce(sum({FLAG_BYTES_SQL} + $2), 0)::bigint FROM feature_flags \
+         WHERE app_id = $1 AND status = 'active'"
+    ))
+    .bind(app)
+    .bind(flags_core::flags::FLAG_OVERHEAD_BYTES)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// Set flag `key`'s configuration to a string of `n` characters directly,
+/// bypassing every check, as a previous release or a race could leave it.
+async fn force_configuration(pool: &PgPool, app: flags_core::ids::FlagAppId, key: &str, n: i64) {
+    sqlx::query(
+        "UPDATE feature_flags SET configuration = to_jsonb(repeat('x', $3::int)) \
+         WHERE app_id = $1 AND key = $2",
+    )
+    .bind(app)
+    .bind(key)
+    .bind(n)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn refused(result: Result<impl std::fmt::Debug, Error>, limit: i64) -> String {
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), "invalid_argument", "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains(&limit.to_string()), "{msg}");
+    msg
+}
+
+fn config_patch(n: usize) -> FlagPatch {
+    FlagPatch {
+        configuration: Some(json!("x".repeat(n))),
+        ..Default::default()
+    }
+}
+
+/// #123: a flag's environments, variations, and configuration total at most
+/// `MAX_FLAG_BYTES` as stored, on every write path that can grow it.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_flag_is_capped_at_128_kib(pool: PgPool) {
+    use flags_core::flags::MAX_FLAG_BYTES;
+    assert_eq!(MAX_FLAG_BYTES, 128 * 1024);
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    let big_variations = json!({
+        "a": {"configuration": "a".repeat(30_000)},
+        "b": {"configuration": "b".repeat(30_000)},
+        "c": {"configuration": "c".repeat(30_000)},
+        "d": {"configuration": "d".repeat(30_000)},
+    });
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "f".into(),
+            variations: Some(big_variations.clone()),
+            configuration: Some(json!("")),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // `""` is 2 bytes; a string of n characters is n + 2.
+    let base = flag_bytes(&pool, app.id, "f").await - 2;
+    let at_limit = (MAX_FLAG_BYTES - base - 2) as usize;
+
+    let mut tx = db.begin(org).await.unwrap();
+    tx.update_flag(&app, "f", config_patch(at_limit), meta(actor))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(flag_bytes(&pool, app.id, "f").await, MAX_FLAG_BYTES);
+
+    let mut tx = db.begin(org).await.unwrap();
+    refused(
+        tx.update_flag(&app, "f", config_patch(at_limit + 1), meta(actor))
+            .await,
+        MAX_FLAG_BYTES,
+    );
+    // Growing the environment past the limit is refused too.
+    refused(
+        tx.set_environment(
+            &app,
+            "f",
+            "production",
+            EnvPatch {
+                rollout_percentage: Some(50.0),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await,
+        MAX_FLAG_BYTES,
+    );
+    // And so is creating a flag that starts over it.
+    refused(
+        tx.create_flag(
+            &app,
+            NewFlag {
+                key: "g".into(),
+                variations: Some(big_variations),
+                configuration: Some(json!("x".repeat(at_limit + 1))),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await,
+        MAX_FLAG_BYTES,
+    );
+    // The refusals ran before any write: the transaction is still usable and
+    // the flag is as it was.
+    let f = tx.require_flag(&app, "f").await.unwrap();
+    assert_eq!(f.version, 2);
+    tx.commit().await.unwrap();
+}
+
+/// #123: an app's active flags total at most `MAX_APP_FLAG_BYTES`, counting
+/// each flag's size plus `FLAG_OVERHEAD_BYTES`, so the SDK list is bounded.
+/// Archived flags do not count; restoring one, creating one, growing one, or
+/// rolling one back past the budget is refused; exactly at it is accepted.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_apps_active_flags_are_capped_at_1_mib(pool: PgPool) {
+    use flags_core::flags::MAX_APP_FLAG_BYTES;
+    assert_eq!(MAX_APP_FLAG_BYTES, 1024 * 1024);
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    for key in ["ballast", "f"] {
+        tx.create_flag(
+            &app,
+            NewFlag {
+                key: key.into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    // f gains a configuration (v2) and loses it again (v3).
+    tx.update_flag(&app, "f", config_patch(100), meta(actor))
+        .await
+        .unwrap();
+    tx.update_flag(
+        &app,
+        "f",
+        FlagPatch {
+            configuration: Some(serde_json::Value::Null),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    // Fill the app to exactly the budget with the ballast's configuration
+    // (set directly: it is far over the per-configuration cap).
+    let fill = |now: i64| MAX_APP_FLAG_BYTES - now;
+    force_configuration(&pool, app.id, "ballast", 0).await;
+    let n = fill(app_bytes(&pool, app.id).await);
+    force_configuration(&pool, app.id, "ballast", n).await;
+    assert_eq!(app_bytes(&pool, app.id).await, MAX_APP_FLAG_BYTES);
+
+    let mut tx = db.begin(org).await.unwrap();
+    refused(
+        tx.create_flag(
+            &app,
+            NewFlag {
+                key: "g".into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await,
+        MAX_APP_FLAG_BYTES,
+    );
+    refused(
+        tx.update_flag(&app, "f", config_patch(1), meta(actor))
+            .await,
+        MAX_APP_FLAG_BYTES,
+    );
+    let msg = refused(
+        tx.rollback_flag(&app, "f", Some(2), meta(actor)).await,
+        MAX_APP_FLAG_BYTES,
+    );
+    assert!(
+        msg.contains("enabled=false"),
+        "a refused rollback names the kill switch: {msg}"
+    );
+    // Archiving frees f's share, and restoring it fits exactly again.
+    tx.set_archived(&app, "f", true, meta(actor)).await.unwrap();
+    tx.commit().await.unwrap();
+    assert!(app_bytes(&pool, app.id).await < MAX_APP_FLAG_BYTES);
+
+    // While f is archived, the ballast grows into its share.
+    let n = n + fill(app_bytes(&pool, app.id).await);
+    force_configuration(&pool, app.id, "ballast", n).await;
+    let mut tx = db.begin(org).await.unwrap();
+    refused(
+        tx.set_archived(&app, "f", false, meta(actor)).await,
+        MAX_APP_FLAG_BYTES,
+    );
+    tx.rollback().await.unwrap();
+
+    // Make room for exactly f again: restoring lands at the budget.
+    let f_share = flag_bytes(&pool, app.id, "f").await + flags_core::flags::FLAG_OVERHEAD_BYTES;
+    force_configuration(&pool, app.id, "ballast", n - f_share).await;
+    let mut tx = db.begin(org).await.unwrap();
+    tx.set_archived(&app, "f", false, meta(actor))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(app_bytes(&pool, app.id).await, MAX_APP_FLAG_BYTES);
+}
+
+/// #123: on an app already over budget (a previous release or a race), writes
+/// that do not grow it land: shrinking, archiving, and the kill switch (an
+/// environment patch that only disables, as every auto-rollback is), although
+/// `false` is a byte longer than `true`.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn writes_that_do_not_grow_land_over_budget(pool: PgPool) {
+    use flags_core::flags::MAX_APP_FLAG_BYTES;
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    for key in ["ballast", "f", "g"] {
+        tx.create_flag(
+            &app,
+            NewFlag {
+                key: key.into(),
+                ..Default::default()
+            },
+            actor,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+    force_configuration(&pool, app.id, "ballast", MAX_APP_FLAG_BYTES).await;
+    assert!(app_bytes(&pool, app.id).await > MAX_APP_FLAG_BYTES);
+
+    let env = |patch: EnvPatch| patch;
+    let mut tx = db.begin(org).await.unwrap();
+    // Turning an environment on shortens it ("true" < "false"): allowed.
+    tx.set_environment(
+        &app,
+        "f",
+        "production",
+        env(EnvPatch {
+            enabled: Some(true),
+            ..Default::default()
+        }),
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    // Adding a rollout grows it: refused.
+    refused(
+        tx.set_environment(
+            &app,
+            "f",
+            "production",
+            env(EnvPatch {
+                rollout_percentage: Some(10.0),
+                ..Default::default()
+            }),
+            meta(actor),
+        )
+        .await,
+        MAX_APP_FLAG_BYTES,
+    );
+    // The kill switch grows it by a byte and still lands.
+    let off = tx
+        .set_environment(
+            &app,
+            "f",
+            "production",
+            env(EnvPatch {
+                enabled: Some(false),
+                ..Default::default()
+            }),
+            meta(actor),
+        )
+        .await
+        .unwrap();
+    assert!(!enabled(&off.environments, "production"));
+    // Archiving and shrinking land.
+    tx.set_archived(&app, "g", true, meta(actor)).await.unwrap();
+    tx.commit().await.unwrap();
+    force_configuration(&pool, app.id, "f", 10).await;
+    let mut tx = db.begin(org).await.unwrap();
+    tx.update_flag(&app, "f", config_patch(5), meta(actor))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+fn enabled(environments: &serde_json::Value, env: &str) -> bool {
+    environments[env]["enabled"].as_bool().unwrap_or(false)
+}
