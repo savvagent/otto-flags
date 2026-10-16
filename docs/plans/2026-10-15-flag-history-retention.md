@@ -1,6 +1,6 @@
 # Retain flag history for 90 days and at least 100 versions Implementation Plan
 
-> Execute task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> Execute task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** an hourly background sweep removes flag versions that are both older than 90 days and
 outside the flag's newest 100; no request path deletes history.
@@ -56,19 +56,19 @@ Files:
 - Modify: `crates/flags-mcp/src/tools/insight.rs`, `crates/flags-mcp/src/tools/flags.rs`
 - Modify: `crates/flags-core/tests/db.rs`
 
-- [ ] **Step 1: Failing DB tests** `flag_versions_are_swept_by_age_beyond_the_newest_100` and
+- [x] **Step 1: Failing DB tests** `flag_versions_are_swept_by_age_beyond_the_newest_100` and
   `flag_versions_need_the_maintenance_marker_unpinned`, as in spec section 10.
-- [ ] **Step 2: Run, see them fail** (compile error on `sweep_versions`, or zero rows swept):
+- [x] **Step 2: Run, see them fail** (compile error on `sweep_versions`, or zero rows swept):
   `DATABASE_URL=postgres://flags:flags@localhost:15452/otto_flags cargo test -p flags-core --test db flag_versions_`
-- [ ] **Step 3: Implement** per spec section 6.
-- [ ] **Step 4: Run, see them pass**, then the full flags-core `db` binary.
-- [ ] **Step 5: Commit** `feat(core): sweep flag versions older than 90 days beyond the newest 100`
+- [x] **Step 3: Implement** per spec section 6.
+- [x] **Step 4: Run, see them pass**, then the full flags-core `db` binary.
+- [x] **Step 5: Commit** `feat(core): sweep flag versions older than 90 days beyond the newest 100`
   with a why-body ending `Refs #123`.
 
 ## Task 2: Full gates
 
 Model: haiku
 
-- [ ] Run test, lint, format, extra, and `podman build`; record per-binary pass counts and
+- [x] Run test, lint, format, extra, and `podman build`; record per-binary pass counts and
   `git rev-parse HEAD`. The change touches `crates/` and a migration, so post-merge verification
   checks the boot log for `applying migrations` and exercises `flag_history` read-only.

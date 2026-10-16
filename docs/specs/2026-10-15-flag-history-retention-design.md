@@ -1,6 +1,6 @@
 # Retain flag history for 90 days and at least 100 versions
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#131)
 **Issue:** #123 (part 1 of 2: flag history retention; the SDK list bound is part 2)
 
 ## 1. Brief
@@ -80,7 +80,7 @@ closes #123.
   archived, not deleted), which grows with flag count, not writes.
   Until part 2 ships, a snapshot can be about 672 KiB (#115's 32 KiB per configuration, 21
   configurations) plus rules. Real flags are a few hundred bytes.
-- **A migration is needed, and it is policy-only and additive.** `flag_versions` has only its
+- **A migration is needed, and it is additive (two policies and one revoke).** `flag_versions` has only its
   tenant policy (`org_id = current_org()`), so an unpinned maintenance transaction sees no rows.
   `0006_flag_versions_retention.sql` adds, as 0003 did for the telemetry tables, a `FOR SELECT`
   and a `FOR DELETE` policy granting access only when no org is pinned **and** the transaction
@@ -105,7 +105,7 @@ closes #123.
   without the marker can neither see nor delete `flag_versions` rows.
 - `rollback_flag` to a removed version fails with `version_not_found`, whose message states the
   retention; `flag_history` and `rollback_flag` tool descriptions state it.
-- One new migration, `0006`, policy-only; no existing migration changes.
+- One new migration, `0006` (policies and a revoke); no existing migration changes.
 
 ## 5. Scope
 
@@ -231,3 +231,8 @@ nothing: 0006 is an addition), `podman build`.
   write rate limit would not, and is the option if growth becomes a problem.
 - An agent cannot restore a state older than 90 days that has 100 newer versions; the constants
   are one line each to raise.
+- A sweep batch and the `org.deleted` purge (or two machines sweeping during a rolling deploy)
+  can deadlock on the same rows; Postgres aborts one side, the sweep logs it and retries next
+  hour, and the webhook redelivery is idempotent.
+- The database does not yet stop a pinned tenant transaction from deleting its own org's
+  versions (only the code does); a restrictive delete policy is #132.
