@@ -62,10 +62,12 @@ need the stalling proxy. Task 4 is the API-level acceptance test.
 ### Task 1: The probe sets optional lookup timeouts
 
 **Files:**
-- Modify: `crates/flags-core/src/unpinned.rs`
+- Modify: `crates/flags-core/src/unpinned.rs`, `crates/flags-core/src/keys.rs` (call site only)
 
 **Interfaces:** produces `pub(crate) struct Timeouts { pub lock: Duration, pub statement: Duration, pub idle: Duration }`
-and `Held::begin(&mut self, db: &Db, timeouts: Timeouts)`, used by Task 2.
+and `Held::begin(&mut self, db: &Db, timeouts: Option<Timeouts>)`, used by Task 2. In this task
+`keys::lookup` passes `None` (no behaviour change yet, so the #120 blocked-lookup tests stay green);
+Task 2 passes `Some`.
 
 **Out-of-band / invariants:** probe still first, role logic unchanged; runtime query only.
 
@@ -87,7 +89,7 @@ and `Held::begin(&mut self, db: &Db, timeouts: Timeouts)`, used by Task 2.
   same for `statement_timeout` (`$5`) and `idle_in_transaction_session_timeout` (`$6`), each in its own column (the comment explains why: they
   take effect from the next statement, the lookup; the lookup's lock is taken when it is bound,
   so setting them in the lookup itself would be too late). Extend the destructured tuple.
-  `begin_as_tenant_role` passes `None`; `Held::begin` passes `Some(timeouts)`.
+  `begin_as_tenant_role` passes `None`; `Held::begin` passes its argument through.
 - [ ] **Step 4: Run, see them pass;** also `cargo test -p flags-core --test key_round_trips`
   (still 6 round trips).
 - [ ] **Step 5: Commit** `feat(core): let the unpinned probe set a lookup's lock and statement timeouts`.
@@ -114,7 +116,9 @@ Task 3 consumes `transaction`/`release`.
   `a_dropped_lookup_still_remembers_its_unknown_key`) and the two tests in
   `crates/flags-api/tests/key_lookups.rs` to build their `KeyLookups` with
   `.with_bounds(long)` where `long` is 30 s for every bound, so they stay blocked until unlocked.
-- [ ] **Step 2: Run, see it fail** (compile error, then the lookup waits for the unlock).
+  Wrap the new test's `resolve_cached` call in `tokio::time::timeout(Duration::from_secs(5), …)`
+  so that before the implementation it fails with an assertion instead of hanging.
+- [ ] **Step 2: Run, see it fail** (compile error for `with_bounds`, then the 5 s outer timeout).
 - [ ] **Step 3: Implement** `LookupBounds`, store it in `KeyLookups` (`new` uses `DEFAULT`),
   `with_bounds`, `bounds`. Private `resolve_hash_within(db, hash, &LookupBounds)`; `resolve_hash`
   calls it with `DEFAULT`; `resolve_cached` with `limit.bounds()`; `lookup` passes
@@ -132,8 +136,11 @@ Task 3 consumes `transaction`/`release`.
 
 - [ ] **Step 1: Failing tests** in `key_round_trips.rs`. Give `RoundTrips` a `stall_after:
   Arc<AtomicUsize>` (default `usize::MAX`); in `forward_client`, a 'Q' or 'S' whose count (after
-  increment) exceeds it is not forwarded and the forwarder parks forever
-  (`std::future::pending`). Tests, each warming the connection first, then `take`, then setting
+  increment) exceeds it is not forwarded and the forwarder parks until a `tokio::sync::Notify`
+  on `RoundTrips` (`unstall`) is notified, then returns, dropping its server write half so the
+  backend sees EOF and ends (otherwise it lingers holding `AccessShareLock` on `app_keys` and
+  the test database cannot be dropped). Each stall test calls `unstall` (`notify_waiters`, or
+  `notify_one` per stalled connection) before closing the pool. Tests, each warming the connection first, then `take`, then setting
   `stall_after`, with `KeyLookups::new(1, KEY_LOOKUP_WAIT).with_bounds(short)` where short is
   lock 100 ms, statement 200 ms, transaction 300 ms, release 300 ms:
   - `a_lookup_stalled_mid_transaction_closes_its_connection`: `stall_after = 3` (acquire ping,
