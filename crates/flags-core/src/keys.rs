@@ -22,10 +22,12 @@
 //! lookup per request (#104). Behind that cache, [`KeyLookups`] caps how many
 //! lookups hold a pool connection at once, so a flood of distinct well-formed
 //! unknown keys cannot take the whole small pool; a lookup that cannot start
-//! within [`KEY_LOOKUP_WAIT`] is refused with [`Error::Busy`] (#120). The
+//! within [`KEY_LOOKUP_WAIT`] is refused with [`Error::Busy`] (#120). One that
+//! starts runs under [`LookupBounds`], so a lock on `app_keys`, a slow
+//! statement, or a dead connection cannot hold its permit for long (#130). The
 //! stream's periodic re-check of a key that resolved stays on [`resolve_hash`],
-//! ungated and uncached, so it notices revocation and a flood cannot end an
-//! authenticated stream.
+//! ungated and uncached (under [`LookupBounds::DEFAULT`]), so it notices
+//! revocation and a flood cannot end an authenticated stream.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -40,7 +42,7 @@ use tokio::sync::Semaphore;
 
 use crate::error::{Error, Result};
 use crate::ids::FlagAppId;
-use crate::unpinned::Held;
+use crate::unpinned::{Held, Timeouts};
 
 pub const CLIENT_PREFIX: &str = "sdk_";
 pub const SERVER_PREFIX: &str = "srv_";
@@ -154,22 +156,43 @@ pub async fn resolve(db: &Db, key: &str) -> Result<Option<KeyOwner>> {
 /// included, so a caller holding a [`KeyLookups`] permit across this call
 /// covers the connection's whole checkout (#120).
 pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+    resolve_hash_within(db, key_hash, &LookupBounds::DEFAULT).await
+}
+
+/// [`resolve_hash`] under `bounds`.
+async fn resolve_hash_within(
+    db: &Db,
+    key_hash: &[u8],
+    bounds: &LookupBounds,
+) -> Result<Option<KeyOwner>> {
     let mut conn = Held::acquire(db).await?;
     // No `?` and no early return between the acquire and `release`: dropping
     // a pool connection hands its release (rolling back an open transaction,
     // the ping) to a task sqlx spawns, so this would return, and its caller
     // free its permit, while the connection is still checked out. (A panic in
     // `lookup` still takes that path; the permit is then freed by the unwind.)
-    let owner = lookup(db, &mut conn, key_hash).await;
+    let owner = lookup(db, &mut conn, key_hash, bounds).await;
     conn.release().await;
     owner
 }
 
 /// [`resolve_hash`]'s query, on the connection it holds.
-async fn lookup(db: &Db, conn: &mut Held, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
+async fn lookup(
+    db: &Db,
+    conn: &mut Held,
+    key_hash: &[u8],
+    bounds: &LookupBounds,
+) -> Result<Option<KeyOwner>> {
     // No org yet: finding it is the point. Unpinned, as the tenant role
-    // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
-    let mut tx = conn.begin(db, None).await?;
+    // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS. The
+    // probe sets the server-side timeouts, so the lookup that follows gives
+    // up on a lock or a slow statement (#130).
+    let timeouts = Timeouts {
+        lock: bounds.lock,
+        statement: bounds.statement,
+        idle: bounds.transaction,
+    };
+    let mut tx = conn.begin(db, Some(timeouts)).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
@@ -219,9 +242,9 @@ pub async fn resolve_cached(
         // A timeout, or a closed semaphore, which nothing here ever closes.
         Ok(Err(_)) | Err(_) => return Err(Error::Busy),
     };
-    let (db, unknown) = (db.clone(), Arc::clone(unknown));
+    let (db, unknown, limit_bounds) = (db.clone(), Arc::clone(unknown), limit.bounds);
     let task = tokio::spawn(async move {
-        let owner = resolve_hash(&db, &hash).await;
+        let owner = resolve_hash_within(&db, &hash, &limit_bounds).await;
         if matches!(owner, Ok(None)) {
             unknown.insert(hash, Instant::now());
         }
@@ -268,11 +291,55 @@ pub struct KeyLookups {
     permits: Arc<Semaphore>,
     size: usize,
     wait: Duration,
+    bounds: LookupBounds,
+}
+
+/// How long an SDK key lookup may take once it has its connection (#130), so
+/// that neither its [`KeyLookups`] permit nor its pool connection is held for
+/// as long as a lock on `app_keys` lasts or a dead connection takes to notice.
+///
+/// `lock` and `statement` are set on the server for the lookup's statement:
+/// a lock wait fails with `lock_not_available` (55P03) and a slow statement
+/// with `query_canceled` (57014), both transient (`503` on the SDK API) and
+/// never remembered as an unknown key. They cannot bound a half-open
+/// connection, which never hears the server's answer: `transaction` is a
+/// client-side deadline on the whole transaction, `BEGIN` to `COMMIT`, and
+/// `release` one on returning the connection to the pool. A connection that
+/// misses either is closed, never returned. `transaction` is also the
+/// server's `idle_in_transaction_session_timeout`, so a backend whose client
+/// gave up ends itself rather than keep its lock on `app_keys`.
+///
+/// ```
+/// use flags_core::keys::{KeyLookups, LookupBounds, KEY_LOOKUP_WAIT};
+/// assert_eq!(KeyLookups::new(1, KEY_LOOKUP_WAIT).bounds(), LookupBounds::DEFAULT);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LookupBounds {
+    /// `lock_timeout` for the lookup's statement.
+    pub lock: Duration,
+    /// `statement_timeout` for the lookup's statement.
+    pub statement: Duration,
+    /// Client-side deadline on the transaction, and the server's
+    /// `idle_in_transaction_session_timeout`.
+    pub transaction: Duration,
+    /// Client-side deadline on returning the connection to the pool.
+    pub release: Duration,
+}
+
+impl LookupBounds {
+    /// Production's bounds. A healthy lookup takes a few milliseconds; with
+    /// the pool's 5 s acquire timeout a permit is held at most about 8 s.
+    pub const DEFAULT: Self = Self {
+        lock: Duration::from_millis(500),
+        statement: Duration::from_secs(1),
+        transaction: Duration::from_secs(2),
+        release: Duration::from_secs(1),
+    };
 }
 
 impl KeyLookups {
     /// At most `permits` lookups at once, each waiting up to `wait` for its
-    /// turn.
+    /// turn, under [`LookupBounds::DEFAULT`].
     ///
     /// # Panics
     ///
@@ -283,7 +350,19 @@ impl KeyLookups {
             permits: Arc::new(Semaphore::new(permits)),
             size: permits,
             wait,
+            bounds: LookupBounds::DEFAULT,
         }
+    }
+
+    /// The same limit, with each lookup under `bounds` instead of
+    /// [`LookupBounds::DEFAULT`].
+    pub fn with_bounds(self, bounds: LookupBounds) -> Self {
+        Self { bounds, ..self }
+    }
+
+    /// The bounds each lookup runs under.
+    pub fn bounds(&self) -> LookupBounds {
+        self.bounds
     }
 
     /// The limit for a pool of `max_connections`: half of what the listener's

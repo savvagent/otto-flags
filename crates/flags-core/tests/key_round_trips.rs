@@ -148,7 +148,8 @@ fn unknown_key() -> String {
 
 /// A lookup is six round trips, known key or not: the pool's acquire ping
 /// (`test_before_acquire`), `BEGIN`, the probe (role checks, role switch,
-/// search path), the key lookup, `COMMIT`, and the ping sqlx sends before
+/// search path, and the lookup's lock, statement, and idle timeouts, #130),
+/// the key lookup, `COMMIT`, and the ping sqlx sends before
 /// returning the connection to the pool. The connection is held for all six.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn resolving_a_key_takes_six_round_trips(pool: PgPool) {
