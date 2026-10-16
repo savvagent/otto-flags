@@ -1,6 +1,6 @@
 # Bound a flag's size and an app's SDK flag list Implementation Plan
 
-> Execute task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
+> Execute task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > Shipped with the per-flag cap at 128 KiB rather than the 64 KiB first planned (spec section 3).
 

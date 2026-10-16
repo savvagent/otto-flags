@@ -6865,6 +6865,23 @@ async fn a_flag_is_capped_at_128_kib(pool: PgPool) {
     let f = tx.require_flag(&app, "f").await.unwrap();
     assert_eq!(f.version, 2);
     tx.commit().await.unwrap();
+
+    // A rollback to a version over the limit (written before it existed) is
+    // refused, and names the kill switch.
+    sqlx::query(
+        "UPDATE flag_versions SET snapshot = jsonb_set(snapshot, '{configuration}', \
+           to_jsonb(repeat('x', $2::int))) WHERE flag_id = $1 AND version = 1",
+    )
+    .bind(f.id)
+    .bind(MAX_FLAG_BYTES)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = db.begin(org).await.unwrap();
+    refused_rollback(
+        tx.rollback_flag(&app, "f", Some(1), meta(actor)).await,
+        MAX_FLAG_BYTES,
+    );
 }
 
 /// #123: an app's active flags total at most `MAX_APP_FLAG_BYTES`, counting
