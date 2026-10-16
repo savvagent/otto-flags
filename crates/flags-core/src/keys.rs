@@ -169,7 +169,7 @@ pub async fn resolve_hash(db: &Db, key_hash: &[u8]) -> Result<Option<KeyOwner>> 
 async fn lookup(db: &Db, conn: &mut Held, key_hash: &[u8]) -> Result<Option<KeyOwner>> {
     // No org yet: finding it is the point. Unpinned, as the tenant role
     // (`crate::unpinned`); `app_keys` and `deleted_orgs` are outside RLS.
-    let mut tx = conn.begin(db).await?;
+    let mut tx = conn.begin(db, None).await?;
     let row: Option<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
         "SELECT k.org_id, k.app_id, k.kind FROM app_keys k \
          WHERE k.key_hash = $1 \
