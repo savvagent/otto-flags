@@ -173,6 +173,62 @@ pub const MIN_RETAINED_VERSIONS: i32 = 100;
 /// the small shared database.
 const SWEEP_BATCH: i64 = 1_000;
 
+/// The most a flag may hold, in bytes: its environments, variations, and
+/// configuration as stored (Postgres's text form of each `jsonb`), checked on
+/// every write that grows it (#123).
+///
+/// The SDK list and each stream event carry all three, so this bounds a
+/// stream event, and with [`MAX_APP_FLAG_BYTES`] the list. It also bounds a
+/// history snapshot. 128 KiB holds two maximal configurations
+/// ([`eval::MAX_CONFIGURATION_BYTES`], which is measured on compact JSON; a
+/// configuration of mostly commas is half again as long as stored), three
+/// typical ones, or thousands of rule values; real flags are a few hundred
+/// bytes. The stored text form puts a space after `:` and `,`, and for values
+/// written through the API the JSON the server sends is not longer (a number
+/// re-read as a float can print a byte longer, which the read caps the SDK
+/// guide recommends absorb many times over).
+pub const MAX_FLAG_BYTES: i64 = 128 * 1024;
+
+/// The most an app's active flags may hold together: each one's size (as for
+/// [`MAX_FLAG_BYTES`]) plus [`FLAG_OVERHEAD_BYTES`] (#123). This is the bound
+/// on `GET /api/sdk/flags`, which a public client key can request: the list
+/// is at most this plus a fixed envelope. Archived flags do not count (the
+/// list leaves them out); restoring one is a write that counts.
+///
+/// Not serialized with a lock: two concurrent writes to different flags of
+/// one app can each pass against the other's old state. Each adds at most
+/// `MAX_FLAG_BYTES + FLAG_OVERHEAD_BYTES`, one per open transaction, and once
+/// an app is over, every growing write is refused, so the overshoot is
+/// bounded by the number of concurrent write transactions (the pool size per
+/// machine, times machines) rather than prevented with a new lock in every
+/// flag write (including the rollback checker's).
+pub const MAX_APP_FLAG_BYTES: i64 = 1024 * 1024;
+
+/// What the list adds per flag beyond its stored size: a key of up to 128
+/// characters, `enabled`, `scope`, `version`, the field names, `null` for
+/// empty variations and configuration, braces, and a comma, about 252 bytes
+/// at most. It also caps an app at 4 096 active flags.
+pub const FLAG_OVERHEAD_BYTES: i64 = 256;
+
+/// A flag's size in SQL, over columns named as `feature_flags`' are. The one
+/// definition of the measure: [`check_size`] applies it to stored rows and to
+/// the new state, bound as parameters under the same column names.
+const FLAG_BYTES: &str = "octet_length(environments::text) + octet_length(variations::text) \
+                          + coalesce(octet_length(configuration::text), 0)";
+
+/// Whether a write is held to the size budgets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeCheck {
+    Enforce,
+    /// As `Enforce`, for a rollback: a refusal names the kill switch, which
+    /// is never refused.
+    Rollback,
+    /// An environment patch that only turns the environment off: the kill
+    /// switch and every auto-rollback. Never refused for size: `false` is a
+    /// byte longer than `true`, and the incident path must not fail on it.
+    DisableOnly,
+}
+
 const MAX_DESCRIPTION: usize = 2_000;
 const MAX_REASON: usize = 1_000;
 
@@ -325,6 +381,15 @@ impl FlagsExt for Tx<'_> {
             .iter()
             .map(|e| (e.clone(), serde_json::json!({"enabled": false})))
             .collect();
+        let environments = Value::Object(environments);
+        let state = NewState {
+            key: &key,
+            active: true,
+            environments: &environments,
+            variations: &variations,
+            configuration: new.configuration.as_ref(),
+        };
+        check_size(self, app, None, &state, SizeCheck::Enforce).await?;
         let org = self.org();
 
         let flag: FeatureFlag = sqlx::query_as(&format!(
@@ -337,7 +402,7 @@ impl FlagsExt for Tx<'_> {
         .bind(&key)
         .bind(&name)
         .bind(&description)
-        .bind(Value::Object(environments))
+        .bind(&environments)
         .bind(&variations)
         .bind(&new.configuration)
         .bind(actor)
@@ -419,7 +484,7 @@ impl FlagsExt for Tx<'_> {
             validate_configuration(&c)?;
             flag.configuration = (!c.is_null()).then_some(c);
         }
-        commit_change(self, flag, "update", &meta).await
+        commit_change(self, app, flag, "update", &meta, SizeCheck::Enforce).await
     }
 
     async fn set_environment(
@@ -456,9 +521,11 @@ impl FlagsExt for Tx<'_> {
         flag.status = target;
         commit_change(
             self,
+            app,
             flag,
             if archived { "archive" } else { "restore" },
             &meta,
+            SizeCheck::Enforce,
         )
         .await
     }
@@ -507,7 +574,10 @@ impl FlagsExt for Tx<'_> {
             Some(r) => format!("rollback to v{target}: {r}"),
             None => format!("rollback to v{target}"),
         });
-        Ok((commit_change(self, flag, "rollback", &meta).await?, target))
+        Ok((
+            commit_change(self, app, flag, "rollback", &meta, SizeCheck::Rollback).await?,
+            target,
+        ))
     }
 
     async fn flag_history(&mut self, flag: &FeatureFlag, limit: i64) -> Result<Vec<FlagVersion>> {
@@ -537,6 +607,15 @@ pub(crate) async fn apply_env_patch(
     change: &str,
 ) -> Result<FeatureFlag> {
     let environment = environment.trim();
+    let check = if patch.enabled == Some(false)
+        && patch.rollout_percentage.is_none()
+        && patch.rules.is_none()
+        && patch.default_variation.is_none()
+    {
+        SizeCheck::DisableOnly
+    } else {
+        SizeCheck::Enforce
+    };
     if !app.environments.iter().any(|e| e == environment) {
         return Err(Error::Invalid(format!(
             "app {:?} has no environment {environment:?}; its environments are: {}. \
@@ -578,7 +657,7 @@ pub(crate) async fn apply_env_patch(
         }
         None => flag.environments = serde_json::json!({ environment: value }),
     }
-    commit_change(tx, flag, change, meta).await
+    commit_change(tx, app, flag, change, meta, check).await
 }
 
 /// Read a flag by id without locking it (the rollback checker's first,
@@ -647,6 +726,89 @@ async fn lock(
     Ok(flag)
 }
 
+/// The state a write is about to store, as [`check_size`] measures it.
+struct NewState<'a> {
+    key: &'a str,
+    active: bool,
+    environments: &'a Value,
+    variations: &'a Value,
+    configuration: Option<&'a Value>,
+}
+
+/// Refuse a write that grows a flag past [`MAX_FLAG_BYTES`] or its app's
+/// active flags past [`MAX_APP_FLAG_BYTES`] (#123). Runs before the write, so a
+/// refusal leaves the transaction as it was. `flag` is `None` for a new flag;
+/// otherwise the caller holds its row lock, so its stored size is the state
+/// being replaced. A write that does not grow past a budget always lands, so
+/// state written before the limits (or by a race) never blocks shrinking it.
+async fn check_size(
+    tx: &mut Tx<'_>,
+    app: &FlagApp,
+    flag: Option<FlagId>,
+    state: &NewState<'_>,
+    check: SizeCheck,
+) -> Result<()> {
+    if check == SizeCheck::DisableOnly {
+        return Ok(());
+    }
+    let org = tx.org();
+    let (new, old, was_active, others): (i64, Option<i64>, Option<bool>, i64) =
+        sqlx::query_as(&format!(
+            "SELECT (SELECT ({FLAG_BYTES})::bigint FROM (SELECT $3::jsonb AS environments, \
+                       $4::jsonb AS variations, $5::jsonb AS configuration) n), \
+                    o.size, o.active, \
+                    (SELECT coalesce(sum({FLAG_BYTES} + $7), 0)::bigint FROM feature_flags \
+                      WHERE org_id = $1 AND app_id = $2 AND status = 'active' \
+                        AND id IS DISTINCT FROM $6) \
+               FROM (SELECT 1) one \
+               LEFT JOIN (SELECT ({FLAG_BYTES})::bigint AS size, status = 'active' AS active \
+                            FROM feature_flags WHERE org_id = $1 AND id = $6) o ON true"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(state.environments)
+        .bind(state.variations)
+        .bind(state.configuration)
+        .bind(flag)
+        .bind(FLAG_OVERHEAD_BYTES)
+        .fetch_one(tx.conn())
+        .await?;
+    // A refused rollback names the incident path, which is never refused.
+    let hint = if check == SizeCheck::Rollback {
+        ". To stop a bad change now, turn the environment off with set_flag_environment \
+         enabled=false"
+    } else {
+        ""
+    };
+    let key = state.key;
+    let old_size = old.unwrap_or(0);
+    if new > MAX_FLAG_BYTES && new > old_size {
+        return Err(Error::Invalid(format!(
+            "flag {key:?} would be {new} bytes (its environments, variations and \
+             configurations as stored); the limit is {MAX_FLAG_BYTES} bytes. Remove rules, \
+             variations, or configuration{hint}"
+        )));
+    }
+    let share = |size: i64| size + FLAG_OVERHEAD_BYTES;
+    let new_total = others + if state.active { share(new) } else { 0 };
+    let old_total = others
+        + if was_active == Some(true) {
+            share(old_size)
+        } else {
+            0
+        };
+    if new_total > MAX_APP_FLAG_BYTES && new_total > old_total {
+        return Err(Error::Invalid(format!(
+            "app {:?}'s active flags would total {new_total} bytes; the limit is \
+             {MAX_APP_FLAG_BYTES} bytes (each flag's environments, variations and \
+             configurations as stored, plus {FLAG_OVERHEAD_BYTES}). Archive flags you no \
+             longer need, or shrink their configuration{hint}",
+            app.name
+        )));
+    }
+    Ok(())
+}
+
 /// Write `flag`'s new state as the next version.
 ///
 /// Precondition: the caller holds the flag's row lock (`lock` or
@@ -655,11 +817,21 @@ async fn lock(
 /// one else can change the row in between.
 async fn commit_change(
     tx: &mut Tx<'_>,
+    app: &FlagApp,
     flag: FeatureFlag,
     change: &str,
     meta: &ChangeMeta,
+    check: SizeCheck,
 ) -> Result<FeatureFlag> {
     let reason = validate_text("reason", meta.reason.clone(), MAX_REASON)?;
+    let state = NewState {
+        key: &flag.key,
+        active: flag.status == FlagStatus::Active,
+        environments: &flag.environments,
+        variations: &flag.variations,
+        configuration: flag.configuration.as_ref(),
+    };
+    check_size(tx, app, Some(flag.id), &state, check).await?;
     let org = tx.org();
     // The caller holds the row lock, so this is the state being replaced.
     let before: Value =
@@ -856,6 +1028,30 @@ mod tests {
         assert_eq!(public.environments["production"]["rollout_percentage"], 10);
         let private = SdkFlag::from_flag(&flag, "production", true);
         assert!(private.environments.to_string().contains("ceo@example.com"));
+    }
+
+    /// The per-flag overhead in [`MAX_APP_FLAG_BYTES`] covers every field the
+    /// list adds to a flag's stored size, at their largest (#123).
+    #[test]
+    fn the_list_overhead_covers_an_empty_flag() {
+        let flag = SdkFlag {
+            key: "k".repeat(128),
+            enabled: false,
+            scope: "application",
+            environments: serde_json::json!({}),
+            variations: None,
+            configuration: None,
+            version: i32::MAX,
+        };
+        // The flag as listed, with the comma that separates it from the next.
+        let listed = serde_json::to_vec(&flag).unwrap().len() + 1;
+        // Its environments' `{}` is counted in the stored size, not here.
+        let stored_environments = 2;
+        assert!(
+            (listed - stored_environments) as i64 <= FLAG_OVERHEAD_BYTES,
+            "{listed} bytes: {}",
+            serde_json::to_string(&flag).unwrap()
+        );
     }
 
     #[test]
