@@ -54,13 +54,30 @@ closes #123.
   runs in `flags-server`'s existing `sweep_loop` beside the telemetry and usage sweeps, through
   `flags_core::maintenance::begin` (unpinned, as `otto_app`, with the `app.maintenance` marker).
   No tool or SDK request deletes history.
-- **Bounded batches.** Each maintenance transaction deletes at most 1 000 rows (chosen by `id`
-  through a subquery with `LIMIT`); the sweep repeats until a batch is short. Short transactions
-  on the small shared database; a backlog drains in one sweep run.
+- **Bounded batches.** Each maintenance transaction deletes at most 1 000 rows, chosen in `id`
+  order after the last batch's highest `id`; the sweep repeats until a batch is short. Each
+  flag's newest version comes from `max(version) OVER (PARTITION BY flag_id)` in one scan: under
+  RLS the planner estimates one row for the table, and the correlated `max` subquery it first
+  used became a nested loop over every pair of versions (minutes for 4 000 rows in the batch
+  test; the window form takes about 10 ms). Each batch rescans the table, which is cheap at
+  hourly cadence, where one batch is the norm. Short transactions on
+  the small shared database; a backlog drains in one sweep run.
+- **`created_at` is protected.** The sweep chooses rows by `created_at`, so 0006 also revokes
+  `UPDATE` on `flag_versions` from `otto_app`, as 0001 does for `audit_events`. Versions are
+  written once and never updated by this release or the previous one; `DELETE` stays for the
+  pinned `org.deleted` purge.
+- **Writes can make an old version eligible, never a recent one.** 100 newer versions push a
+  version out of the newest 100, so a writer can hasten the removal of a change older than 90
+  days; those writes are themselves on record, under the same actor, for 90 days. Recording
+  each sweep in `audit_events` was considered and left out: it would move unbounded growth to a
+  table with no retention.
 - **The growth bound this gives.** A flag's history is at most its newest 100 versions plus the
-  versions of the last 90 days (plus up to an hour until the next sweep). Each version costs a
-  billed MCP write, and part 2 of #123 (next PR) caps a flag's size at 64 KiB, so the table's
-  growth is bounded by what writers pay for over 90 days, like the other retention tables.
+  versions of the last 90 days (plus up to an hour until the next sweep). Each version is a
+  metered MCP write (recorded for billing; quotas are not enforced in production today,
+  `FLAGS_ENFORCE_QUOTAS` defaults to false), and part 2 of #123 (next PR) caps a flag's size at
+  64 KiB, so the table's growth is bounded by 90 days of writes, like the other retention
+  tables, plus a permanent floor of up to 100 versions per flag ever created (flags are
+  archived, not deleted), which grows with flag count, not writes.
   Until part 2 ships, a snapshot can be about 672 KiB (#115's 32 KiB per configuration, 21
   configurations) plus rules. Real flags are a few hundred bytes.
 - **A migration is needed, and it is policy-only and additive.** `flag_versions` has only its
@@ -110,17 +127,20 @@ and `crates/flags-core/src/maintenance.rs` (module docs); `crates/flags-server/s
   - `pub async fn sweep_versions(db: &Db) -> Result<u64>`: loop
     ```sql
     DELETE FROM flag_versions WHERE id IN (
-      SELECT v.id FROM flag_versions v
-       WHERE v.created_at < now() - make_interval(days => $1)
-         AND v.version <= (SELECT max(w.version) FROM flag_versions w
-                            WHERE w.flag_id = v.flag_id) - $2
-       LIMIT $3)
+      SELECT id FROM (
+        SELECT id, created_at, version,
+               max(version) OVER (PARTITION BY flag_id) AS newest
+          FROM flag_versions) v
+       WHERE id > $4
+         AND created_at < now() - make_interval(days => $1)
+         AND version <= newest - $2
+       ORDER BY id LIMIT $3)
+    RETURNING id
     ```
     with `VERSION_RETENTION_DAYS`, `MIN_RETAINED_VERSIONS`, `SWEEP_BATCH = 1000`, each batch in
     its own `maintenance::begin` transaction, committed; stop when a batch deletes fewer than
     the batch size; return the total. The newest version always equals the flag's current
-    version (every change records one), so `max(version)` needs no read of `feature_flags`; it is
-    served by `UNIQUE (flag_id, version)`.
+    version (every change records one), so `max(version)` needs no read of `feature_flags`.
 - `0006_flag_versions_retention.sql`:
   ```sql
   SET LOCAL lock_timeout = '3s';
@@ -133,7 +153,8 @@ and `crates/flags-core/src/maintenance.rs` (module docs); `crates/flags-server/s
   ```
   Both permissive; they OR with the tenant policy, so pinned access is unchanged. No restrictive
   policy is needed: unlike 0001's telemetry retention policies, these already require the
-  marker.
+  marker. Then, guarded on the role existing as in 0001,
+  `REVOKE UPDATE ON flag_versions FROM otto_app`.
 - `main.rs` `sweep_loop`: call `flags_core::flags::sweep_versions(&db)` with the same logging
   shape as its siblings (`"swept expired flag versions"`, `"flag-version sweep failed"`).
 - `rollback_flag` is unchanged: a removed version is `VersionNotFound`, as any absent version
@@ -189,6 +210,12 @@ DB tests in `crates/flags-core/tests/db.rs`:
   keeps 6..=105 (version 6 is old but among the newest 100), `recent` keeps all 105, `b` keeps
   all 3. `rollback_flag` on `f` to 5 is `version_not_found` naming 90 and 100; to 6 succeeds.
   A second sweep returns 0.
+- `flag_version_sweep_drains_a_backlog_in_batches`: 2 100 eligible rows in one org and 1 900 in
+  another (seeded by SQL) are all swept in four full batches and an empty one; a row outside the
+  newest 100 but 89 days old stays.
+- `flag_versions_cannot_be_updated_by_the_app_role`: a pinned `UPDATE` fails with `42501`.
+- `history_tools_state_the_retention` (flags-mcp unit): both tool descriptions state the rule,
+  built from the constants.
 - `flag_versions_need_the_maintenance_marker_unpinned`: as `otto_app` unpinned without the
   marker, `SELECT count(*)` sees 0 and `DELETE FROM flag_versions` deletes 0; with the marker
   it sees every org's rows; pinned still sees only its own.
@@ -198,7 +225,9 @@ nothing: 0006 is an addition), `podman build`.
 
 ## 11. Risks & open questions
 
-- History grows with writes for 90 days. Writes are billed, and part 2 caps a flag at 64 KiB;
-  a hard per-flag ceiling would reintroduce caller-driven erasure, so none is set.
+- History grows with writes for 90 days. Writes are metered, quotas are not enforced today, and
+  until part 2 caps a flag at 64 KiB a snapshot can be ~672 KiB; part 2 should follow promptly.
+  A hard per-flag ceiling would reintroduce caller-driven erasure, so none is set; a per-flag
+  write rate limit would not, and is the option if growth becomes a problem.
 - An agent cannot restore a state older than 90 days that has 100 newer versions; the constants
   are one line each to raise.

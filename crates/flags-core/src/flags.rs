@@ -7,10 +7,13 @@
 //! transaction, so a failed call leaves no trace and a successful one leaves
 //! exactly one version.
 //!
-//! History is the audit trail of flag changes, so no write removes any of it.
-//! Only the hourly background sweep ([`sweep_versions`]) does, and only for
-//! versions both older than [`VERSION_RETENTION_DAYS`] and outside their
-//! flag's newest [`MIN_RETAINED_VERSIONS`] (#123).
+//! History is the audit trail of flag changes, so no request path removes or
+//! changes any of it (`otto_app` cannot update `flag_versions`, migration
+//! 0006). Only the hourly background sweep ([`sweep_versions`]) deletes, and
+//! only versions both older than [`VERSION_RETENTION_DAYS`] and outside their
+//! flag's newest [`MIN_RETAINED_VERSIONS`] (#123). Writes can make an old
+//! version eligible (100 newer ones push it out of the newest 100), but never
+//! a recent one, and those writes are themselves on record for 90 days.
 //!
 //! Writes lock the flag row (`FOR NO KEY UPDATE`) before computing the new
 //! state, so two agents changing different environments of one flag at once
@@ -727,29 +730,40 @@ async fn record_version(
 ///
 /// A flag's newest version is its current one (every change records one), so
 /// the newest 100 are measured from `max(version)` without reading
-/// `feature_flags`.
+/// `feature_flags`. That maximum is a window over one scan of the table, not
+/// a subquery per row: row-level security hides the table's statistics from
+/// the planner (it estimates one row), and a correlated `max` became a nested
+/// loop over every pair of versions. Batches continue from the last one's
+/// highest `id`, so each batch deletes new rows; each one rescans the table,
+/// which costs little at hourly cadence, where one batch is the norm.
 pub async fn sweep_versions(db: &Db) -> Result<u64> {
     let mut swept = 0;
+    let mut after: i64 = 0;
     loop {
         let mut tx = crate::maintenance::begin(db).await?;
-        let n = sqlx::query(
+        let ids: Vec<i64> = sqlx::query_scalar(
             "DELETE FROM flag_versions WHERE id IN ( \
-               SELECT v.id FROM flag_versions v \
-                WHERE v.created_at < now() - make_interval(days => $1) \
-                  AND v.version <= (SELECT max(w.version) FROM flag_versions w \
-                                     WHERE w.flag_id = v.flag_id) - $2 \
-                LIMIT $3)",
+               SELECT id FROM ( \
+                 SELECT id, created_at, version, \
+                        max(version) OVER (PARTITION BY flag_id) AS newest \
+                   FROM flag_versions) v \
+                WHERE id > $4 \
+                  AND created_at < now() - make_interval(days => $1) \
+                  AND version <= newest - $2 \
+                ORDER BY id LIMIT $3) \
+             RETURNING id",
         )
         .bind(VERSION_RETENTION_DAYS)
         .bind(MIN_RETAINED_VERSIONS)
         .bind(SWEEP_BATCH)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+        .bind(after)
+        .fetch_all(&mut *tx)
+        .await?;
         tx.commit().await?;
-        swept += n;
-        if n < SWEEP_BATCH as u64 {
-            return Ok(swept);
+        swept += ids.len() as u64;
+        match ids.iter().max() {
+            Some(&last) if ids.len() as i64 == SWEEP_BATCH => after = last,
+            _ => return Ok(swept),
         }
     }
 }

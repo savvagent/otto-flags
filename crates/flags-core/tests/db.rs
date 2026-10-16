@@ -6586,3 +6586,113 @@ async fn flag_versions_need_the_maintenance_marker_unpinned(pool: PgPool) {
     assert_eq!(seen, 2);
     tx.rollback().await.unwrap();
 }
+
+/// The sweep drains a backlog in batches across every org: 2 100 eligible
+/// rows in org A and 1 900 in org B, exactly four full batches, so the loop
+/// also ends on an empty one. A row outside the newest 100 but only 89 days
+/// old stays.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_version_sweep_drains_a_backlog_in_batches(pool: PgPool) {
+    use flags_core::flags::sweep_versions;
+    let db = db(pool.clone()).await;
+    let actor = UserId::new();
+    let mut flags = vec![];
+    for org in [OrgId::new(), OrgId::new()] {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx
+            .create_app("web", &["production".into()], actor)
+            .await
+            .unwrap();
+        let flag = tx
+            .create_flag(
+                &app,
+                NewFlag {
+                    key: "f".into(),
+                    ..Default::default()
+                },
+                actor,
+                None,
+            )
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        flags.push((org, flag.id));
+    }
+    // History seeded directly (as the superuser pool): versions 2..=top, all
+    // 91 days old, on top of the real version 1.
+    for (&(org, flag), top) in flags.iter().zip([2_200, 2_001]) {
+        sqlx::query(
+            "INSERT INTO flag_versions (org_id, flag_id, version, change, snapshot, created_at) \
+             SELECT $1, $2, v, 'update', '{}'::jsonb, now() - interval '91 days' \
+               FROM generate_series(2, $3) AS v",
+        )
+        .bind(org)
+        .bind(flag)
+        .bind(top)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE flag_versions SET created_at = now() - interval '91 days' \
+             WHERE flag_id = $1 AND version = 1",
+        )
+        .bind(flag)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    // One of B's eligible-by-count rows is only 89 days old.
+    sqlx::query(
+        "UPDATE flag_versions SET created_at = now() - interval '89 days' \
+         WHERE flag_id = $1 AND version = 7",
+    )
+    .bind(flags[1].1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // A: 2 200 versions, 2 100 swept. B: 2 001 versions, 1 901 past the
+    // count, one of them too young, so 1 900 swept.
+    assert_eq!(sweep_versions(&db).await.unwrap(), 4_000);
+    assert_eq!(
+        versions_of(&pool, flags[0].1).await,
+        (100, Some(2_101), Some(2_200))
+    );
+    assert_eq!(
+        versions_of(&pool, flags[1].1).await,
+        (101, Some(7), Some(2_001))
+    );
+    assert_eq!(sweep_versions(&db).await.unwrap(), 0);
+}
+
+/// The sweep chooses rows by `created_at`, so tenant transactions cannot
+/// rewrite history: `otto_app` has no UPDATE on `flag_versions` (0006).
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn flag_versions_cannot_be_updated_by_the_app_role(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx
+        .create_app("web", &["production".into()], actor)
+        .await
+        .unwrap();
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "f".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let mut tx = db.begin(org).await.unwrap();
+    let err = sqlx::query("UPDATE flag_versions SET created_at = now() - interval '1 year'")
+        .execute(tx.conn())
+        .await
+        .unwrap_err();
+    assert_eq!(sqlstate(&err), "42501", "{err}");
+}

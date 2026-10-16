@@ -342,7 +342,10 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   subject to RLS. Every unpinned policy added by `0002` and `0003` also requires the
   transaction-local marker `app.maintenance = 'on'` (#27), which only the background sweeps, the
   checker's backstop, and the usage shipper set. Migration `0005` (#68) does the same for
-  `usage_outbox` and `usage_outbox_rejected`, for every command. Those background transactions
+  `usage_outbox` and `usage_outbox_rejected`, for every command. Migration `0006` (#123) gives the
+  flag-history sweep a marker-gated unpinned read and delete of `flag_versions` (versions older
+  than 90 days outside a flag's newest 100) and revokes `UPDATE` on it from `otto_app`; the
+  previous release does not sweep. Those background transactions
   (`maintenance::begin`) drop into `otto_app` with `SET LOCAL ROLE`, as tenant transactions do
   (#73), so in production too the marker policies are what let them see across orgs; if the pool's
   role were exempt from RLS and could not assume `otto_app` (or `otto_app` itself were exempt),
