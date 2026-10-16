@@ -7839,12 +7839,32 @@ async fn force_configuration(pool: &PgPool, app: flags_core::ids::FlagAppId, key
     .unwrap();
 }
 
-fn refused(result: Result<impl std::fmt::Debug, Error>, limit: i64) -> String {
+/// A size refusal naming `limit`, worded for the budget it is (a flag's or
+/// an app's). Returns the message.
+fn size_refusal(result: Result<impl std::fmt::Debug, Error>, limit: i64) -> String {
     let err = result.unwrap_err();
     assert_eq!(err.code(), "invalid_argument", "{err}");
     let msg = err.to_string();
     assert!(msg.contains(&limit.to_string()), "{msg}");
+    let phrase = if limit == flags_core::flags::MAX_FLAG_BYTES {
+        "would be"
+    } else {
+        "active flags would total"
+    };
+    assert!(msg.contains(phrase), "{msg}");
     msg
+}
+
+/// A size refusal of anything but a rollback: no kill-switch hint.
+fn refused(result: Result<impl std::fmt::Debug, Error>, limit: i64) {
+    let msg = size_refusal(result, limit);
+    assert!(!msg.contains("enabled=false"), "{msg}");
+}
+
+/// A refused rollback names the kill switch, which is never refused.
+fn refused_rollback(result: Result<impl std::fmt::Debug, Error>, limit: i64) {
+    let msg = size_refusal(result, limit);
+    assert!(msg.contains("set_flag_environment enabled=false"), "{msg}");
 }
 
 fn config_patch(n: usize) -> FlagPatch {
@@ -8015,16 +8035,24 @@ async fn an_apps_active_flags_are_capped_at_1_mib(pool: PgPool) {
             .await,
         MAX_APP_FLAG_BYTES,
     );
-    let msg = refused(
+    refused_rollback(
         tx.rollback_flag(&app, "f", Some(2), meta(actor)).await,
         MAX_APP_FLAG_BYTES,
     );
-    assert!(
-        msg.contains("enabled=false"),
-        "a refused rollback names the kill switch: {msg}"
-    );
-    // Archiving frees f's share, and restoring it fits exactly again.
+    // Archiving frees f's share: a flag that fits in it can be created.
     tx.set_archived(&app, "f", true, meta(actor)).await.unwrap();
+    tx.create_flag(
+        &app,
+        NewFlag {
+            key: "g".into(),
+            ..Default::default()
+        },
+        actor,
+        None,
+    )
+    .await
+    .unwrap();
+    tx.set_archived(&app, "g", true, meta(actor)).await.unwrap();
     tx.commit().await.unwrap();
     assert!(app_bytes(&pool, app.id).await < MAX_APP_FLAG_BYTES);
 
@@ -8080,17 +8108,16 @@ async fn writes_that_do_not_grow_land_over_budget(pool: PgPool) {
     force_configuration(&pool, app.id, "ballast", MAX_APP_FLAG_BYTES).await;
     assert!(app_bytes(&pool, app.id).await > MAX_APP_FLAG_BYTES);
 
-    let env = |patch: EnvPatch| patch;
     let mut tx = db.begin(org).await.unwrap();
     // Turning an environment on shortens it ("true" < "false"): allowed.
     tx.set_environment(
         &app,
         "f",
         "production",
-        env(EnvPatch {
+        EnvPatch {
             enabled: Some(true),
             ..Default::default()
-        }),
+        },
         meta(actor),
     )
     .await
@@ -8101,25 +8128,50 @@ async fn writes_that_do_not_grow_land_over_budget(pool: PgPool) {
             &app,
             "f",
             "production",
-            env(EnvPatch {
+            EnvPatch {
                 rollout_percentage: Some(10.0),
                 ..Default::default()
-            }),
+            },
             meta(actor),
         )
         .await,
         MAX_APP_FLAG_BYTES,
     );
-    // The kill switch grows it by a byte and still lands.
+    // Turning it off together with anything else is checked like any write.
+    let rule = Rule {
+        attribute: "plan".into(),
+        operator: Operator::Equals,
+        values: vec![json!("pro")],
+        enabled: None,
+        variation: None,
+        description: None,
+    };
+    for patch in [
+        EnvPatch {
+            rollout_percentage: Some(10.0),
+            ..on(false)
+        },
+        EnvPatch {
+            rules: Some(vec![rule]),
+            ..on(false)
+        },
+    ] {
+        refused(
+            tx.set_environment(&app, "f", "production", patch, meta(actor))
+                .await,
+            MAX_APP_FLAG_BYTES,
+        );
+    }
+    // The kill switch alone grows it by a byte and still lands.
     let off = tx
         .set_environment(
             &app,
             "f",
             "production",
-            env(EnvPatch {
+            EnvPatch {
                 enabled: Some(false),
                 ..Default::default()
-            }),
+            },
             meta(actor),
         )
         .await
@@ -8134,6 +8186,76 @@ async fn writes_that_do_not_grow_land_over_budget(pool: PgPool) {
         .await
         .unwrap();
     tx.commit().await.unwrap();
+
+    // The same for one flag over its own limit (the app now within budget).
+    use flags_core::flags::MAX_FLAG_BYTES;
+    force_configuration(&pool, app.id, "ballast", 0).await;
+    force_configuration(&pool, app.id, "f", MAX_FLAG_BYTES).await;
+    let mut tx = db.begin(org).await.unwrap();
+    tx.set_environment(&app, "f", "production", on(true), meta(actor))
+        .await
+        .unwrap();
+    refused(
+        tx.set_environment(
+            &app,
+            "f",
+            "production",
+            EnvPatch {
+                rollout_percentage: Some(10.0),
+                ..Default::default()
+            },
+            meta(actor),
+        )
+        .await,
+        MAX_FLAG_BYTES,
+    );
+    let off = tx
+        .set_environment(&app, "f", "production", on(false), meta(actor))
+        .await
+        .unwrap();
+    assert!(!enabled(&off.environments, "production"));
+    // A rename leaves the size as it was, so it lands; so does shrinking.
+    tx.update_flag(
+        &app,
+        "f",
+        FlagPatch {
+            name: Some("renamed".into()),
+            ..Default::default()
+        },
+        meta(actor),
+    )
+    .await
+    .unwrap();
+    tx.update_flag(&app, "f", config_patch(5), meta(actor))
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+}
+
+/// #123: the rollback checker turns a failing flag off on an app over both
+/// budgets: auto-rollback is a disable-only patch and is never refused.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn auto_rollback_lands_on_an_app_over_budget(pool: PgPool) {
+    use flags_core::flags::{MAX_APP_FLAG_BYTES, MAX_FLAG_BYTES};
+    let db = db(pool.clone()).await;
+    let (org, actor) = (OrgId::new(), UserId::new());
+    let (app, flag, policy) =
+        checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
+    force_configuration(&pool, app.id, "f", MAX_APP_FLAG_BYTES).await;
+    assert!(flag_bytes(&pool, app.id, "f").await > MAX_FLAG_BYTES);
+    assert!(app_bytes(&pool, app.id).await > MAX_APP_FLAG_BYTES);
+    tripping_telemetry(&db, org, &app).await;
+
+    let report = check_flag(&db, &Entitlement::Granted, org, flag.id)
+        .await
+        .unwrap();
+    assert_eq!(report.outcomes, vec![(policy, RollbackOutcome::RolledBack)]);
+    let after = checker_state(&db, org, &app).await;
+    assert!(!after.production, "production must be off");
+    assert_eq!(
+        after.events,
+        vec![("rolled_back".to_string(), Some(after.version))]
+    );
 }
 
 fn enabled(environments: &serde_json::Value, env: &str) -> bool {

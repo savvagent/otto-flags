@@ -3378,3 +3378,34 @@ async fn the_sdk_flag_list_is_bounded_by_the_app_budget(pool: PgPool) {
         "sent {sent} bytes for {stored} stored"
     );
 }
+
+/// #123: a write past the per-flag budget comes back through MCP as an
+/// invalid argument naming the limit, built in code (no database text), and
+/// changes nothing.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_oversized_flag_write_is_refused_over_mcp(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let (t, _, _, _) = org_with_flag(&s, &platform, Uuid::new_v4(), "f").await;
+    let big = "x".repeat(32_000);
+    let variations: serde_json::Map<String, Value> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|v| (v.to_string(), json!({"configuration": big})))
+        .collect();
+    let err = tool(
+        &s.app,
+        &t,
+        "update_flag",
+        json!({"app": "web", "key": "f", "variations": variations, "configuration": big}),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("131072"), "{err}");
+    assert!(err.contains("would be"), "{err}");
+    for leak in ["ERROR", "SQLSTATE", "sqlx", "feature_flags"] {
+        assert!(!err.contains(leak), "database text in {err}");
+    }
+    let f = flag(&s, &t, "f").await;
+    assert_eq!(f["version"], 1, "{f}");
+}
