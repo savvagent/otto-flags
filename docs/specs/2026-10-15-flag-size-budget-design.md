@@ -1,6 +1,6 @@
 # Bound a flag's size and an app's SDK flag list
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#135)
 **Issue:** #123 (part 2 of 2: the SDK list bound; part 1, flag history retention, shipped in #131)
 
 ## 1. Brief
@@ -161,7 +161,8 @@ from the database; per-org budgets; changing #115's per-configuration cap.
     set_flag_environment enabled=false`.
 - Calls: `create_flag` before its `INSERT` (no old flag); `commit_change` before its `UPDATE`,
   unless the caller passes the disable-only exemption. `commit_change` gains a parameter
-  `check: SizeCheck` (`Enforce` | `DisableOnly`); `apply_env_patch` passes `DisableOnly` when
+  `check: SizeCheck` (`Enforce` | `Rollback` | `DisableOnly`; `Rollback` is `Enforce` whose refusals
+  name the kill switch, passed by `rollback_flag`); `apply_env_patch` passes `DisableOnly` when
   the patch is `enabled: Some(false)` with every other field `None`, else `Enforce`; every other
   caller passes `Enforce`. The flag row lock is already held when `commit_change` runs, so
   `old_size` is the state being replaced.
@@ -178,7 +179,8 @@ from the database; per-org budgets; changing #115's per-configuration cap.
 - **Client keys are public:** unchanged; rules are still stripped for a client key. The budget
   counts rules, so a server key's list is the larger one and is the one bounded.
 - **The database is small and shared:** one extra indexed `SELECT` per write, summing at most
-  4 096 rows of one app. No new table, no unbounded growth: active flags per app are now bounded.
+  4 096 rows of one app. No new table. Active flags per app are now bounded; archived flags and
+  their 100-version history floor (#131) are not, and are bounded in #139.
 - **Tenant isolation:** the query runs in the caller's `Tx` with `org_id` in every predicate.
 - **No SQL outside flags-core; runtime queries only:** yes.
 - **Database error text never reaches a tool response:** refusals are built in code.
