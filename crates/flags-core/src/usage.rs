@@ -14,6 +14,13 @@
 //! - **Refused events are kept, then swept.** An event the platform rejects
 //!   outright moves to `usage_outbox_rejected` with its reason, is kept for
 //!   [`REJECTED_RETENTION_DAYS`] days, and goes with its org on `org.deleted`.
+//! - **Metered rows wait for the declaration.** A row can carry a `meter` and a
+//!   `quantity` (the hourly SDK evaluation counts, [`crate::metering`]). The
+//!   platform refuses usage for a meter nobody declared, so [`run`] first
+//!   declares [`crate::metering::METER_DECLARATIONS`] and ships nothing until
+//!   the platform accepts them, retrying with backoff. Rows stay queued
+//!   meanwhile and nothing is lost; a rejected metered row keeps its meter and
+//!   quantity in `usage_outbox_rejected`.
 //! - **Enforcing** reads the platform's cached usage status (and counts this
 //!   org's unshipped rows on top). Off by default. If the platform cannot
 //!   answer, the call is allowed and still recorded.
@@ -26,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::error::Failure;
-use otto_resource::{PlatformClient, UsageEvent, UsageStatus};
+use otto_resource::{MeterDeclaration, PlatformClient, UsageEvent, UsageStatus};
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::{Db, Tx};
 use serde::Serialize;
@@ -320,6 +327,8 @@ struct Row {
     billable: bool,
     occurred_at: chrono::DateTime<chrono::Utc>,
     attempts: i32,
+    meter: Option<String>,
+    quantity: Option<i64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -361,7 +370,8 @@ pub async fn ship_once(
          WHERE id IN ( \
              SELECT id FROM usage_outbox WHERE next_attempt_at <= now() \
              ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED) \
-         RETURNING id, event_id, org_id, user_id, tool, billable, occurred_at, attempts",
+         RETURNING id, event_id, org_id, user_id, tool, billable, occurred_at, attempts, \
+                   meter, quantity",
     )
     .bind(cfg.batch as i64)
     .bind(cfg.claim_lease.as_secs_f64())
@@ -384,8 +394,11 @@ pub async fn ship_once(
             billable: r.billable,
             occurred_at: r.occurred_at,
             service: None,
-            meter: None,
-            quantity: None,
+            meter: r.meter.clone(),
+            // The CHECK keeps quantity positive; a value that still fails the
+            // conversion is sent as 0, which the platform refuses per event
+            // (`invalid_quantity`), so the row is dead-lettered, not lost.
+            quantity: r.quantity.map(|q| u64::try_from(q).unwrap_or(0)),
         })
         .collect();
 
@@ -454,11 +467,13 @@ pub async fn ship_once(
            DELETE FROM usage_outbox o \
             USING unnest($1::int8[], $2::int4[]) AS c(id, attempts) \
             WHERE o.id = c.id AND o.attempts = c.attempts \
-           RETURNING o.event_id, o.org_id, o.user_id, o.tool, o.billable, o.occurred_at), \
+           RETURNING o.event_id, o.org_id, o.user_id, o.tool, o.billable, o.occurred_at, \
+                      o.meter, o.quantity), \
          moved AS ( \
            INSERT INTO usage_outbox_rejected \
-             (event_id, org_id, user_id, tool, billable, occurred_at, reason) \
-           SELECT g.event_id, g.org_id, g.user_id, g.tool, g.billable, g.occurred_at, r.reason \
+             (event_id, org_id, user_id, tool, billable, occurred_at, meter, quantity, reason) \
+           SELECT g.event_id, g.org_id, g.user_id, g.tool, g.billable, g.occurred_at, \
+                  g.meter, g.quantity, r.reason \
              FROM gone g JOIN unnest($3::uuid[], $4::text[]) AS r(event_id, reason) \
                ON r.event_id = g.event_id \
            RETURNING 1) \
@@ -567,13 +582,125 @@ fn stored_reason(e: &otto_resource::Error) -> String {
     }
 }
 
-/// Drain the outbox until `shutdown` flips, with a final pass on the way out.
+/// How often a stuck meter declaration is logged.
+const DECLARE_LOG_EVERY: Duration = Duration::from_secs(60);
+
+/// Why a declaration attempt did not finish the job, for the log: a text-free
+/// [`Failure`] always, and the platform's own words (its error text, or each
+/// rejected meter's reason) only for the `debug` line.
+fn declaration_failure(
+    result: std::result::Result<otto_resource::MeterDeclarationReceipt, otto_resource::Error>,
+) -> Option<(Failure, String)> {
+    match result {
+        Ok(receipt) if receipt.is_complete() => None,
+        Ok(receipt) => {
+            let text = receipt
+                .rejected
+                .iter()
+                .map(|r| format!("{} refused: {}", r.key, r.reason))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Some((Failure::reason("meter_rejected"), text))
+        }
+        Err(e) => Some((crate::error::platform_failure_reason(&e), e.to_string())),
+    }
+}
+
+/// Rows waiting in `usage_outbox`, for the declaration log.
+async fn waiting(db: &Db) -> std::result::Result<i64, sqlx::Error> {
+    let mut tx = crate::maintenance::begin(db).await?;
+    let n = sqlx::query_scalar("SELECT count(*) FROM usage_outbox")
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(n)
+}
+
+/// Declare [`crate::metering::METER_DECLARATIONS`] with the platform, retrying
+/// with capped exponential backoff ([`ShipperConfig::base_backoff`] to
+/// [`ShipperConfig::max_backoff`]) until the receipt is complete. Returns
+/// `false` if `shutdown` came first.
+///
+/// A transport error, a 5xx, a `409 service_not_set`, or a meter in `rejected`
+/// all retry. Nothing ships meanwhile and the outbox keeps every row, so a
+/// platform that cannot take the declaration delays billing and loses none. On
+/// the first failure, then once a minute, it logs at `error` with a text-free
+/// reason and the number of rows waiting; the platform's text is `debug` only.
+async fn declare_meters(
+    db: &Db,
+    platform: &PlatformClient,
+    cfg: &ShipperConfig,
+    shutdown: &mut watch::Receiver<bool>,
+) -> bool {
+    let declarations: Vec<MeterDeclaration> = crate::metering::METER_DECLARATIONS
+        .iter()
+        .map(|(key, display, unit)| MeterDeclaration::new(*key, *display, *unit))
+        .collect();
+    let mut attempt: u32 = 0;
+    let mut last_logged: Option<tokio::time::Instant> = None;
+    loop {
+        if *shutdown.borrow() {
+            return false;
+        }
+        let result = tokio::select! {
+            r = platform.declare_meters(&declarations) => r,
+            _ = shutdown.changed() => return false,
+        };
+        let Some((f, text)) = declaration_failure(result) else {
+            tracing::info!(meters = declarations.len(), "declared usage meters");
+            return true;
+        };
+        if last_logged.is_none_or(|t| t.elapsed() >= DECLARE_LOG_EVERY) {
+            last_logged = Some(tokio::time::Instant::now());
+            let rows_waiting = match waiting(db).await {
+                Ok(n) => Some(n),
+                Err(e) => {
+                    let f = crate::error::db_failure_reason(&e);
+                    tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e, "could not count the usage rows waiting");
+                    None
+                }
+            };
+            tracing::error!(
+                reason = f.reason,
+                status = f.status,
+                transport = f.transport,
+                ?rows_waiting,
+                "could not declare the usage meters; no usage ships until they are declared \
+                 (rows stay queued and nothing is lost). Retrying"
+            );
+            tracing::debug!(
+                reason = f.reason, status = f.status, transport = f.transport, platform_text = %text,
+                "could not declare the usage meters"
+            );
+        }
+        let wait = cfg
+            .base_backoff
+            .saturating_mul(1u32 << attempt.min(20))
+            .min(cfg.max_backoff);
+        attempt = attempt.saturating_add(1);
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = shutdown.changed() => return false,
+        }
+    }
+}
+
+/// Declare the meters, then drain the outbox until `shutdown` flips, with a
+/// final pass on the way out.
+///
+/// Nothing ships until the meters are declared ([`declare_meters`]): a metered
+/// event for an undeclared meter would be rejected and dead-lettered. If
+/// shutdown arrives while declaring, this returns at once, without the final
+/// pass; the rows stay queued for the next process.
 pub async fn run(
     db: Db,
     platform: Arc<PlatformClient>,
     cfg: ShipperConfig,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    if !declare_meters(&db, &platform, &cfg, &mut shutdown).await {
+        return;
+    }
     let mut failures: u32 = 0;
     loop {
         let wait = match ship_once(&db, &platform, &cfg).await {

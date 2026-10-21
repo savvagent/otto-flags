@@ -21,8 +21,8 @@ use flags_core::rollback::{CheckerConfig, Hints, Mode, RollbackExt, Thresholds};
 use flags_server::{platform_client, router, spawn_checker, Config};
 use http::{Request, StatusCode};
 use otto_resource::{
-    IntrospectionResponse, MemberInfo, OrgInfo, RejectedEvent, Role, TokenKind, UsageBatch,
-    UsageReceipt, UserInfo,
+    IntrospectionResponse, MemberInfo, MeterDeclarationBatch, MeterDeclarationReceipt, OrgInfo,
+    RejectedEvent, Role, TokenKind, UsageBatch, UsageEvent, UsageReceipt, UserInfo,
 };
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -57,6 +57,24 @@ struct Platform {
     usage_gate: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
     /// When set, every usage batch is answered 502.
     fail_usage: bool,
+    /// How the next `PUT /internal/meters` calls are answered, front first;
+    /// once empty, a declaration is accepted.
+    meter_modes: std::collections::VecDeque<MeterMode>,
+    /// Every request to the meter and usage routes, in arrival order.
+    calls: Vec<&'static str>,
+    /// Keys of every accepted declaration.
+    declared: Vec<String>,
+    /// Every usage event received, in order.
+    events: Vec<UsageEvent>,
+}
+
+/// How the mock answers one meter declaration.
+#[derive(Clone, Copy)]
+enum MeterMode {
+    /// The platform has no slug for this service: `409 service_not_set`.
+    ServiceNotSet,
+    /// `200` with every meter in `rejected`.
+    Rejected,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -114,10 +132,48 @@ async fn usage_status(
     Ok(Json(status))
 }
 
+async fn declare_meters(
+    State(p): State<Shared>,
+    Json(b): Json<MeterDeclarationBatch>,
+) -> Result<Json<MeterDeclarationReceipt>, (StatusCode, Json<Value>)> {
+    let mut p = p.lock().unwrap();
+    p.calls.push("meters");
+    match p.meter_modes.pop_front() {
+        Some(MeterMode::ServiceNotSet) => Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "service_not_set"})),
+        )),
+        Some(MeterMode::Rejected) => Ok(Json(MeterDeclarationReceipt {
+            declared: vec![],
+            rejected: b
+                .meters
+                .iter()
+                .map(|m| otto_resource::RejectedMeter {
+                    key: m.key.clone(),
+                    reason: "outside this service".into(),
+                })
+                .collect(),
+        })),
+        None => {
+            let keys: Vec<String> = b.meters.iter().map(|m| m.key.clone()).collect();
+            p.declared.extend(keys.clone());
+            Ok(Json(MeterDeclarationReceipt {
+                declared: keys,
+                rejected: vec![],
+            }))
+        }
+    }
+}
+
 async fn ship(
     State(p): State<Shared>,
     Json(b): Json<UsageBatch>,
 ) -> Result<Json<UsageReceipt>, StatusCode> {
+    {
+        let mut p = p.lock().unwrap();
+        p.calls.push("usage");
+        p.events.extend(b.events.iter().cloned());
+    }
     let gate = p.lock().unwrap().usage_gate.clone();
     if let Some(gate) = gate {
         let (release, released) = tokio::sync::oneshot::channel();
@@ -181,6 +237,7 @@ async fn start_platform() -> (String, Shared) {
         .route("/oauth/introspect", post(introspect))
         .route("/internal/orgs/{org}/usage-status", get(usage_status))
         .route("/internal/usage", post(ship))
+        .route("/internal/meters", axum::routing::put(declare_meters))
         .route("/internal/orgs/{org}/members/{user}", get(member))
         .with_state(shared.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1699,6 +1756,141 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+/// A metered outbox row the way the hour close writes it.
+async fn insert_metered(pool: &PgPool, org: Uuid, quantity: i64) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable, meter, quantity) \
+         VALUES ($1, NULL, 'sdk_evaluations', true, 'otto-flags/evaluations', $2) \
+         RETURNING event_id",
+    )
+    .bind(org)
+    .bind(quantity)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn ship_once_sends_the_meter_and_quantity_of_a_metered_row(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = insert_metered(s.db.pool(), Uuid::new_v4(), 1234).await;
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let p = platform.lock().unwrap();
+    let e = p.events.iter().find(|e| e.event_id == event_id).unwrap();
+    assert_eq!(e.meter.as_deref(), Some("otto-flags/evaluations"));
+    assert_eq!(e.quantity, Some(1234));
+    assert_eq!(e.service, None);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_rejected_metered_row_keeps_its_meter_and_quantity(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = insert_metered(s.db.pool(), Uuid::new_v4(), 55).await;
+    platform.lock().unwrap().reject_with = Some("unknown meter".into());
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let (meter, quantity): (Option<String>, Option<i64>) =
+        sqlx::query_as("SELECT meter, quantity FROM usage_outbox_rejected WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_one(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(meter.as_deref(), Some("otto-flags/evaluations"));
+    assert_eq!(quantity, Some(55));
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+/// Runs `usage::run` against the mock until `done` holds, then stops it.
+async fn run_shipper_until(
+    s: &Server,
+    platform: &Shared,
+    done: impl Fn(&Platform) -> bool,
+) -> Vec<&'static str> {
+    let cfg = flags_core::usage::ShipperConfig {
+        poll: Duration::from_millis(20),
+        base_backoff: Duration::from_millis(10),
+        max_backoff: Duration::from_millis(40),
+        ..Default::default()
+    };
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(flags_core::usage::run(
+        s.db.clone(),
+        s.platform.clone(),
+        cfg,
+        shutdown,
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !done(&platform.lock().unwrap()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the shipper reaches the expected state");
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("the shipper stops on shutdown")
+        .unwrap();
+    let calls = platform.lock().unwrap().calls.clone();
+    calls
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_shipper_declares_the_evaluations_meter_before_its_first_shipment(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+
+    let calls = run_shipper_until(&s, &platform, |p| p.shipped >= 1).await;
+    assert_eq!(calls.first(), Some(&"meters"), "{calls:?}");
+    assert!(calls.contains(&"usage"), "{calls:?}");
+    assert_eq!(
+        platform.lock().unwrap().declared,
+        vec!["otto-flags/evaluations".to_string()]
+    );
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_failed_declaration_holds_shipping_until_it_succeeds(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+    platform.lock().unwrap().meter_modes = [MeterMode::ServiceNotSet, MeterMode::Rejected].into();
+
+    let calls = run_shipper_until(&s, &platform, |p| p.shipped >= 1).await;
+    // Two refused declarations and a third that succeeded, all before the
+    // first shipment; the row stayed queued meanwhile.
+    let first_usage = calls.iter().position(|c| *c == "usage").unwrap();
+    assert_eq!(
+        &calls[..first_usage],
+        ["meters", "meters", "meters"],
+        "{calls:?}"
+    );
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn shutdown_while_declaring_ships_nothing(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+    platform.lock().unwrap().meter_modes =
+        std::iter::repeat_n(MeterMode::ServiceNotSet, 1000).collect();
+
+    let calls = run_shipper_until(&s, &platform, |p| p.calls.len() >= 2).await;
+    assert!(!calls.contains(&"usage"), "{calls:?}");
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 1);
 }
 
 /// The shipper on the default test pool, whose superuser role RLS does not
