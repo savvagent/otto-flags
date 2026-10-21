@@ -331,6 +331,9 @@ pub async fn ship_once(
             tool: r.tool.clone(),
             billable: r.billable,
             occurred_at: r.occurred_at,
+            service: None,
+            meter: None,
+            quantity: None,
         })
         .collect();
 
