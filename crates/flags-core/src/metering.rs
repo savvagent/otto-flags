@@ -152,6 +152,7 @@ INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, reported) \
 SELECT u.org_id, u.app_id, date_trunc('hour', now(), 'UTC'), u.served, u.reported \
 FROM unnest($1::uuid[], $2::uuid[], $3::bigint[], $4::bigint[]) AS u(org_id, app_id, served, reported) \
 WHERE NOT EXISTS (SELECT 1 FROM deleted_orgs d WHERE d.org_id = u.org_id) \
+ORDER BY u.org_id, u.app_id \
 ON CONFLICT (org_id, app_id, hour) DO UPDATE SET \
   served = LEAST(usage_meter_hourly.served::numeric + EXCLUDED.served, 9223372036854775807)::bigint, \
   reported = LEAST(usage_meter_hourly.reported::numeric + EXCLUDED.reported, 9223372036854775807)::bigint";
