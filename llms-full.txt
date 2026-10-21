@@ -53,7 +53,7 @@ npm install @otto-flags/node-server
 
 ### Go
 ```bash
-go get github.com/savvagent/otto-flags-go-server-sdk
+go get github.com/savvagent/otto-flags/packages/go-server
 ```
 
 ### Java (Maven)
@@ -266,7 +266,7 @@ package main
 
 import (
     "context"
-    ottoFlags "github.com/savvagent/otto-flags-go-server-sdk"
+    ottoFlags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {

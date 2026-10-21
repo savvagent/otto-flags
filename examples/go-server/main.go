@@ -6,20 +6,24 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
-	"github.com/savvagent/otto-flags-go-server-sdk/pkg/ottoflags"
+	ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {
 	// Initialize Otto Flags client
-	client := ottoflags.NewClient(ottoflags.Config{
-		APIURL:      getEnv("OTTO_FLAGS_API_URL", "http://localhost:8080"),
-		SDKKey:      getEnv("OTTO_FLAGS_SDK_KEY", "your-sdk-key"),
-		Environment: "development",
-		Cache: ottoflags.CacheConfig{
-			Enabled: true,
-			TTL:     60, // 1 minute
+	client, err := ottoflags.NewClient(ottoflags.Config{
+		APIKey:  getEnv("OTTO_FLAGS_SDK_KEY", "sdk_your_sdk_key"),
+		BaseURL: getEnv("OTTO_FLAGS_API_URL", "http://localhost:8080"),
+		Defaults: map[string]bool{
+			"new-ui":              false,
+			"beta-features":       false,
+			"advanced-analytics":  false,
+			"advanced-processing": false,
 		},
 	})
+	if err != nil {
+		log.Fatalf("Failed to create Otto Flags client: %v", err)
+	}
 	defer client.Close()
 
 	// Setup Gin router
@@ -42,29 +46,23 @@ func main() {
 			return
 		}
 
-		ctx := ottoflags.EvaluationContext{
-			UserID:     userId,
-			Attributes: make(map[string]interface{}),
+		ctx := &ottoflags.Context{
+			UserID:      userId,
+			Environment: getEnv("OTTO_FLAGS_ENVIRONMENT", "development"),
+			Attributes:  make(map[string]interface{}),
 		}
 
-		// Check multiple feature flags concurrently
-		newUI, err1 := client.IsEnabled("new-ui", ctx)
-		betaFeatures, err2 := client.IsEnabled("beta-features", ctx)
-		advancedAnalytics, err3 := client.IsEnabled("advanced-analytics", ctx)
-
-		if err1 != nil || err2 != nil || err3 != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to check feature flags",
-			})
-			return
-		}
+		// Check multiple feature flags
+		newUI := client.IsEnabled("new-ui", ctx)
+		betaFeatures := client.IsEnabled("beta-features", ctx)
+		advancedAnalytics := client.IsEnabled("advanced-analytics", ctx)
 
 		c.JSON(http.StatusOK, gin.H{
 			"userId": userId,
 			"features": gin.H{
-				"newUI":              newUI,
-				"betaFeatures":       betaFeatures,
-				"advancedAnalytics":  advancedAnalytics,
+				"newUI":             newUI,
+				"betaFeatures":      betaFeatures,
+				"advancedAnalytics": advancedAnalytics,
 			},
 		})
 	})
@@ -88,20 +86,14 @@ func main() {
 			userId = "anonymous"
 		}
 
-		ctx := ottoflags.EvaluationContext{
+		ctx := &ottoflags.Context{
 			UserID: userId,
 			Attributes: map[string]interface{}{
 				"endpoint": "/api/data",
 			},
 		}
 
-		advancedProcessing, err := client.IsEnabled("advanced-processing", ctx)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to check feature flag",
-			})
-			return
-		}
+		advancedProcessing := client.IsEnabled("advanced-processing", ctx)
 
 		method := "basic"
 		if advancedProcessing {
@@ -118,7 +110,7 @@ func main() {
 	// Start server
 	port := getEnv("PORT", "8082")
 	log.Printf("Server starting on port %s", port)
-	log.Printf("Otto Flags API URL: %s", client.GetConfig().APIURL)
+	log.Printf("Otto Flags API URL: %s", getEnv("OTTO_FLAGS_API_URL", "http://localhost:8080"))
 
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
