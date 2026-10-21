@@ -16,6 +16,11 @@
 
 app = "otto-flags"
 primary_region = "iad"
+# Time between SIGTERM and SIGKILL. A stop finishes the request in flight,
+# the metering pass already running (its statements are bounded at 30 s),
+# then a final flush of the evaluation counts (bounded at 5 s); Fly's
+# default of 5 s could kill it first and lose those counts.
+kill_timeout = "45s"
 
 [build]
   dockerfile = "Dockerfile"

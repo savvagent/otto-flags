@@ -2573,6 +2573,9 @@ async fn evaluating_never_asks_the_platform_about_a_blocked_org(pool: PgPool) {
     };
     // The setup's MCP calls may have asked; only the request itself is measured.
     let before = hits(&platform);
+    // Nothing has asked yet, so no cached answer could hide a request-path
+    // lookup from the hit count below.
+    assert_eq!(before, 0, "setup must not warm the platform's usage cache");
     let (status, r) = sdk(
         &s.app,
         "POST",

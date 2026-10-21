@@ -492,8 +492,10 @@ pub async fn run(
     let (mut next_flush, mut next_close) = (now + FLUSH_EVERY, now + CLOSE_EVERY);
     loop {
         tokio::select! {
-            _ = tokio::time::sleep_until(next_flush.min(next_close)) => {}
+            // Shutdown first: once it has fired, no further pass starts.
+            biased;
             _ = shutdown.changed() => break,
+            _ = tokio::time::sleep_until(next_flush.min(next_close)) => {}
         }
         let now = Instant::now();
         if now >= next_flush {
