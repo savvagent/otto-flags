@@ -43,7 +43,7 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     let report = db.verify_tenant_isolation().await.expect("isolation");
     let summary = report.summary();
     assert!(summary.contains("otto_app"), "{summary}");
-    for name in ["rollback_policies", "rollback_events"] {
+    for name in ["rollback_policies", "rollback_events", "usage_meter_hourly"] {
         let table = report
             .tables
             .iter()
@@ -146,6 +146,139 @@ async fn usage_outbox_tables_need_the_maintenance_marker_unpinned(pool: PgPool) 
             .await
             .unwrap();
         tx.rollback().await.unwrap();
+    }
+}
+
+/// The hourly evaluation meter is drained and rolled up across every org by a
+/// background closer, so like the usage outbox it needs the maintenance marker
+/// unpinned, while a pinned transaction reaches only its own org's rows.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn usage_meter_hourly_needs_the_maintenance_marker_unpinned(pool: PgPool) {
+    let db = db(pool.clone()).await;
+    let (a, b) = (OrgId::new(), OrgId::new());
+    let mut apps = vec![];
+    for org in [a, b] {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx.create_app("web", &[], UserId::new()).await.unwrap();
+        tx.commit().await.unwrap();
+        sqlx::query(
+            "INSERT INTO usage_meter_hourly (org_id, app_id, hour, served) \
+             VALUES ($1, $2, date_trunc('hour', now()), 1)",
+        )
+        .bind(org)
+        .bind(app.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        apps.push(app.id);
+    }
+    let insert = "INSERT INTO usage_meter_hourly (org_id, app_id, hour, served) \
+                  VALUES ($1, $2, date_trunc('hour', now()) - interval '1 hour', 1)";
+
+    // Unpinned, no marker: nothing visible, nothing changed, no insert.
+    let mut tx = as_app_unpinned(&pool).await;
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM usage_meter_hourly")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(seen, 0, "unpinned read without the marker");
+    let updated = sqlx::query("UPDATE usage_meter_hourly SET served = 2")
+        .execute(&mut *tx)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(updated, 0, "unpinned update without the marker");
+    let deleted = sqlx::query("DELETE FROM usage_meter_hourly")
+        .execute(&mut *tx)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(deleted, 0, "unpinned delete without the marker");
+    tx.rollback().await.unwrap();
+
+    let mut tx = as_app_unpinned(&pool).await;
+    let err = sqlx::query(insert)
+        .bind(a)
+        .bind(apps[0])
+        .execute(&mut *tx)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        sqlstate(&err),
+        "42501",
+        "unpinned insert without the marker"
+    );
+    drop(tx);
+
+    // Unpinned with the marker: every org's rows.
+    let mut tx = as_app_maintenance(&pool).await;
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM usage_meter_hourly")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    assert_eq!(seen, 2, "maintenance read");
+    tx.rollback().await.unwrap();
+
+    // Pinned: only the org's own rows, and its own insert succeeds.
+    let mut tx = db.begin(a).await.unwrap();
+    let seen: i64 = sqlx::query_scalar("SELECT count(*) FROM usage_meter_hourly")
+        .fetch_one(tx.conn())
+        .await
+        .unwrap();
+    assert_eq!(seen, 1, "pinned read");
+    sqlx::query(insert)
+        .bind(a)
+        .bind(apps[0])
+        .execute(tx.conn())
+        .await
+        .unwrap();
+    tx.rollback().await.unwrap();
+}
+
+/// The meter and quantity columns travel together and a metered event counts
+/// at least one: both NULL (an unmetered row, as the previous release writes)
+/// or both set and positive, on both outbox tables.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn usage_outbox_meter_and_quantity_are_paired_and_positive(pool: PgPool) {
+    let org = OrgId::new();
+    for table in ["usage_outbox", "usage_outbox_rejected"] {
+        let insert = |meter: &str, quantity: &str| {
+            if table == "usage_outbox" {
+                format!(
+                    "INSERT INTO usage_outbox (org_id, tool, billable, meter, quantity) \
+                     VALUES ($1, 'evaluate', true, {meter}, {quantity})"
+                )
+            } else {
+                format!(
+                    "INSERT INTO usage_outbox_rejected \
+                     (event_id, org_id, tool, billable, occurred_at, reason, meter, quantity) \
+                     VALUES (gen_random_uuid(), $1, 'evaluate', true, now(), 'x', {meter}, {quantity})"
+                )
+            }
+        };
+        for (meter, quantity) in [("NULL", "NULL"), ("'evaluations'", "5")] {
+            sqlx::query(&insert(meter, quantity))
+                .bind(org)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("{table}: ({meter}, {quantity}) refused: {e}"));
+        }
+        for (meter, quantity) in [
+            ("'evaluations'", "NULL"),
+            ("NULL", "5"),
+            ("'evaluations'", "0"),
+        ] {
+            let err = sqlx::query(&insert(meter, quantity))
+                .bind(org)
+                .execute(&pool)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                sqlstate(&err),
+                "23514",
+                "{table}: ({meter}, {quantity}) must violate the CHECK"
+            );
+        }
     }
 }
 
@@ -2359,6 +2492,16 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         .unwrap();
     }
 
+    // The org has an hourly evaluation meter row; the purge must count and take it.
+    sqlx::query(
+        "INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, reported) \
+         SELECT org_id, id, date_trunc('hour', now()), 3, 2 FROM flag_apps WHERE org_id = $1",
+    )
+    .bind(org)
+    .execute(db.pool())
+    .await
+    .unwrap();
+
     let body = otto_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
@@ -2369,6 +2512,7 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     let Outcome::Applied { detail } = platform_events::apply(&db, &event).await.unwrap() else {
         panic!("first delivery should apply");
     };
+    assert_eq!(detail["usage_meter_hourly"], 1, "{detail}");
     assert_eq!(detail["rollback_policies"], 1, "{detail}");
     assert_eq!(detail["rollback_events"], 1, "{detail}");
     assert_eq!(detail["usage_outbox_rejected"], 1, "{detail}");
@@ -2379,6 +2523,7 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     for table in [
         "rollback_policies",
         "rollback_events",
+        "usage_meter_hourly",
         "usage_outbox_rejected",
     ] {
         let left: i64 =
