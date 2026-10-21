@@ -77,19 +77,24 @@ async fn main() -> Result<()> {
     check_platform(&platform, &config).await;
 
     let (stop, shutdown) = tokio::sync::watch::channel(false);
+    // Usage is flushed on its own, earlier signal (see the graceful shutdown
+    // below). Everything else, the flag-change listener above all, keeps
+    // running until the HTTP drain ends, so a stream still open during the
+    // drain keeps receiving changes (a kill switch included).
+    let (stop_usage, usage_shutdown) = tokio::sync::watch::channel(false);
     let listener = Listener::spawn(db.pool().clone(), shutdown.clone());
     let shipper = tokio::spawn(flags_core::usage::run(
         db.clone(),
         platform.clone(),
         ShipperConfig::default(),
-        shutdown.clone(),
+        usage_shutdown.clone(),
     ));
     let evaluations = Arc::new(EvalCounter::default());
     let metering = tokio::spawn(flags_core::metering::run(
         db.clone(),
         Meter::new(platform.clone()),
         evaluations.clone(),
-        shutdown.clone(),
+        usage_shutdown,
     ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
 
@@ -125,18 +130,20 @@ async fn main() -> Result<()> {
         "flags-server listening"
     );
 
-    // Stop the background tasks as soon as the signal arrives, not after the
-    // HTTP drain: an SDK flag stream stays open until the client goes, so the
-    // drain can outlast the platform's kill timeout, and the shipper's and
-    // the meter's final passes must not wait behind it.
+    // Stop the usage tasks as soon as the signal arrives, not after the HTTP
+    // drain: an SDK flag stream stays open until the client goes, so the drain
+    // can outlast the platform's kill timeout, and the shipper's and the
+    // meter's final passes must not wait behind it.
     axum::serve(tcp, app)
         .with_graceful_shutdown(async move {
             shutdown_signal().await;
             tracing::info!("flushing usage");
-            stop.send(true).ok();
+            stop_usage.send(true).ok();
         })
         .await
         .context("server error")?;
+
+    stop.send(true).ok();
     if let Err(e) = shipper.await {
         let reason = join_failure_reason(&e);
         tracing::warn!(reason, "the usage shipper did not stop cleanly");

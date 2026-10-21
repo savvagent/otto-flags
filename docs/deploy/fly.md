@@ -318,8 +318,9 @@ Production evaluations are billed on the meter `otto-flags/evaluations`. MCP too
 - **Idle suspend.** The app scales to zero, so hours close when a machine is awake. An hour
   closed after the platform's month cutoff (2 h into the next month) is billed in the month it
   arrives.
-- **Stopping.** On SIGTERM the server stops its background tasks at once, so the usage shipper's
-  final pass and the final flush of evaluation counts run while HTTP drains. Evaluations answered
+- **Stopping.** On SIGTERM the server stops its usage tasks at once, so the usage shipper's final
+  pass and the final flush of evaluation counts run while HTTP drains. The flag-change listener
+  keeps feeding open SDK streams until the drain ends. Evaluations answered
   during the drain get one more flush after it. An open SDK flag stream keeps the drain going
   until `kill_timeout = "15s"` (`fly.toml`); counts that miss both flushes are lost, an
   undercount.
