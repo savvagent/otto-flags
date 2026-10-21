@@ -6841,3 +6841,165 @@ async fn flag_versions_cannot_be_updated_by_the_app_role(pool: PgPool) {
         .unwrap_err();
     assert_eq!(sqlstate(&err), "42501", "{err}");
 }
+
+// ---- metering: the evaluation counter's flush (#140) ----
+
+mod metering_flush {
+    use super::*;
+    use flags_core::ids::FlagAppId;
+    use flags_core::metering::{self, Counts, EvalCounter};
+    use std::time::Duration;
+
+    async fn app_for(db: &Db, org: OrgId, name: &str) -> FlagAppId {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx.create_app(name, &[], UserId::new()).await.unwrap();
+        tx.commit().await.unwrap();
+        app.id
+    }
+
+    async fn row(pool: &PgPool, org: OrgId, app: FlagAppId) -> Option<(i64, i64, bool)> {
+        sqlx::query_as(
+            "SELECT served, reported, hour = date_trunc('hour', now(), 'UTC') \
+             FROM usage_meter_hourly WHERE org_id = $1 AND app_id = $2",
+        )
+        .bind(org)
+        .bind(app)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn flush_upserts_into_the_current_hour_and_adds_to_an_existing_row(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let counter = EvalCounter::default();
+
+        counter.served(org, app, 5);
+        counter.reported(org, app, 2);
+        assert_eq!(metering::flush(&db, &counter).await.unwrap(), 1);
+        assert_eq!(row(&pool, org, app).await, Some((5, 2, true)));
+        assert!(counter.take().is_empty(), "a flush empties the counter");
+
+        counter.served(org, app, 1);
+        counter.reported(org, app, 10);
+        assert_eq!(metering::flush(&db, &counter).await.unwrap(), 1);
+        assert_eq!(row(&pool, org, app).await, Some((6, 12, true)));
+
+        // Nothing to write: no statement, no row change.
+        assert_eq!(metering::flush(&db, &counter).await.unwrap(), 0);
+        assert_eq!(row(&pool, org, app).await, Some((6, 12, true)));
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn flush_skips_zero_pairs(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let counter = EvalCounter::default();
+        counter.served(org, app, 0);
+        assert_eq!(metering::flush(&db, &counter).await.unwrap(), 0);
+        assert_eq!(row(&pool, org, app).await, None);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn flush_skips_deleted_orgs_and_missing_apps_without_failing_the_batch(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let (good, gone) = (OrgId::new(), OrgId::new());
+        let good_app = app_for(&db, good, "web").await;
+        let gone_app = app_for(&db, gone, "web").await;
+        let ghost = FlagAppId::new();
+        sqlx::query("INSERT INTO deleted_orgs (org_id) VALUES ($1)")
+            .bind(gone)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let counter = EvalCounter::default();
+        counter.served(good, good_app, 3);
+        counter.served(gone, gone_app, 4);
+        counter.served(good, ghost, 5);
+        assert_eq!(metering::flush(&db, &counter).await.unwrap(), 1);
+
+        assert_eq!(row(&pool, good, good_app).await, Some((3, 0, true)));
+        assert_eq!(row(&pool, gone, gone_app).await, None);
+        assert_eq!(row(&pool, good, ghost).await, None);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn flush_clamps_values_above_i64_max(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let counter = EvalCounter::default();
+
+        counter.served(org, app, u64::MAX);
+        counter.reported(org, app, i64::MAX as u64);
+        metering::flush(&db, &counter).await.unwrap();
+        assert_eq!(row(&pool, org, app).await, Some((i64::MAX, i64::MAX, true)));
+
+        // Adding to a saturated row clamps instead of overflowing the bigint.
+        counter.served(org, app, 10);
+        counter.reported(org, app, u64::MAX);
+        metering::flush(&db, &counter).await.unwrap();
+        assert_eq!(row(&pool, org, app).await, Some((i64::MAX, i64::MAX, true)));
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_failed_flush_restores_the_taken_counts(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        sqlx::query("ALTER TABLE usage_meter_hourly RENAME TO usage_meter_hourly_away")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let counter = EvalCounter::default();
+        counter.served(org, app, 7);
+        counter.reported(org, app, 3);
+
+        metering::flush(&db, &counter).await.unwrap_err();
+        // A concurrent add after the restore is kept alongside it.
+        counter.served(org, app, 1);
+        let restored = counter.take();
+        assert_eq!(
+            restored.get(&(org, app)),
+            Some(&Counts {
+                served: 8,
+                reported: 3
+            })
+        );
+
+        sqlx::query("ALTER TABLE usage_meter_hourly_away RENAME TO usage_meter_hourly")
+            .execute(&pool)
+            .await
+            .unwrap();
+        counter.restore(restored);
+        metering::flush(&db, &counter).await.unwrap();
+        assert_eq!(row(&pool, org, app).await, Some((8, 3, true)));
+    }
+
+    /// The server aborts a flush transaction left idle past its timeout, so a
+    /// suspended machine cannot commit into a closed hour.
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_flush_transaction_left_idle_is_aborted_and_its_counts_restored(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let counter = EvalCounter::default();
+        counter.served(org, app, 9);
+
+        metering::flush_with(&db, &counter, "200ms", Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert_eq!(row(&pool, org, app).await, None);
+        assert_eq!(
+            counter.take().get(&(org, app)),
+            Some(&Counts {
+                served: 9,
+                reported: 0
+            })
+        );
+    }
+}
