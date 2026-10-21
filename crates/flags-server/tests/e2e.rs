@@ -2474,6 +2474,26 @@ async fn the_larger_of_served_and_reported_is_metered(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn client_key_telemetry_is_never_billed(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, _, client_key) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    // The client key is public: its reports are recorded for health but
+    // never raise the bill. Its 2 served evaluations are billed; its 50
+    // reported ones are not.
+    evaluate_n(&s, &client_key, "checkout", 2).await;
+    let receipt = report_n(&s, &client_key, "checkout", 50).await;
+    assert_eq!(receipt["accepted"], 50);
+    flush_close_ship(&s).await;
+
+    let events = metered(&platform, org);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].quantity, Some(2));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn unknown_flag_telemetry_and_missing_flags_count_nothing(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool, &url).await;

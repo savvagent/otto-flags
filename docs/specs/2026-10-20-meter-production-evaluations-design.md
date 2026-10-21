@@ -79,7 +79,8 @@ enforcement fails open when the platform can't be reached, and that the producti
 
 - **Billed quantity per (org, app, hour) = `GREATEST(served, reported)`.**
   - `served` counts the successful answers from the evaluate handler.
-  - `reported` counts the accepted telemetry evaluation events.
+  - `reported` counts the accepted telemetry evaluation events **sent with the server key**.
+    Client-key telemetry is never billed (see "Only server-key telemetry is billed" below).
   - Why the larger of the two is right:
     - With telemetry on (the default), `reported` already includes every served evaluation, plus
       local and cached ones, so `reported` ≥ `served` and the bill is what the SDK reported.
@@ -117,12 +118,20 @@ enforcement fails open when the platform can't be reached, and that the producti
   - `served`: each successful answer from the evaluate handler (flag found and active, response
     built).
   - `reported`: each telemetry evaluation event the server accepted (`Receipt::accepted`: a known
-    flag of the calling app).
+    flag of the calling app), in a batch authenticated with the app's server (`srv_`) key.
   - Unknown-flag telemetry events, rejected or failed requests, `GET /api/sdk/flags`, the SSE
     stream, and MCP `evaluate_flag` (a dry run, free per the Metering invariant) are not counted.
-- **Both key kinds count.** Both the public client (`sdk_`) key and the server (`srv_`) key are
-  counted: browsers and mobile apps evaluate with client keys, and they are the bulk of
-  production use. The inflation risk that brings is under Risks.
+- **Only server-key telemetry is billed.** This was added after an automated security review
+  flagged client-key telemetry as a billing-abuse path. The client (`sdk_`) key is public: it
+  ships in every page that evaluates flags. Anyone could post up to 1,000 fake telemetry events
+  per request with it and raise the org's bill. So:
+  - `served` counts evaluations answered for both key kinds. That is real work the server did,
+    and each one costs the caller a request.
+  - `reported` counts only batches sent with the secret server key.
+  - Client-key telemetry is still recorded in `flag_eval_hourly` for health and auto-rollback,
+    unchanged. It never reaches the meter.
+  - The cost: a browser or mobile SDK's local and cached evaluations are not billed. Only the
+    ones it fetches from the server are. That is an undercount, never an overcount.
 - **Bucketing uses the server's receive time** (the database's `now()` when the counts are
   flushed), not the SDK-reported timestamp. That lets an hour close for good (see the hourly
   close), and a client clock cannot move usage between billing months. `flag_eval_hourly` keeps
@@ -491,20 +500,16 @@ E2E (`crates/flags-server/tests/e2e.rs`, with the mock platform extended for `PU
 
 ## Risks and open questions
 
-- **Inflation through public client keys.** Anyone holding an app's public `sdk_` key can call
-  `/api/evaluate` or post telemetry and raise that org's metered quantity. Calling
-  `/api/evaluate` is real served work, but telemetry is client-reported and can be faked cheaply,
-  up to 1,000 events per request. Mitigations, in order:
+- **Inflation through public client keys.** Client-key telemetry is not billed (Assumptions), so
+  faked reports cannot raise a bill. What remains is that anyone holding an app's `sdk_` key can
+  call `/api/evaluate` repeatedly. Each such call is real served work, paid for with a request
+  per evaluation. Mitigations:
   - The budget's opt-in hard stop caps the damage: blocked hours ship free.
-  - Telemetry counts only events for the app's real flag keys.
   - A follow-up ticket for per-key rate limits or a per-app hourly cap (owner Rob, because a cap
-    is a pricing decision).
-  This should be decided before prices are set. Today no price is set, so it costs nothing.
+    is a pricing decision), before prices are set.
 - **The MAU question** (ticket open item, owner Rob): a follow-up ticket.
 - **The hour-edge overcount** (see Decisions): bounded by about 5 s of served evaluations per app
-  per hour. It goes in the same follow-up as MAU. With telemetry on, `GREATEST` makes `reported`
-  the billed source, so client-key telemetry inflation is the main lever on a bill. That makes the
-  rate-limit follow-up the more pressing one before any price is set.
+  per hour. It goes in the same follow-up as MAU.
 - **Blocked orgs evaluate for free**, including `payment_required` ones. The ticket requires
   that flags never turn off, so this is the intended trade-off. It is the same rule as
   otto-factory's free tracker closes.
