@@ -106,7 +106,14 @@ async fn main() -> Result<()> {
     let checker_abort = checker.abort_handle();
     let mut checker = tokio::spawn(watch_checker(checker, shutdown.clone()));
 
-    let app = router(db, platform, listener, hints, evaluations, &config);
+    let app = router(
+        db.clone(),
+        platform,
+        listener,
+        hints,
+        evaluations.clone(),
+        &config,
+    );
     let tcp = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("could not bind {}", config.bind))?;
@@ -118,13 +125,18 @@ async fn main() -> Result<()> {
         "flags-server listening"
     );
 
+    // Stop the background tasks as soon as the signal arrives, not after the
+    // HTTP drain: an SDK flag stream stays open until the client goes, so the
+    // drain can outlast the platform's kill timeout, and the shipper's and
+    // the meter's final passes must not wait behind it.
     axum::serve(tcp, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            tracing::info!("flushing usage");
+            stop.send(true).ok();
+        })
         .await
         .context("server error")?;
-
-    tracing::info!("flushing usage");
-    stop.send(true).ok();
     if let Err(e) = shipper.await {
         let reason = join_failure_reason(&e);
         tracing::warn!(reason, "the usage shipper did not stop cleanly");
@@ -134,6 +146,20 @@ async fn main() -> Result<()> {
         let reason = join_failure_reason(&e);
         tracing::warn!(reason, "the evaluation metering task did not stop cleanly");
         tracing::debug!(reason, error = %e, "the evaluation metering task did not stop cleanly");
+    }
+    // Evaluations answered during the drain, after the metering task's own
+    // final flush. Bounded server-side: `flush` is not cancel-safe.
+    if let Err(e) = flags_core::metering::flush_with(&db, &evaluations, "5s", Duration::ZERO).await
+    {
+        let f = e.failure_reason();
+        tracing::warn!(
+            reason = f.reason,
+            sqlstate = f.sqlstate(),
+            pending = evaluations.pending(),
+            "could not flush the evaluations answered while draining; they are lost"
+        );
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e,
+            "could not flush the evaluations answered while draining; they are lost");
     }
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
         Ok(Ok(_)) => {}

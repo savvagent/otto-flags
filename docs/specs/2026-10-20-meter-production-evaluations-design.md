@@ -216,7 +216,7 @@ metering::run (background, one per machine)
                                 (skips tombstoned orgs; a pair whose app is gone is refused by the FK and dropped; on failure the counts are added back)
   every CLOSE_EVERY (60 s):
      1. maintenance tx: SELECT DISTINCT org_id of due hours (hour + 1 h + CLOSE_GRACE <= now()), LIMIT 100; commit
-     2. per org, no connection held: Meter::blocked(org) → billable_blocked() (timeout 2 s; error ⇒ not blocked)
+     2. per org, no connection held: Meter::billable_blocked(org) → BlockedLookup (timeout 2 s; Failed ⇒ bill)
      3. maintenance tx: DELETE due rows of those orgs RETURNING … ; INSERT INTO usage_outbox
           n = GREATEST(served, reported)
           billed org  → tool 'sdk_evaluations', billable true,  meter 'otto-flags/evaluations', quantity n
@@ -275,9 +275,10 @@ deleted when its hour closes. Bounded by the active apps over the last ~2 hours.
   lookup failure in a pass skips the rest of that pass's lookups: those orgs are billed (fail
   open). A platform outage therefore costs at most one 2-second timeout per pass.
 
-**Blocked lookup (`usage::Meter::billable_blocked(org) -> bool`):**
+**Blocked lookup (`usage::Meter::billable_blocked(org) -> BlockedLookup`):**
 - Reuses the meter's platform client (60 s cache) with the existing 2 s timeout.
-- Any failure means `false` (fail open: bill). It logs at `warn` with the text-free `Failure` as
+- Returns `Blocked`, `NotBlocked` or `Failed`. Any failure is `Failed`, which bills (fail open)
+  and stops the pass's further lookups. It logs at `warn` with the text-free `Failure` as
   `status_for` does today, and does not remember failures (`fail_open` map removed, see below).
 - It is called only from the metering task, never from a request path.
 
@@ -303,8 +304,10 @@ deleted when its hour closes. Bounded by the active apps over the last ~2 hours.
   `blocked_reason: Option<String>`.
 - The deprecated legacy fields (`included_ops`, `billable_used`, `remaining`, `total_calls`,
   `period_start`, `warning`, `hard_stop`) stay. `enforced` is now always `true`.
-- `blocked_reason` is the platform's, falling back to `budget_exceeded` when `billable_blocked()`
-  is true but the platform gave no reason.
+- `blocked_reason` is set only while `billable_blocked()` is true. It is `payment_required` when
+  the platform says so, and `budget_exceeded` otherwise, including when the platform gave no
+  reason or one this release does not know (as otto-factory's `blocked_code`), so a caller always
+  gets a code it can branch on.
 - Docs say what blocked means here: evaluations keep serving and are not billed while it holds.
 
 **Server (`flags-server`):**

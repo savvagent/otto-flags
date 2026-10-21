@@ -70,7 +70,8 @@ database alone, so a platform outage does not affect flag evaluation.
 Everything else is in `fly.toml`'s `[env]`.
 
 `FLAGS_ENFORCE_QUOTAS` is retired: setting it only logs a startup warning. If it is still a Fly
-secret, unsetting it is cosmetic: `fly secrets unset -a otto-flags FLAGS_ENFORCE_QUOTAS`.
+secret, unsetting it is cosmetic and Rob's (secrets are human-only):
+`fly secrets unset -a otto-flags FLAGS_ENFORCE_QUOTAS`.
 
 ## First deploy (done 2026-10-09)
 
@@ -317,10 +318,14 @@ Production evaluations are billed on the meter `otto-flags/evaluations`. MCP too
 - **Idle suspend.** The app scales to zero, so hours close when a machine is awake. An hour
   closed after the platform's month cutoff (2 h into the next month) is billed in the month it
   arrives.
-- **Stopping.** `kill_timeout = "45s"` in `fly.toml` gives the final flush of evaluation counts
-  time to finish on stop.
+- **Stopping.** On SIGTERM the server stops its background tasks at once, so the usage shipper's
+  final pass and the final flush of evaluation counts run while HTTP drains. Evaluations answered
+  during the drain get one more flush after it. An open SDK flag stream keeps the drain going
+  until `kill_timeout = "15s"` (`fly.toml`); counts that miss both flushes are lost, an
+  undercount.
 - **Rollback.** During a rollout overlap, or after rolling back to a release before this one, the
-  old shipper ships closed-hour rows without their meter (that billing is lost), and the old
+  old shipper ships closed-hour rows without their meter, as one legacy billable call each (the
+  metered quantity is lost), and the old
   release does not close `usage_meter_hourly` (counts wait there until the new release runs
   again). Production runs one machine and no price is set yet, so the cost today is zero.
 

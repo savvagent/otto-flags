@@ -149,7 +149,8 @@ crate module docs.
   `app_keys` and `deleted_orgs` are the deliberate pre-org exceptions.
 - **Request paths open transactions with `platform_events::begin_live`**, never `Db::begin`.
   Unpinned cross-org access goes only through `flags_core::maintenance::begin` (background code:
-  sweeps, the rollback checker's due-policy scan, the usage shipper), which runs as `otto_app`
+  sweeps, the rollback checker's due-policy scan, the usage shipper, the evaluation meter's
+  flush and hour close), which runs as `otto_app`
   when the pool can assume it, else as the pool role only if RLS applies to it, refusing
   otherwise, and sets the `app.maintenance` marker the unpinned RLS policies require.
   Other unpinned queries (key resolution, revocation, tombstones) go through
@@ -173,8 +174,9 @@ crate module docs.
   `billable_blocked`. The SDK path only touches the counter. Reads and dry-runs are never billed.
 - **Every flag change is versioned** in `flag_versions` and calls `pg_notify('flag_changes', …)`
   in the same transaction.
-- **Evaluations are counted, not stored:** hourly rollups from SDK telemetry only (never on the
-  evaluate endpoint), error reports raw and truncated (14 days; rollups 90), no end-user context persisted; `usage_meter_hourly` holds counts per app and hour only.
+- **Evaluations are counted, not stored:** `flag_eval_hourly` rolls up SDK telemetry only (never
+  the evaluate endpoint); error reports are raw and truncated (14 days; rollups 90); no end-user
+  context is persisted. `usage_meter_hourly` holds billing counts per app and hour only.
 - **SDK-reported text is untrusted** when an MCP tool returns it; database error text never
   reaches a tool response.
 - **Rollout bucketing** (SHA-256 of flag key + identifier in `flags_core::eval`) never changes

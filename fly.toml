@@ -16,11 +16,11 @@
 
 app = "otto-flags"
 primary_region = "iad"
-# Time between SIGTERM and SIGKILL. A stop finishes the request in flight,
-# the metering pass already running (its statements are bounded at 30 s),
-# then a final flush of the evaluation counts (bounded at 5 s); Fly's
-# default of 5 s could kill it first and lose those counts.
-kill_timeout = "45s"
+# Time between SIGTERM and SIGKILL. On SIGTERM the server stops its background
+# tasks at once: the usage shipper's final pass and the evaluation meter's
+# final flush (bounded at 5 s) run while HTTP drains. An open SDK flag stream
+# keeps the drain going until this kill, so it is also how long a stop takes.
+kill_timeout = "15s"
 
 [build]
   dockerfile = "Dockerfile"
