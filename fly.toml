@@ -16,6 +16,11 @@
 
 app = "otto-flags"
 primary_region = "iad"
+# Time between SIGTERM and SIGKILL. On SIGTERM the server stops its usage
+# tasks at once: the usage shipper's final pass and the evaluation meter's
+# final flush (bounded at 5 s) run while HTTP drains. An open SDK flag stream
+# keeps the drain going until this kill, so it is also how long a stop takes.
+kill_timeout = "15s"
 
 [build]
   dockerfile = "Dockerfile"

@@ -28,8 +28,36 @@ pub struct Config {
     pub platform_webhook_secret: String,
     pub extra_allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
-    pub enforce_quotas: bool,
+    /// Retired variables ([`RETIRED`]) that are set in the environment, to be
+    /// warned about once logging is up. See [`Config::warn_retired`].
+    pub retired_set: Vec<&'static str>,
     pub log_format: LogFormat,
+}
+
+/// Variables this server no longer reads, with what replaced them. Setting one
+/// is harmless; [`Config::warn_retired`] says so at startup.
+pub const RETIRED: &[(&str, &str)] = &[(
+    "FLAGS_ENFORCE_QUOTAS",
+    "MCP tools are free and never refused for billing; production evaluations are \
+     metered and keep serving. Remove it from the environment",
+)];
+
+/// The retired variables `is_set` reports as present. Presence is what
+/// matters, not the value: `FLAGS_ENFORCE_QUOTAS=false` does nothing either.
+fn retired_set(is_set: impl Fn(&str) -> bool) -> Vec<&'static str> {
+    RETIRED
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| is_set(name))
+        .collect()
+}
+
+fn retired_warning(name: &str) -> String {
+    let why = RETIRED
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or("", |(_, why)| why);
+    format!("{name} is set but has no effect: it is retired. {why}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +74,7 @@ impl std::fmt::Debug for Config {
             .field("public_url", &self.public_url)
             .field("resource_uri", &self.resource_uri)
             .field("platform_url", &self.platform_url)
-            .field("enforce_quotas", &self.enforce_quotas)
+            .field("retired_set", &self.retired_set)
             .finish_non_exhaustive()
     }
 }
@@ -85,13 +113,21 @@ impl Config {
             platform_webhook_secret: required("FLAGS_PLATFORM_WEBHOOK_SECRET")?,
             extra_allowed_hosts: list("FLAGS_ALLOWED_HOSTS"),
             allowed_origins: list("FLAGS_ALLOWED_ORIGINS"),
-            enforce_quotas: parse_var("FLAGS_ENFORCE_QUOTAS", "false", bool_value)?,
+            retired_set: retired_set(|name| std::env::var_os(name).is_some()),
             log_format: parse_var("FLAGS_LOG_FORMAT", "text", |s| match s {
                 "text" => Ok(LogFormat::Text),
                 "json" => Ok(LogFormat::Json),
                 _ => Err(anyhow!("text or json")),
             })?,
         })
+    }
+
+    /// Log a warning for each retired variable that is set, so an operator who
+    /// still sets one learns it does nothing. Call once logging is up.
+    pub fn warn_retired(&self) {
+        for name in &self.retired_set {
+            tracing::warn!(variable = name, "{}", retired_warning(name));
+        }
     }
 
     /// Where an org upgrades its plan, named in plan-gate errors: the
@@ -130,7 +166,7 @@ impl Config {
             platform_webhook_secret: "otto_whsec_test".into(),
             extra_allowed_hosts: vec![],
             allowed_origins: vec![],
-            enforce_quotas: false,
+            retired_set: vec![],
             log_format: LogFormat::Text,
         }
     }
@@ -200,6 +236,35 @@ mod tests {
         assert!(bool_value("TRUE").unwrap());
         assert!(!bool_value("0").unwrap());
         assert!(bool_value("yes-please").is_err());
+    }
+
+    #[test]
+    fn the_retired_quota_switch_is_recognised_whatever_its_value() {
+        // Presence is what counts: `FLAGS_ENFORCE_QUOTAS=true` boots (nothing
+        // parses it) and is named for the startup warning.
+        let set = retired_set(|name| name == "FLAGS_ENFORCE_QUOTAS");
+        assert_eq!(set, vec!["FLAGS_ENFORCE_QUOTAS"]);
+        assert!(retired_set(|_| false).is_empty());
+        assert!(retired_warning("FLAGS_ENFORCE_QUOTAS").contains("FLAGS_ENFORCE_QUOTAS"));
+    }
+
+    /// The only test that touches the process environment.
+    #[test]
+    fn a_deployment_still_setting_the_retired_switch_boots() {
+        for (k, v) in [
+            ("FLAGS_DATABASE_URL", "postgres://localhost/test"),
+            ("FLAGS_PUBLIC_URL", "https://flags.example.com"),
+            ("FLAGS_PLATFORM_URL", "https://platform.example.com"),
+            ("FLAGS_INTROSPECTION_SECRET", "otto_rs_test"),
+            ("FLAGS_PLATFORM_WEBHOOK_SECRET", "otto_whsec_test"),
+            ("FLAGS_ENFORCE_QUOTAS", "true"),
+        ] {
+            std::env::set_var(k, v);
+        }
+        let config = Config::from_env().expect("boots");
+        assert_eq!(config.retired_set, vec!["FLAGS_ENFORCE_QUOTAS"]);
+        std::env::remove_var("FLAGS_ENFORCE_QUOTAS");
+        assert!(Config::from_env().expect("boots").retired_set.is_empty());
     }
 
     #[test]

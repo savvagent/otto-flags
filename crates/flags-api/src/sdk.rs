@@ -107,6 +107,7 @@ pub async fn evaluate(
         .ok_or_else(|| ApiError::flag_not_found(&key))?;
 
     let e = eval::evaluate(flag.view(), &environment, &context);
+    state.evaluations.served(sdk.0.org_id, sdk.0.app_id, 1);
     Ok(Json(EvaluateResponse {
         key: flag.key,
         enabled: e.enabled,

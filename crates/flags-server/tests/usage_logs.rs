@@ -13,14 +13,19 @@ use std::sync::{Arc, Mutex};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{post, put};
 use axum::{Json, Router};
-use otto_resource::{RejectedEvent, UsageBatch, UsageReceipt};
+use otto_resource::{
+    MeterDeclarationBatch, MeterDeclarationReceipt, RejectedEvent, RejectedMeter, UsageBatch,
+    UsageReceipt,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 const BODY_MARKER: &str = "body-marker-7f3a";
 const REASON_MARKER: &str = "reason-marker-c91e";
+const DECLARE_BODY_MARKER: &str = "declare-body-marker-5b20";
+const DECLARE_REASON_MARKER: &str = "declare-reason-marker-e44d";
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -82,10 +87,50 @@ async fn ship(State(calls): State<Arc<Mutex<usize>>>, Json(batch): Json<UsageBat
     .into_response()
 }
 
+/// The first declaration is answered 409 with a body carrying
+/// `DECLARE_BODY_MARKER`; every later one is a receipt rejecting each meter
+/// with a reason carrying `DECLARE_REASON_MARKER`.
+async fn declare(
+    State(calls): State<Arc<Mutex<usize>>>,
+    Json(batch): Json<MeterDeclarationBatch>,
+) -> Response {
+    let call = {
+        let mut n = calls.lock().expect("calls lock");
+        *n += 1;
+        *n
+    };
+    if call == 1 {
+        return (
+            StatusCode::CONFLICT,
+            format!("{{\"error\": \"{DECLARE_BODY_MARKER}\"}}"),
+        )
+            .into_response();
+    }
+    Json(MeterDeclarationReceipt {
+        declared: vec![],
+        rejected: batch
+            .meters
+            .iter()
+            .map(|m| RejectedMeter {
+                key: m.key.clone(),
+                reason: format!("not yours {DECLARE_REASON_MARKER}"),
+            })
+            .collect(),
+    })
+    .into_response()
+}
+
 async fn start_platform() -> String {
     let app = Router::new()
         .route("/internal/usage", post(ship))
-        .with_state(Arc::new(Mutex::new(0usize)));
+        .with_state(Arc::new(Mutex::new(0usize)))
+        .route(
+            "/internal/meters",
+            put({
+                let calls = Arc::new(Mutex::new(0usize));
+                move |Json(batch): Json<MeterDeclarationBatch>| declare(State(calls), Json(batch))
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -155,6 +200,24 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
             .unwrap(),
         1
     );
+
+    // A meter declaration the platform answers with a 409 body, then one with
+    // a rejected-meter receipt: each is retried (the shipper never gives up on
+    // declaring), and neither carries platform text above debug. `run` only
+    // returns on shutdown, so each is cut off after a few retries.
+    let fast = flags_core::usage::ShipperConfig {
+        base_backoff: std::time::Duration::from_millis(5),
+        max_backoff: std::time::Duration::from_millis(10),
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        let (_stop, shutdown) = tokio::sync::watch::channel(false);
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            flags_core::usage::run(db.clone(), platform.clone(), fast.clone(), shutdown),
+        )
+        .await;
+    }
     drop(guard);
 
     let logs = String::from_utf8(capture.0.lock().expect("capture lock").clone()).expect("utf-8");
@@ -165,7 +228,24 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
     {
         assert!(!line.contains(BODY_MARKER), "{line}");
         assert!(!line.contains(REASON_MARKER), "{line}");
+        assert!(!line.contains(DECLARE_BODY_MARKER), "{line}");
+        assert!(!line.contains(DECLARE_REASON_MARKER), "{line}");
     }
+    // The guard is not vacuous: both declaration failures were logged by name,
+    // with the platform's words only at debug.
+    for marker in [DECLARE_BODY_MARKER, DECLARE_REASON_MARKER] {
+        assert!(
+            lines.iter().any(|l| l.contains(" DEBUG ")
+                && l.contains("could not declare the usage meters")
+                && l.contains(marker)),
+            "{marker} missing from the debug log: {logs}"
+        );
+    }
+    let declare_errors = lines
+        .iter()
+        .filter(|l| l.contains(" ERROR ") && l.contains("could not declare the usage meters"))
+        .count();
+    assert_eq!(declare_errors, 2, "{logs}");
     let refused: Vec<&&str> = lines
         .iter()
         .filter(|l| l.contains(" ERROR ") && l.contains("refused a usage event"))

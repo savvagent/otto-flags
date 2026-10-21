@@ -14,7 +14,9 @@
 //! The contract is the one in `docs/SDK-DEVELOPER-GUIDE.md`, kept as-is so the
 //! SDKs in `packages/` work unchanged. Keys travel in `Authorization: Bearer`
 //! or `X-SDK-Key`, never in a URL. This surface is the hot path: nothing here
-//! calls the platform or an LLM, and no tool is metered. Telemetry may hint the
+//! calls the platform or an LLM. Evaluations are counted for billing in memory
+//! only ([`flags_core::metering::EvalCounter`]); no request statement is added
+//! for it, and a background task writes the counts. Telemetry may hint the
 //! rollback checker, in-process and after commit, which still makes no
 //! platform call.
 
@@ -30,6 +32,7 @@ use std::time::Duration;
 use axum::routing::{get, post};
 use axum::Router;
 use flags_core::keys::{KeyLookups, UnknownKeys};
+use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::Hints;
 use http::{header, HeaderName, Method};
@@ -55,6 +58,9 @@ pub struct AppState {
     /// from the pool, so a flood of distinct unknown keys leaves connections
     /// for everything else (#120).
     pub key_lookups: Arc<KeyLookups>,
+    /// Counts served and reported evaluations in memory, for the background
+    /// metering task to flush. Counting never waits on the database.
+    pub evaluations: Arc<EvalCounter>,
 }
 
 impl AppState {
@@ -62,6 +68,7 @@ impl AppState {
         db: Db,
         listener: Listener,
         hints: Hints,
+        evaluations: Arc<EvalCounter>,
         platform_webhook_secret: impl Into<String>,
     ) -> Self {
         Self {
@@ -69,6 +76,7 @@ impl AppState {
             db,
             listener,
             hints,
+            evaluations,
             platform_webhook_secret: platform_webhook_secret.into(),
             heartbeat: Duration::from_secs(30),
             unknown_keys: Arc::new(UnknownKeys::new()),

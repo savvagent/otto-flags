@@ -11,7 +11,8 @@
 //! pinned access alone and require the marker only when unpinned.
 //!
 //! **Only background maintenance code may call [`begin`]**: the retention
-//! sweeps, the rollback checker's backstop, and the usage shipper. Never a
+//! sweeps, the rollback checker's backstop, the usage shipper, and the
+//! evaluation meter's flush and hour close ([`crate::metering`]). Never a
 //! request handler or a tool, which always go through a pinned transaction
 //! ([`crate::platform_events::begin_live`]). It is `pub(crate)` so nothing
 //! outside this crate can reach it.

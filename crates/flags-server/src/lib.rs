@@ -29,6 +29,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use axum::Router;
 use flags_core::entitlements::Entitlements;
+use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::{Checker, CheckerConfig, Hints};
 use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
@@ -56,6 +57,7 @@ pub fn router(
     platform: Arc<PlatformClient>,
     listener: Listener,
     hints: Hints,
+    evaluations: Arc<EvalCounter>,
     config: &Config,
 ) -> Router {
     let mcp = flags_mcp::router(db.clone(), mcp_config(platform, config));
@@ -63,6 +65,7 @@ pub fn router(
         db.clone(),
         listener,
         hints,
+        evaluations,
         &config.platform_webhook_secret,
     ));
     let page = Arc::new(install_page::InstallPage::new(
@@ -155,7 +158,6 @@ fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Conf
     );
     mcp.allowed_hosts = config.allowed_hosts();
     mcp.allowed_origins = config.allowed_origins.clone();
-    mcp.enforce_quotas = config.enforce_quotas;
     mcp.upgrade_url = config.upgrade_url();
     mcp
 }
@@ -214,6 +216,7 @@ mod tests {
             platform_client(&config).unwrap(),
             Listener::detached(),
             Hints::detached(),
+            Default::default(),
             &config,
         )
     }

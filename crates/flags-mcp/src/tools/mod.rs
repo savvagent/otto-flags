@@ -57,7 +57,7 @@ pub const NAMES: &[&str] = &[
 
 /// Tools that only read. The rule: no write scope is required and no state a
 /// caller can observe changes. Every tool but `propose_rollback` records a usage row through
-/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true`
+/// `Flags::charge`, but no row is billable. `readOnlyHint = true`
 /// lets connector clients run these without asking. `propose_rollback` is a
 /// dry run and belongs here.
 ///
@@ -95,11 +95,9 @@ pub const DESTRUCTIVE: &[&str] = &[
     "remove_rollback_policy",
 ];
 
-/// Writes whose repeat has no further effect (`idempotentHint = true`). This
-/// excludes every billable tool, since each call records usage: a repeat is
-/// another charge. Of the writes, only `remove_rollback_policy` is not
-/// billable, and removing an absent policy deletes nothing and writes no audit
-/// row; only its non-billable usage row repeats.
+/// Writes whose repeat has no further effect (`idempotentHint = true`). Of the
+/// writes, only `remove_rollback_policy` qualifies: removing an absent policy
+/// deletes nothing and writes no audit row; only its free usage row repeats.
 pub const IDEMPOTENT: &[&str] = &["remove_rollback_policy"];
 
 #[cfg(test)]
@@ -107,7 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_named_tool_is_routed_and_metered_consistently() {
+    fn every_named_tool_is_routed() {
         let routed: Vec<String> = router()
             .list_all()
             .into_iter()
@@ -118,10 +116,16 @@ mod tests {
         expected.sort();
         got.sort();
         assert_eq!(got, expected);
-        for billable in flags_core::usage::BILLABLE {
+    }
+
+    #[test]
+    fn no_tool_is_billable() {
+        assert!(flags_core::usage::BILLABLE.is_empty());
+        for tool in router().list_all() {
+            let name = tool.name.to_string();
             assert!(
-                NAMES.contains(billable),
-                "{billable} is billed but is not a tool"
+                !flags_core::usage::is_billable(&name),
+                "{name} is billable; every MCP tool is free"
             );
         }
     }
@@ -180,19 +184,6 @@ mod tests {
     /// delegate to `set_archived`).
     #[test]
     fn read_only_tools_change_nothing() {
-        for name in READ_ONLY {
-            assert!(
-                !flags_core::usage::BILLABLE.contains(name),
-                "{name} is read-only but billable"
-            );
-        }
-        // A billed repeat is another charge, so no billable tool is idempotent.
-        for name in IDEMPOTENT {
-            assert!(
-                !flags_core::usage::BILLABLE.contains(name),
-                "{name} is idempotent but billable"
-            );
-        }
         let sources = [
             ("org.rs", include_str!("org.rs")),
             ("apps.rs", include_str!("apps.rs")),

@@ -1,5 +1,9 @@
-//! Who am I, and how much budget is left. Both free: a caller must never have
-//! to spend an operation to find out how many it has.
+//! Who am I, and where does the org stand. Every tool here is free, these two
+//! included. Billing is on production evaluations by the SDKs
+//! (`otto-flags/evaluations`), so `whoami` and `usage` report the org's
+//! `meters`, `budget` and `blockedReason` from the platform. A blocked reason
+//! never refuses a tool: evaluations keep serving and are not billed while it
+//! holds.
 
 use rmcp::handler::server::tool::Extension;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -18,8 +22,10 @@ impl Flags {
     #[tool(
         name = "whoami",
         description = "Who this token says you are: your user, the one organization it opens, your \
-                       role there, the scopes it carries, and how much of this month's allowance is \
-                       left. Call this first in a session. Free.",
+                       role there, the scopes it carries, and where the organization stands on \
+                       billing: `meters` (this month's usage), `budget`, and `blockedReason`. \
+                       Every tool is free; billing is on production evaluations by the SDKs \
+                       (otto-flags/evaluations). Call this first in a session.",
         annotations(read_only_hint = true)
     )]
     pub async fn whoami(
@@ -69,10 +75,13 @@ impl Flags {
 
     #[tool(
         name = "usage",
-        description = "How much of this organization's monthly allowance (shared across every otto \
-                       service it uses) has been used and how much is left. Changes to apps and \
-                       flags consume it; reads, evaluate_flag and flag_health do not. Free. If \
-                       `warning` is true, tell the person you are working for.",
+        description = "Where this organization stands on billing: `meters` (this month's \
+                       usage, such as otto-flags/evaluations), `budget` (the monthly budget and \
+                       spend, if one is set), and `blockedReason` (set when the platform blocks \
+                       billable usage; evaluations keep serving and are not billed meanwhile). \
+                       Every tool is free; billing is on production evaluations by the SDKs. The \
+                       older allowance fields are deprecated. If `blockedReason` is set, tell the \
+                       person you are working for.",
         annotations(read_only_hint = true)
     )]
     pub async fn usage(

@@ -105,7 +105,7 @@ has reviewed or commented on any PR here (#3, #6, #8, #10).
 ### Ship
 - deploy: ci-auto
 - merge gate: on the PR's head SHA: `rust`, `docker-build`, `migrations-append-only` (CI workflow) succeeded; `Test` (SDKs workflow) succeeded when any changed file matches `packages/**`, `examples/**`, `package.json`, `pnpm-lock.yaml`, or `pnpm-workspace.yaml` (the workflow's own path filter); `Rust SDK` (Rust SDK workflow) succeeded when any changed file matches `packages/rust-server/**`, `rust-toolchain.toml`, or `.github/workflows/rust-sdk.yml`; plus every other check that ran on the head SHA (the ruleset requires none)
-- verify: the SHA proxy is the `deploy` job of the CI run for the merge SHA (`gh run list -R savvagent/otto-flags --workflow CI --commit <merge SHA> --json databaseId,status,conclusion`, then `gh run view <id> -R savvagent/otto-flags --json jobs`); `/readyz` does not report a SHA. Then `fly releases -a otto-flags` shows a new release; `fly status -a otto-flags` shows the `app` machines on it; `curl -s https://otto-flags.savvagent.com/readyz` returns `{"status":"ready"}` (the first request may resume a suspended machine); `fly logs -a otto-flags --no-tail` shows `applying migrations`, `tenant isolation enforced as role "otto_app"`, and `the otto platform accepted this service's credential`; then exercise the changed surface read-only (`/mcp` tools via an MCP client, `whoami` first, or the changed `/api/...` route). A change outside `crates/`, `Dockerfile`, `fly.toml`, and the root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` (SDKs, examples, docs, workflows) redeploys unchanged server code: verify health only and state that the changed surface is not deployed. A machine failing `/readyz` fails the deploy: merged, not live. Do not assume Fly rolled it back: `fly status` must show no `app` machine left on the failed release (moving one back is a hand deploy, Rob's; `docs/deploy/fly.md`, When a migration fails). A previous release boots against a newer schema because `MIGRATOR` ignores migration versions it does not know (`crates/flags-core/src/migrate.rs`).
+- verify: the SHA proxy is the `deploy` job of the CI run for the merge SHA (`gh run list -R savvagent/otto-flags --workflow CI --commit <merge SHA> --json databaseId,status,conclusion`, then `gh run view <id> -R savvagent/otto-flags --json jobs`); `/readyz` does not report a SHA. Then `fly releases -a otto-flags` shows a new release; `fly status -a otto-flags` shows the `app` machines on it; `curl -s https://otto-flags.savvagent.com/readyz` returns `{"status":"ready"}` (the first request may resume a suspended machine); `fly logs -a otto-flags --no-tail` shows `applying migrations`, `tenant isolation enforced as role "otto_app"`, `the otto platform accepted this service's credential`, and `declared usage meters` (without it no usage ships; see `docs/deploy/fly.md`, Metering); then exercise the changed surface read-only (`/mcp` tools via an MCP client, `whoami` first, or the changed `/api/...` route). A change outside `crates/`, `Dockerfile`, `fly.toml`, and the root `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` (SDKs, examples, docs, workflows) redeploys unchanged server code: verify health only and state that the changed surface is not deployed. A machine failing `/readyz` fails the deploy: merged, not live. Do not assume Fly rolled it back: `fly status` must show no `app` machine left on the failed release (moving one back is a hand deploy, Rob's; `docs/deploy/fly.md`, When a migration fails). A previous release boots against a newer schema because `MIGRATOR` ignores migration versions it does not know (`crates/flags-core/src/migrate.rs`).
 - release: server: none (continuous deploy of every push to `main`). Changesets apply to pnpm packages only: a change to a published pnpm package (`packages/*` with a `package.json`) adds a changeset (`pnpm changeset`); docs- and test-only changes do not. npm publishing is not automated (`.github/workflows/release.yml` triggers on `master`, which does not exist) and no `@otto-flags/*` package is on npm, so a merged SDK change is merged, not published. The Rust crate (`packages/rust-server`, `otto-flags`), Go, Python, Java, iOS, and Android SDKs are not published (not on crates.io, PyPI, Maven Central, or the Go proxy; the Go module path names a repo, `savvagent/otto-flags-go-server-sdk`, that does not exist); a release is a human decision (Rob). Do not bump their versions in a change PR.
 - version files: packages/*/package.json, packages/rust-server/Cargo.toml, packages/python-server/pyproject.toml, packages/java-server/pom.xml, packages/android-sdk/build.gradle.kts
 
@@ -149,7 +149,8 @@ crate module docs.
   `app_keys` and `deleted_orgs` are the deliberate pre-org exceptions.
 - **Request paths open transactions with `platform_events::begin_live`**, never `Db::begin`.
   Unpinned cross-org access goes only through `flags_core::maintenance::begin` (background code:
-  sweeps, the rollback checker's due-policy scan, the usage shipper), which runs as `otto_app`
+  sweeps, the rollback checker's due-policy scan, the usage shipper, the evaluation meter's
+  flush and hour close), which runs as `otto_app`
   when the pool can assume it, else as the pool role only if RLS applies to it, refusing
   otherwise, and sets the `app.maintenance` marker the unpinned RLS policies require.
   Other unpinned queries (key resolution, revocation, tombstones) go through
@@ -166,12 +167,16 @@ crate module docs.
   (`flags:read`, `flags:write`, `apps:admin`); app creation, key rotation, and setting a rollback
   policy's `includeClientReports` do a fresh owner/admin lookup at the platform. `flags_core::scopes::KNOWN`/`DEFAULT` match the platform
   registration.
-- **Metering:** billable MCP writes record usage in the tool's own transaction into
-  `usage_outbox`. Reads, dry-run evaluation, and SDK evaluation are not metered.
+- **Metering:** MCP tools record a free usage row in their own transaction (nothing an agent does
+  is billed). Production evaluations are counted in memory (`flags_core::metering::EvalCounter`),
+  flushed to `usage_meter_hourly`, closed hourly into `usage_outbox` on `otto-flags/evaluations` as
+  `GREATEST(served, reported)` (`reported` = server-key telemetry only), unmetered while the org is
+  `billable_blocked`. The SDK path only touches the counter. Reads and dry-runs are never billed.
 - **Every flag change is versioned** in `flag_versions` and calls `pg_notify('flag_changes', …)`
   in the same transaction.
-- **Evaluations are counted, not stored:** hourly rollups from SDK telemetry only (never on the
-  evaluate endpoint), error reports raw and truncated (14 days; rollups 90), no end-user context persisted.
+- **Evaluations are counted, not stored:** `flag_eval_hourly` rolls up SDK telemetry only (never
+  the evaluate endpoint); error reports are raw and truncated (14 days; rollups 90); no end-user
+  context is persisted. `usage_meter_hourly` holds billing counts per app and hour only.
 - **SDK-reported text is untrusted** when an MCP tool returns it; database error text never
   reaches a tool response.
 - **Rollout bucketing** (SHA-256 of flag key + identifier in `flags_core::eval`) never changes

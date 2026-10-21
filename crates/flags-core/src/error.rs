@@ -51,18 +51,6 @@ pub enum Error {
     AccessRevoked,
 
     #[error(
-        "this organization has used all {included} operations its {plan} plan includes this \
-         month ({used} so far), so {tool} was refused. Reads still work. Upgrade at {upgrade_url}"
-    )]
-    QuotaExceeded {
-        tool: String,
-        used: i64,
-        included: i64,
-        plan: String,
-        upgrade_url: String,
-    },
-
-    #[error(
         "{feature} is not included in this organization's {plan} plan, so this was refused. \
          Upgrade at {upgrade_url}"
     )]
@@ -107,7 +95,6 @@ impl Error {
             Error::DuplicateFlagKey { .. } => "duplicate_flag_key",
             Error::VersionConflict { .. } => "version_conflict",
             Error::AccessRevoked => "access_revoked",
-            Error::QuotaExceeded { .. } => "quota_exceeded",
             Error::FeatureNotInPlan { .. } => "feature_not_in_plan",
             Error::EntitlementUnavailable { .. } | Error::Platform(_) => "platform_unavailable",
             Error::Busy => "busy",

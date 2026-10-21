@@ -1,7 +1,6 @@
 //! Auto-rollback policies: arm one per flag and environment, see what it
-//! would do, and read what it did. Creating a policy is billed and plan-gated;
-//! everything else is free, so a downgraded or over-quota org can always look
-//! at and clean up what it has.
+//! would do, and read what it did. Creating a policy is plan-gated; every tool
+//! is free, and a downgraded org can always look at and clean up what it has.
 //!
 //! Nothing here returns reported text: policies, samples, and events are
 //! numbers, ids, and enums.
@@ -166,7 +165,7 @@ impl Flags {
                        policy does not re-arm a tripped one (turn the environment back on to \
                        re-arm). By default only telemetry reported with the server key counts \
                        (includeClientReports opts in, needs an owner or admin). Needs a plan \
-                       with auto-rollback; billed as a change.",
+                       with auto-rollback.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,

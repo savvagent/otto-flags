@@ -69,8 +69,7 @@ fn respond(e: &Error) -> ErrorData {
     } else {
         let rpc = match e {
             // Well-formed calls the server declined: not argument errors.
-            Error::QuotaExceeded { .. }
-            | Error::FeatureNotInPlan { .. }
+            Error::FeatureNotInPlan { .. }
             | Error::AccessRevoked
             | Error::VersionConflict { .. } => ErrorCode::INVALID_REQUEST,
             // Ours to say, but the platform could not be asked: not the caller's fault.

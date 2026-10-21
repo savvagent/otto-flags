@@ -2,12 +2,14 @@
 //! background tasks (usage shipper, flag-change listener, rollback checker,
 //! retention sweeps).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::CheckerConfig;
-use flags_core::usage::ShipperConfig;
+use flags_core::usage::{Meter, ShipperConfig};
 use flags_server::{platform_client, router, spawn_checker, watch_checker, Config, LogFormat};
 use otto_tenant::Db;
 use tokio::net::TcpListener;
@@ -25,6 +27,7 @@ async fn main() -> Result<()> {
          variables named above in the deployment",
     )?;
     init_tracing(config.log_format);
+    config.warn_retired();
     if let Ok(path) = dotenv {
         tracing::debug!(path = %path.display(), "loaded .env");
     }
@@ -74,12 +77,24 @@ async fn main() -> Result<()> {
     check_platform(&platform, &config).await;
 
     let (stop, shutdown) = tokio::sync::watch::channel(false);
+    // Usage is flushed on its own, earlier signal (see the graceful shutdown
+    // below). Everything else, the flag-change listener above all, keeps
+    // running until the HTTP drain ends, so a stream still open during the
+    // drain keeps receiving changes (a kill switch included).
+    let (stop_usage, usage_shutdown) = tokio::sync::watch::channel(false);
     let listener = Listener::spawn(db.pool().clone(), shutdown.clone());
     let shipper = tokio::spawn(flags_core::usage::run(
         db.clone(),
         platform.clone(),
         ShipperConfig::default(),
-        shutdown.clone(),
+        usage_shutdown.clone(),
+    ));
+    let evaluations = Arc::new(EvalCounter::default());
+    let metering = tokio::spawn(flags_core::metering::run(
+        db.clone(),
+        Meter::new(platform.clone()),
+        evaluations.clone(),
+        usage_shutdown,
     ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
 
@@ -96,7 +111,14 @@ async fn main() -> Result<()> {
     let checker_abort = checker.abort_handle();
     let mut checker = tokio::spawn(watch_checker(checker, shutdown.clone()));
 
-    let app = router(db, platform, listener, hints, &config);
+    let app = router(
+        db.clone(),
+        platform,
+        listener,
+        hints,
+        evaluations.clone(),
+        &config,
+    );
     let tcp = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("could not bind {}", config.bind))?;
@@ -105,21 +127,52 @@ async fn main() -> Result<()> {
         public_url = %config.public_url,
         resource_uri = %config.resource_uri,
         platform_url = %config.platform_url,
-        enforce_quotas = config.enforce_quotas,
         "flags-server listening"
     );
 
+    // Stop the usage tasks as soon as the signal arrives, not after the HTTP
+    // drain: an SDK flag stream stays open until the client goes, so the drain
+    // can outlast the platform's kill timeout, and the shipper's and the
+    // meter's final passes must not wait behind it.
     axum::serve(tcp, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            tracing::info!("flushing usage");
+            stop_usage.send(true).ok();
+        })
         .await
         .context("server error")?;
 
-    tracing::info!("flushing usage");
     stop.send(true).ok();
     if let Err(e) = shipper.await {
         let reason = join_failure_reason(&e);
         tracing::warn!(reason, "the usage shipper did not stop cleanly");
         tracing::debug!(reason, error = %e, "the usage shipper did not stop cleanly");
+    }
+    if let Err(e) = metering.await {
+        let reason = join_failure_reason(&e);
+        tracing::warn!(reason, "the evaluation metering task did not stop cleanly");
+        tracing::debug!(reason, error = %e, "the evaluation metering task did not stop cleanly");
+    }
+    // Evaluations answered during the drain, after the metering task's own
+    // final flush. Bounded server-side: `flush` is not cancel-safe.
+    if let Err(e) = flags_core::metering::flush_with(
+        &db,
+        &evaluations,
+        flags_core::metering::FINAL_FLUSH_TIMEOUT,
+        Duration::ZERO,
+    )
+    .await
+    {
+        let f = e.failure_reason();
+        tracing::warn!(
+            reason = f.reason,
+            sqlstate = f.sqlstate(),
+            pending = evaluations.pending(),
+            "could not flush the evaluations answered while draining; they are lost"
+        );
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), error = %e,
+            "could not flush the evaluations answered while draining; they are lost");
     }
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
         Ok(Ok(_)) => {}

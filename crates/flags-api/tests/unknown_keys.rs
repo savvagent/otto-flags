@@ -18,6 +18,7 @@ async fn a_repeated_unknown_key_is_refused_from_memory(pool: PgPool) {
         otto_tenant::Db::from_pool(pool),
         Listener::detached(),
         Hints::detached(),
+        Default::default(),
         "otto_whsec_test",
     );
     let app = flags_api::router(state.clone());

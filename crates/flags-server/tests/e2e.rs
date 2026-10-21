@@ -15,14 +15,15 @@ use axum::routing::{get, post};
 use axum::{Form, Json, Router};
 use flags_core::apps::AppsExt;
 use flags_core::flags::FlagsExt;
+use flags_core::metering::{self, EvalCounter};
 use flags_core::notify::{FlagChange, Listener};
 use flags_core::platform_events::begin_live;
 use flags_core::rollback::{CheckerConfig, Hints, Mode, RollbackExt, Thresholds};
 use flags_server::{platform_client, router, spawn_checker, Config};
 use http::{Request, StatusCode};
 use otto_resource::{
-    IntrospectionResponse, MemberInfo, OrgInfo, RejectedEvent, Role, TokenKind, UsageBatch,
-    UsageReceipt, UserInfo,
+    IntrospectionResponse, MemberInfo, MeterDeclarationBatch, MeterDeclarationReceipt, OrgInfo,
+    RejectedEvent, Role, TokenKind, UsageBatch, UsageEvent, UsageReceipt, UserInfo,
 };
 use otto_tenant::ids::{OrgId, UserId};
 use otto_tenant::Db;
@@ -46,6 +47,14 @@ struct Platform {
     legacy: HashSet<Uuid>,
     /// Orgs whose usage status the platform cannot serve (503).
     unavailable: HashSet<Uuid>,
+    /// Meters, as the platform reports them in the usage status, per org.
+    /// Orgs absent here are answered as a platform that predates meters does:
+    /// no `meters`, `budget` or `blocked_reason` keys.
+    meters: HashMap<Uuid, Value>,
+    /// The budget object in the usage status, per org.
+    budget: HashMap<Uuid, Value>,
+    /// The `blocked_reason` in the usage status, per org.
+    blocked_reason: HashMap<Uuid, String>,
     /// Usage-status requests received, per org.
     usage_status_hits: HashMap<Uuid, usize>,
     /// When set, every shipped usage event is rejected with this reason.
@@ -57,6 +66,24 @@ struct Platform {
     usage_gate: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
     /// When set, every usage batch is answered 502.
     fail_usage: bool,
+    /// How the next `PUT /internal/meters` calls are answered, front first;
+    /// once empty, a declaration is accepted.
+    meter_modes: std::collections::VecDeque<MeterMode>,
+    /// Every request to the meter and usage routes, in arrival order.
+    calls: Vec<&'static str>,
+    /// Keys of every accepted declaration.
+    declared: Vec<String>,
+    /// Every usage event received, in order.
+    events: Vec<UsageEvent>,
+}
+
+/// How the mock answers one meter declaration.
+#[derive(Clone, Copy)]
+enum MeterMode {
+    /// The platform has no slug for this service: `409 service_not_set`.
+    ServiceNotSet,
+    /// `200` with every meter in `rejected`.
+    Rejected,
 }
 
 type Shared = Arc<Mutex<Platform>>;
@@ -104,6 +131,15 @@ async fn usage_status(
         "included_ops": 1000,
         "hard_stop": false,
     });
+    if let Some(m) = p.meters.get(&org) {
+        status["meters"] = m.clone();
+    }
+    if let Some(b) = p.budget.get(&org) {
+        status["budget"] = b.clone();
+    }
+    if let Some(r) = p.blocked_reason.get(&org) {
+        status["blocked_reason"] = json!(r);
+    }
     if !p.legacy.contains(&org) {
         status["features"] = if p.entitled.contains(&org) {
             json!({"auto_rollback": true})
@@ -114,10 +150,48 @@ async fn usage_status(
     Ok(Json(status))
 }
 
+async fn declare_meters(
+    State(p): State<Shared>,
+    Json(b): Json<MeterDeclarationBatch>,
+) -> Result<Json<MeterDeclarationReceipt>, (StatusCode, Json<Value>)> {
+    let mut p = p.lock().unwrap();
+    p.calls.push("meters");
+    match p.meter_modes.pop_front() {
+        Some(MeterMode::ServiceNotSet) => Err((
+            StatusCode::CONFLICT,
+            Json(json!({"error": "service_not_set"})),
+        )),
+        Some(MeterMode::Rejected) => Ok(Json(MeterDeclarationReceipt {
+            declared: vec![],
+            rejected: b
+                .meters
+                .iter()
+                .map(|m| otto_resource::RejectedMeter {
+                    key: m.key.clone(),
+                    reason: "outside this service".into(),
+                })
+                .collect(),
+        })),
+        None => {
+            let keys: Vec<String> = b.meters.iter().map(|m| m.key.clone()).collect();
+            p.declared.extend(keys.clone());
+            Ok(Json(MeterDeclarationReceipt {
+                declared: keys,
+                rejected: vec![],
+            }))
+        }
+    }
+}
+
 async fn ship(
     State(p): State<Shared>,
     Json(b): Json<UsageBatch>,
 ) -> Result<Json<UsageReceipt>, StatusCode> {
+    {
+        let mut p = p.lock().unwrap();
+        p.calls.push("usage");
+        p.events.extend(b.events.iter().cloned());
+    }
     let gate = p.lock().unwrap().usage_gate.clone();
     if let Some(gate) = gate {
         let (release, released) = tokio::sync::oneshot::channel();
@@ -181,6 +255,7 @@ async fn start_platform() -> (String, Shared) {
         .route("/oauth/introspect", post(introspect))
         .route("/internal/orgs/{org}/usage-status", get(usage_status))
         .route("/internal/usage", post(ship))
+        .route("/internal/meters", axum::routing::put(declare_meters))
         .route("/internal/orgs/{org}/members/{user}", get(member))
         .with_state(shared.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -215,6 +290,7 @@ struct Server {
     app: Router,
     db: Db,
     platform: Arc<otto_resource::PlatformClient>,
+    evaluations: Arc<EvalCounter>,
 }
 
 async fn server(pool: PgPool, platform_url: &str) -> Server {
@@ -222,16 +298,19 @@ async fn server(pool: PgPool, platform_url: &str) -> Server {
     config.platform_url = platform_url.into();
     let db = Db::from_pool(pool);
     let platform = platform_client(&config).unwrap();
+    let evaluations = Arc::new(EvalCounter::default());
     Server {
         app: router(
             db.clone(),
             platform.clone(),
             Listener::detached(),
             Hints::detached(),
+            evaluations.clone(),
             &config,
         ),
         db,
         platform,
+        evaluations,
     }
 }
 
@@ -273,16 +352,19 @@ async fn live_server(pool: PgPool, platform_url: &str) -> (Server, Live) {
         },
         rx,
     );
+    let evaluations = Arc::new(EvalCounter::default());
     let server = Server {
         app: router(
             db.clone(),
             platform.clone(),
             listener.clone(),
             hints,
+            evaluations.clone(),
             &config,
         ),
         db,
         platform,
+        evaluations,
     };
     (
         server,
@@ -1573,10 +1655,10 @@ async fn tools_list_carries_annotations(pool: PgPool) {
     assert!(evaluate.contains("not billed"), "{evaluate}");
 }
 
-/// Only setting a policy is billed; the rest record a free row, except the
-/// dry run, which records none. A refused set is never billed.
+/// Every tool is free: setting a policy records a row with `billable = false`
+/// like the rest, except the dry run, which records none.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
-async fn only_setting_a_policy_is_billed(pool: PgPool) {
+async fn setting_a_policy_is_recorded_as_not_billable(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool.clone(), &url).await;
     let org = Uuid::new_v4();
@@ -1625,9 +1707,66 @@ async fn only_setting_a_policy_is_billed(pool: PgPool) {
             ("list_rollback_policies".to_string(), false, 1),
             ("remove_rollback_policy".to_string(), false, 1),
             ("rollback_events".to_string(), false, 1),
-            ("set_rollback_policy".to_string(), true, 1),
+            ("set_rollback_policy".to_string(), false, 1),
         ]
     );
+}
+
+/// `whoami` and `usage` report the platform's meters, budget and blocked reason,
+/// and every write tool records a free row. A platform that predates meters
+/// still answers: the new fields are empty, the legacy ones are filled.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn whoami_and_usage_report_meters_and_budget(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let (org, legacy_org) = (Uuid::new_v4(), Uuid::new_v4());
+    {
+        let mut p = platform.lock().unwrap();
+        p.meters.insert(
+            org,
+            json!([{"meter": "otto-flags/evaluations", "display_name": "Evaluations",
+                    "unit": "evaluation", "quantity": 1200}]),
+        );
+        p.budget.insert(
+            org,
+            json!({"monthly_budget_cents": 5000, "spend_cents": 5000, "percent_used": 100,
+                   "thresholds_reached": [50, 80, 100], "hard_stop": true, "blocked": true,
+                   "reason": "budget_exceeded"}),
+        );
+        p.blocked_reason.insert(org, "budget_exceeded".into());
+    }
+    let (t, _, _, _) = org_with_flag(&s, &platform, org, "risky").await;
+
+    // A write tool is recorded, free, even while the platform reports blocked.
+    let billable: Vec<bool> =
+        sqlx::query_scalar("SELECT billable FROM usage_outbox WHERE tool = 'create_flag'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(billable, vec![false]);
+
+    let who = tool(&s.app, &t, "whoami", json!({})).await.unwrap();
+    let usage = tool(&s.app, &t, "usage", json!({})).await.unwrap();
+    for status in [&who["usage"], &usage["usage"]] {
+        assert_eq!(status["meters"][0]["meter"], "otto-flags/evaluations");
+        assert_eq!(status["meters"][0]["displayName"], "Evaluations");
+        assert_eq!(status["meters"][0]["quantity"], 1200);
+        assert_eq!(status["budget"]["monthlyBudgetCents"], 5000);
+        assert_eq!(status["budget"]["reason"], "budget_exceeded");
+        assert_eq!(status["blockedReason"], "budget_exceeded");
+        assert_eq!(status["enforced"], true);
+    }
+
+    // The legacy shape: no meters, no budget, nothing blocked.
+    let (lt, _, _, _) = {
+        platform.lock().unwrap().legacy.insert(legacy_org);
+        org_with_flag(&s, &platform, legacy_org, "risky").await
+    };
+    let usage = tool(&s.app, &lt, "usage", json!({})).await.unwrap();
+    assert_eq!(usage["usage"]["meters"], json!([]));
+    assert_eq!(usage["usage"]["budget"], Value::Null);
+    assert_eq!(usage["usage"]["blockedReason"], Value::Null);
+    assert_eq!(usage["usage"]["includedOps"], 1000);
 }
 
 /// A failed plan lookup is remembered for a few seconds, so an outage costs
@@ -1699,6 +1838,141 @@ async fn a_rejected_usage_event_keeps_a_capped_reason(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+/// A metered outbox row the way the hour close writes it.
+async fn insert_metered(pool: &PgPool, org: Uuid, quantity: i64) -> Uuid {
+    sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable, meter, quantity) \
+         VALUES ($1, NULL, 'sdk_evaluations', true, 'otto-flags/evaluations', $2) \
+         RETURNING event_id",
+    )
+    .bind(org)
+    .bind(quantity)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn ship_once_sends_the_meter_and_quantity_of_a_metered_row(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = insert_metered(s.db.pool(), Uuid::new_v4(), 1234).await;
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let p = platform.lock().unwrap();
+    let e = p.events.iter().find(|e| e.event_id == event_id).unwrap();
+    assert_eq!(e.meter.as_deref(), Some("otto-flags/evaluations"));
+    assert_eq!(e.quantity, Some(1234));
+    assert_eq!(e.service, None);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_rejected_metered_row_keeps_its_meter_and_quantity(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = insert_metered(s.db.pool(), Uuid::new_v4(), 55).await;
+    platform.lock().unwrap().reject_with = Some("unknown meter".into());
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    let (meter, quantity): (Option<String>, Option<i64>) =
+        sqlx::query_as("SELECT meter, quantity FROM usage_outbox_rejected WHERE event_id = $1")
+            .bind(event_id)
+            .fetch_one(s.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(meter.as_deref(), Some("otto-flags/evaluations"));
+    assert_eq!(quantity, Some(55));
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+/// Runs `usage::run` against the mock until `done` holds, then stops it.
+async fn run_shipper_until(
+    s: &Server,
+    platform: &Shared,
+    done: impl Fn(&Platform) -> bool,
+) -> Vec<&'static str> {
+    let cfg = flags_core::usage::ShipperConfig {
+        poll: Duration::from_millis(20),
+        base_backoff: Duration::from_millis(10),
+        max_backoff: Duration::from_millis(40),
+        ..Default::default()
+    };
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(flags_core::usage::run(
+        s.db.clone(),
+        s.platform.clone(),
+        cfg,
+        shutdown,
+    ));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !done(&platform.lock().unwrap()) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the shipper reaches the expected state");
+    stop.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("the shipper stops on shutdown")
+        .unwrap();
+    let calls = platform.lock().unwrap().calls.clone();
+    calls
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_shipper_declares_the_evaluations_meter_before_its_first_shipment(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+
+    let calls = run_shipper_until(&s, &platform, |p| p.shipped >= 1).await;
+    assert_eq!(calls.first(), Some(&"meters"), "{calls:?}");
+    assert!(calls.contains(&"usage"), "{calls:?}");
+    assert_eq!(
+        platform.lock().unwrap().declared,
+        vec!["otto-flags/evaluations".to_string()]
+    );
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_failed_declaration_holds_shipping_until_it_succeeds(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+    platform.lock().unwrap().meter_modes = [MeterMode::ServiceNotSet, MeterMode::Rejected].into();
+
+    let calls = run_shipper_until(&s, &platform, |p| p.shipped >= 1).await;
+    // Two refused declarations and a third that succeeded, all before the
+    // first shipment; the row stayed queued meanwhile.
+    let first_usage = calls.iter().position(|c| *c == "usage").unwrap();
+    assert_eq!(
+        &calls[..first_usage],
+        ["meters", "meters", "meters"],
+        "{calls:?}"
+    );
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn shutdown_while_declaring_ships_nothing(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+    platform.lock().unwrap().meter_modes =
+        std::iter::repeat_n(MeterMode::ServiceNotSet, 1000).collect();
+
+    let calls = run_shipper_until(&s, &platform, |p| p.calls.len() >= 2).await;
+    assert!(!calls.contains(&"usage"), "{calls:?}");
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 1);
 }
 
 /// The shipper on the default test pool, whose superuser role RLS does not
@@ -2100,4 +2374,220 @@ async fn a_lapsed_claim_is_fenced_row_by_row(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(rejected, vec![r1]);
+}
+
+// ------------------------------------------------- metering production evaluations
+
+/// Move every counted hour into the past, past the close grace, so the next
+/// `close_due` closes it. The only way a test can age an hour.
+async fn age_hours(pool: &PgPool) {
+    sqlx::query("UPDATE usage_meter_hourly SET hour = hour - interval '3 hours'")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Flush the counter, age the hours, close them against the mock platform
+/// through the production lookup, and ship.
+async fn flush_close_ship(s: &Server) {
+    metering::flush(&s.db, &s.evaluations).await.unwrap();
+    age_hours(s.db.pool()).await;
+    let meter = flags_core::usage::Meter::new(s.platform.clone());
+    metering::close_due(&s.db, |org| {
+        let meter = meter.clone();
+        async move { meter.billable_blocked(org).await }
+    })
+    .await
+    .unwrap();
+    flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+}
+
+async fn evaluate_n(s: &Server, key: &str, flag: &str, n: usize) {
+    for _ in 0..n {
+        let (status, r) = sdk(
+            &s.app,
+            "POST",
+            &format!("/api/evaluate/{flag}"),
+            key,
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{r}");
+    }
+}
+
+async fn report_n(s: &Server, key: &str, flag: &str, n: usize) -> Value {
+    let now = chrono::Utc::now().timestamp();
+    let evals: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"flag_key": flag, "result": true, "user_id": format!("u{i}"),
+                        "environment": "production", "timestamp": now})
+        })
+        .collect();
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/telemetry/evaluations",
+        key,
+        Some(json!({"evaluations": evals})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    r
+}
+
+fn metered(p: &Shared, org: Uuid) -> Vec<UsageEvent> {
+    p.lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|e| e.org_id == org && e.tool == metering::EVALUATIONS_TOOL)
+        .cloned()
+        .collect()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_larger_of_served_and_reported_is_metered(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let (org_a, org_b) = (Uuid::new_v4(), Uuid::new_v4());
+    let (_, _, a_key, _) = org_with_flag(&s, &platform, org_a, "checkout").await;
+    let (_, _, b_key, _) = org_with_flag(&s, &platform, org_b, "checkout").await;
+
+    // 3 served, 5 reported: 5. 4 served, nothing reported: 4.
+    evaluate_n(&s, &a_key, "checkout", 3).await;
+    let receipt = report_n(&s, &a_key, "checkout", 5).await;
+    assert_eq!(receipt["accepted"], 5);
+    evaluate_n(&s, &b_key, "checkout", 4).await;
+
+    flush_close_ship(&s).await;
+
+    let a = metered(&platform, org_a);
+    assert_eq!(a.len(), 1, "one metered event per app");
+    assert_eq!(a[0].meter.as_deref(), Some(metering::METER_EVALUATIONS));
+    assert_eq!(a[0].quantity, Some(5));
+    let b = metered(&platform, org_b);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].quantity, Some(4));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn client_key_telemetry_is_never_billed(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, _, client_key) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    // The client key is public: its reports are recorded for health but
+    // never raise the bill. Its 2 served evaluations are billed; its 50
+    // reported ones are not.
+    evaluate_n(&s, &client_key, "checkout", 2).await;
+    let receipt = report_n(&s, &client_key, "checkout", 50).await;
+    assert_eq!(receipt["accepted"], 50);
+    flush_close_ship(&s).await;
+
+    let events = metered(&platform, org);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].quantity, Some(2));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unknown_flag_telemetry_and_missing_flags_count_nothing(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    let receipt = report_n(&s, &key, "no-such-flag", 3).await;
+    assert_eq!(receipt["accepted"], 0);
+    let (status, _) = sdk(
+        &s.app,
+        "POST",
+        "/api/evaluate/no-such-flag",
+        &key,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    assert!(s.evaluations.take().is_empty());
+    flush_close_ship(&s).await;
+    assert!(metered(&platform, org).is_empty());
+    assert_eq!(row_count(s.db.pool(), "usage_meter_hourly").await, 0);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_blocked_org_ships_its_evaluations_unmetered(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+    platform
+        .lock()
+        .unwrap()
+        .blocked_reason
+        .insert(org, "budget_exceeded".into());
+
+    evaluate_n(&s, &key, "checkout", 2).await;
+    flush_close_ship(&s).await;
+
+    let events: Vec<UsageEvent> = platform
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|e| e.org_id == org && e.tool == metering::EVALUATIONS_TOOL)
+        .cloned()
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].meter, None);
+    assert_eq!(events[0].quantity, None);
+    assert!(!events[0].billable);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn evaluating_never_asks_the_platform_about_a_blocked_org(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+    {
+        let mut p = platform.lock().unwrap();
+        p.blocked_reason.insert(org, "budget_exceeded".into());
+        p.budget.insert(
+            org,
+            json!({"monthly_budget_cents": 1, "spend_cents": 1, "percent_used": 100,
+                   "thresholds_reached": [100], "hard_stop": true, "blocked": true,
+                   "reason": "budget_exceeded"}),
+        );
+    }
+    let hits = |p: &Shared| {
+        p.lock()
+            .unwrap()
+            .usage_status_hits
+            .get(&org)
+            .copied()
+            .unwrap_or(0)
+    };
+    // The setup's MCP calls may have asked; only the request itself is measured.
+    let before = hits(&platform);
+    // Nothing has asked yet, so no cached answer could hide a request-path
+    // lookup from the hit count below.
+    assert_eq!(before, 0, "setup must not warm the platform's usage cache");
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/evaluate/checkout",
+        &key,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["key"], "checkout");
+    assert_eq!(r["enabled"], false);
+    assert_eq!(hits(&platform), before);
+    // Counted in memory only.
+    assert_eq!(s.evaluations.take().len(), 1);
 }

@@ -3,6 +3,7 @@
 use axum::extract::State;
 use axum::Json;
 use chrono::{DateTime, TimeZone, Utc};
+use flags_core::keys::KeyKind;
 use flags_core::platform_events::begin_live;
 use flags_core::rollback;
 use flags_core::telemetry::{self, ErrorEvent, EvalEvent, Receipt, MAX_BATCH};
@@ -121,6 +122,17 @@ pub async fn evaluations(
     // it was lost.
     let armed = rollback::armed(&mut tx, &recorded.flags, sdk.0.kind).await?;
     tx.commit().await?;
+    // Only a server key's reports are billed. A client key is public (it ships
+    // in every page that evaluates flags), so anyone could post telemetry with
+    // it and raise the org's bill; client traffic is billed from the
+    // evaluations the server actually answered (`served`) instead.
+    if sdk.0.kind == KeyKind::Server && recorded.receipt.accepted > 0 {
+        state.evaluations.reported(
+            sdk.0.org_id,
+            sdk.0.app_id,
+            u64::try_from(recorded.receipt.accepted).unwrap_or(u64::MAX),
+        );
+    }
     state.hints.send(sdk.0.org_id, armed);
     Ok(Json(recorded.receipt))
 }
