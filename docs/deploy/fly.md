@@ -69,6 +69,9 @@ database alone, so a platform outage does not affect flag evaluation.
 
 Everything else is in `fly.toml`'s `[env]`.
 
+`FLAGS_ENFORCE_QUOTAS` is retired: setting it only logs a startup warning. If it is still a Fly
+secret, unsetting it is cosmetic: `fly secrets unset -a otto-flags FLAGS_ENFORCE_QUOTAS`.
+
 ## First deploy (done 2026-10-09)
 
 ```bash
@@ -299,6 +302,28 @@ the new release, `/readyz` returns `{"status":"ready"}`, and the boot log shows
 `applying migrations`, `tenant isolation enforced as role "otto_app"`, and
 `the otto platform accepted this service's credential`.
 
+## Metering
+
+Production evaluations are billed on the meter `otto-flags/evaluations`. MCP tools are free.
+
+- **Declaration.** The server declares the meter to the platform at startup. The platform side
+  (`resource set-service`, `service=otto-flags`) is already done for production. Until a
+  declaration succeeds nothing ships, and rows wait in `usage_outbox`.
+- **What is counted.** Served evaluations (both key kinds) and reported evaluations (server-key
+  telemetry only). Each app's hour is billed as the larger of the two, not the sum. The counts are
+  held in memory, flushed to `usage_meter_hourly`, and closed into `usage_outbox` once the hour
+  is over.
+- **Blocked orgs** keep evaluating. Their hours ship unbilled.
+- **Idle suspend.** The app scales to zero, so hours close when a machine is awake. An hour
+  closed after the platform's month cutoff (2 h into the next month) is billed in the month it
+  arrives.
+- **Stopping.** `kill_timeout = "45s"` in `fly.toml` gives the final flush of evaluation counts
+  time to finish on stop.
+- **Rollback.** During a rollout overlap, or after rolling back to a release before this one, the
+  old shipper ships closed-hour rows without their meter (that billing is lost), and the old
+  release does not close `usage_meter_hourly` (counts wait there until the new release runs
+  again). Production runs one machine and no price is set yet, so the cost today is zero.
+
 ## Auto-rollback
 
 A policy per (flag, environment) disables that environment as an ordinary flag version (change
@@ -318,8 +343,8 @@ server-key reports count unless a policy sets `includeClientReports` (owner or a
   not. A successful answer is cached for 60 s by the platform client; a failed lookup is
   remembered for 10 s, so an outage costs one 2 s timeout per org per 10 s. It fails closed: a
   timeout or platform error means no rollback, recorded as `entitlement_unknown`. Creating or
-  changing a policy is billed; removing, listing, `propose_rollback`, and `rollback_events` are
-  free.
+  changing a policy is free like every other MCP tool; only production evaluations are billed (see
+  Metering).
 - **When it checks.** When SDK telemetry arrives, plus a 5-minute pass while the machine is
   awake. That works with `auto_stop_machines = "suspend"` and changes no cost. Detection latency
   is the SDK's telemetry flush interval, plus up to the 30 s per-flag debounce, plus any checks

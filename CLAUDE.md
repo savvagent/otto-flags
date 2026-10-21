@@ -166,12 +166,15 @@ crate module docs.
   (`flags:read`, `flags:write`, `apps:admin`); app creation, key rotation, and setting a rollback
   policy's `includeClientReports` do a fresh owner/admin lookup at the platform. `flags_core::scopes::KNOWN`/`DEFAULT` match the platform
   registration.
-- **Metering:** billable MCP writes record usage in the tool's own transaction into
-  `usage_outbox`. Reads, dry-run evaluation, and SDK evaluation are not metered.
+- **Metering:** MCP tools record a free usage row in their own transaction (nothing an agent does
+  is billed). Production evaluations are counted in memory (`flags_core::metering::EvalCounter`),
+  flushed to `usage_meter_hourly`, closed hourly into `usage_outbox` on `otto-flags/evaluations` as
+  `GREATEST(served, reported)` (`reported` = server-key telemetry only), unmetered while the org is
+  `billable_blocked`. The SDK path only touches the counter. Reads and dry-runs are never billed.
 - **Every flag change is versioned** in `flag_versions` and calls `pg_notify('flag_changes', …)`
   in the same transaction.
 - **Evaluations are counted, not stored:** hourly rollups from SDK telemetry only (never on the
-  evaluate endpoint), error reports raw and truncated (14 days; rollups 90), no end-user context persisted.
+  evaluate endpoint), error reports raw and truncated (14 days; rollups 90), no end-user context persisted; `usage_meter_hourly` holds counts per app and hour only.
 - **SDK-reported text is untrusted** when an MCP tool returns it; database error text never
   reaches a tool response.
 - **Rollout bucketing** (SHA-256 of flag key + identifier in `flags_core::eval`) never changes
