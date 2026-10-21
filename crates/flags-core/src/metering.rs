@@ -33,7 +33,10 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::ids::FlagAppId;
-use crate::usage::BlockedLookup;
+use crate::usage::{BlockedLookup, Meter};
+use std::sync::Arc;
+use tokio::sync::watch;
+use tokio::time::Instant;
 
 /// How often the background task flushes the counter.
 pub const FLUSH_EVERY: Duration = Duration::from_secs(10);
@@ -111,6 +114,13 @@ impl EvalCounter {
         let mut map = self.lock();
         let c = map.entry((org, app)).or_default();
         c.reported = c.reported.saturating_add(n);
+    }
+
+    /// The total of every count held, served and reported, for a log line.
+    pub fn pending(&self) -> u64 {
+        self.lock().values().fold(0u64, |t, c| {
+            t.saturating_add(c.served).saturating_add(c.reported)
+        })
     }
 
     /// Take every count, leaving the counter empty.
@@ -441,6 +451,111 @@ struct CloseTotals {
     billed_events: i64,
     unbilled_hours: i64,
     unbilled_quantity: String,
+}
+
+/// The server-side bound on the final flush at shutdown.
+const FINAL_FLUSH_TIMEOUT: &str = "5s";
+/// The longest a failing pass waits before trying again.
+const MAX_BACKOFF: Duration = Duration::from_secs(60);
+
+/// How long to wait after `failures` failures in a row: the pass's own period,
+/// doubled each time, capped at [`MAX_BACKOFF`].
+fn backoff(every: Duration, failures: u32) -> Duration {
+    if failures == 0 {
+        return every;
+    }
+    every
+        .saturating_mul(1u32 << failures.min(6))
+        .min(MAX_BACKOFF.max(every))
+}
+
+/// Flush the counter every [`FLUSH_EVERY`] and close finished hours every
+/// [`CLOSE_EVERY`] until `shutdown`, then flush once more.
+///
+/// Background only: it asks the platform (through `meter`) about orgs, which
+/// the SDK request path never does. Failures are logged without their text
+/// (the text only at `debug`) and retried with backoff; the counts of a failed
+/// flush stay in `counter` ([`flush`] restores them).
+///
+/// `flush` is not cancel-safe, so no flush or close sits in a `select!`: only
+/// the wait does, and the work runs after it, to completion. The final flush
+/// is bounded by the server-side timeout of [`flush_with`], not by an outer
+/// future timeout.
+pub async fn run(
+    db: Db,
+    meter: Meter,
+    counter: Arc<EvalCounter>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let (mut flush_failures, mut close_failures) = (0u32, 0u32);
+    let now = Instant::now();
+    let (mut next_flush, mut next_close) = (now + FLUSH_EVERY, now + CLOSE_EVERY);
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(next_flush.min(next_close)) => {}
+            _ = shutdown.changed() => break,
+        }
+        let now = Instant::now();
+        if now >= next_flush {
+            match flush(&db, &counter).await {
+                Ok(_) => flush_failures = 0,
+                Err(e) => {
+                    flush_failures = flush_failures.saturating_add(1);
+                    let retry_in = backoff(FLUSH_EVERY, flush_failures);
+                    let f = e.failure_reason();
+                    tracing::warn!(
+                        reason = f.reason,
+                        sqlstate = f.sqlstate(),
+                        transport = f.transport,
+                        ?retry_in,
+                        "flushing evaluation counts failed; they are kept and retried"
+                    );
+                    tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), transport = f.transport, ?retry_in, error = %e, "flushing evaluation counts failed");
+                }
+            }
+            next_flush = Instant::now() + backoff(FLUSH_EVERY, flush_failures);
+        }
+        if now >= next_close {
+            let lookup = |org| {
+                let meter = meter.clone();
+                async move { meter.billable_blocked(org).await }
+            };
+            match close_due(&db, lookup).await {
+                Ok(_) => close_failures = 0,
+                Err(e) => {
+                    close_failures = close_failures.saturating_add(1);
+                    let retry_in = backoff(CLOSE_EVERY, close_failures);
+                    let f = e.failure_reason();
+                    tracing::warn!(
+                        reason = f.reason,
+                        sqlstate = f.sqlstate(),
+                        transport = f.transport,
+                        ?retry_in,
+                        "closing evaluation hours failed; they are retried"
+                    );
+                    tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), transport = f.transport, ?retry_in, error = %e, "closing evaluation hours failed");
+                }
+            }
+            next_close = Instant::now() + backoff(CLOSE_EVERY, close_failures);
+        }
+    }
+    if let Err(e) = flush_with(&db, &counter, FINAL_FLUSH_TIMEOUT, Duration::ZERO).await {
+        let f = e.failure_reason();
+        tracing::warn!(
+            reason = f.reason,
+            sqlstate = f.sqlstate(),
+            transport = f.transport,
+            "final flush of evaluation counts failed"
+        );
+        tracing::debug!(reason = f.reason, sqlstate = f.sqlstate(), transport = f.transport, error = %e, "final flush of evaluation counts failed");
+    }
+    let lost = counter.pending();
+    if lost > 0 {
+        tracing::warn!(
+            evaluations = lost,
+            "evaluation counts were not written before shutdown"
+        );
+    }
 }
 
 #[cfg(test)]

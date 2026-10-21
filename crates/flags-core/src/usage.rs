@@ -52,7 +52,7 @@ pub fn is_billable(tool: &str) -> bool {
     BILLABLE.contains(&tool)
 }
 
-const QUOTA_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
+const BLOCKED_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 /// Past this share of the legacy allowance, the deprecated
 /// [`Status::warning`] is true.
 pub const WARN_AT: f64 = 0.8;
@@ -84,7 +84,6 @@ pub enum BlockedLookup {
 #[derive(Clone)]
 pub struct Meter {
     platform: Arc<PlatformClient>,
-    pub upgrade_url: String,
 }
 
 impl std::fmt::Debug for Meter {
@@ -94,11 +93,8 @@ impl std::fmt::Debug for Meter {
 }
 
 impl Meter {
-    pub fn new(platform: Arc<PlatformClient>, upgrade_url: impl Into<String>) -> Self {
-        Self {
-            platform,
-            upgrade_url: upgrade_url.into(),
-        }
+    pub fn new(platform: Arc<PlatformClient>) -> Self {
+        Self { platform }
     }
 
     /// Record one tool call in `tx`, free. Never refuses, never asks the
@@ -129,7 +125,7 @@ impl Meter {
     /// remembered.
     pub async fn billable_blocked(&self, org: OrgId) -> BlockedLookup {
         let failure = match tokio::time::timeout(
-            QUOTA_LOOKUP_TIMEOUT,
+            BLOCKED_LOOKUP_TIMEOUT,
             self.platform.usage_status(org.as_uuid()),
         )
         .await
@@ -939,19 +935,17 @@ mod tests {
     #[tokio::test]
     async fn billable_blocked_follows_the_platform() {
         let org = OrgId::new();
-        let blocked = Meter::new(
-            platform_answering(200, usage_body(org, Some("payment_required"))).await,
-            "",
-        );
+        let blocked =
+            Meter::new(platform_answering(200, usage_body(org, Some("payment_required"))).await);
         assert_eq!(blocked.billable_blocked(org).await, BlockedLookup::Blocked);
-        let open = Meter::new(platform_answering(200, usage_body(org, None)).await, "");
+        let open = Meter::new(platform_answering(200, usage_body(org, None)).await);
         assert_eq!(open.billable_blocked(org).await, BlockedLookup::NotBlocked);
     }
 
     #[tokio::test]
     async fn billable_blocked_is_failed_when_the_platform_cannot_answer() {
         let org = OrgId::new();
-        let erroring = Meter::new(platform_answering(502, "{}".into()).await, "");
+        let erroring = Meter::new(platform_answering(502, "{}".into()).await);
         assert_eq!(erroring.billable_blocked(org).await, BlockedLookup::Failed);
         // Nothing listens on the port.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -964,7 +958,7 @@ mod tests {
             "https://flags.test/mcp",
             "secret",
         );
-        let unreachable = Meter::new(Arc::new(PlatformClient::new(cfg).expect("client")), "");
+        let unreachable = Meter::new(Arc::new(PlatformClient::new(cfg).expect("client")));
         assert_eq!(
             unreachable.billable_blocked(org).await,
             BlockedLookup::Failed

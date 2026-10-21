@@ -2,12 +2,14 @@
 //! background tasks (usage shipper, flag-change listener, rollback checker,
 //! retention sweeps).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::CheckerConfig;
-use flags_core::usage::ShipperConfig;
+use flags_core::usage::{Meter, ShipperConfig};
 use flags_server::{platform_client, router, spawn_checker, watch_checker, Config, LogFormat};
 use otto_tenant::Db;
 use tokio::net::TcpListener;
@@ -82,6 +84,13 @@ async fn main() -> Result<()> {
         ShipperConfig::default(),
         shutdown.clone(),
     ));
+    let evaluations = Arc::new(EvalCounter::default());
+    let metering = tokio::spawn(flags_core::metering::run(
+        db.clone(),
+        Meter::new(platform.clone()),
+        evaluations.clone(),
+        shutdown.clone(),
+    ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
 
     let (hints, checker) = spawn_checker(
@@ -97,7 +106,7 @@ async fn main() -> Result<()> {
     let checker_abort = checker.abort_handle();
     let mut checker = tokio::spawn(watch_checker(checker, shutdown.clone()));
 
-    let app = router(db, platform, listener, hints, &config);
+    let app = router(db, platform, listener, hints, evaluations, &config);
     let tcp = TcpListener::bind(config.bind)
         .await
         .with_context(|| format!("could not bind {}", config.bind))?;
@@ -120,6 +129,11 @@ async fn main() -> Result<()> {
         let reason = join_failure_reason(&e);
         tracing::warn!(reason, "the usage shipper did not stop cleanly");
         tracing::debug!(reason, error = %e, "the usage shipper did not stop cleanly");
+    }
+    if let Err(e) = metering.await {
+        let reason = join_failure_reason(&e);
+        tracing::warn!(reason, "the evaluation metering task did not stop cleanly");
+        tracing::debug!(reason, error = %e, "the evaluation metering task did not stop cleanly");
     }
     match tokio::time::timeout(Duration::from_secs(5), &mut checker).await {
         Ok(Ok(_)) => {}

@@ -1,7 +1,7 @@
 //! Whether an org's plan includes a feature, asked of the otto platform.
 //!
 //! Shares the [`PlatformClient`] held by [`crate::usage::Meter`] (and its 60 s
-//! cache) but none of the meter's behaviour, and has no fail-open window. A timeout or platform error is
+//! cache) but none of the meter's behaviour. A timeout or platform error is
 //! [`Entitlement::Unknown`], which every caller treats as not entitled.
 //!
 //! Never called on the SDK request path (the SDK path never calls the

@@ -15,6 +15,7 @@ use axum::routing::{get, post};
 use axum::{Form, Json, Router};
 use flags_core::apps::AppsExt;
 use flags_core::flags::FlagsExt;
+use flags_core::metering::{self, EvalCounter};
 use flags_core::notify::{FlagChange, Listener};
 use flags_core::platform_events::begin_live;
 use flags_core::rollback::{CheckerConfig, Hints, Mode, RollbackExt, Thresholds};
@@ -289,6 +290,7 @@ struct Server {
     app: Router,
     db: Db,
     platform: Arc<otto_resource::PlatformClient>,
+    evaluations: Arc<EvalCounter>,
 }
 
 async fn server(pool: PgPool, platform_url: &str) -> Server {
@@ -296,16 +298,19 @@ async fn server(pool: PgPool, platform_url: &str) -> Server {
     config.platform_url = platform_url.into();
     let db = Db::from_pool(pool);
     let platform = platform_client(&config).unwrap();
+    let evaluations = Arc::new(EvalCounter::default());
     Server {
         app: router(
             db.clone(),
             platform.clone(),
             Listener::detached(),
             Hints::detached(),
+            evaluations.clone(),
             &config,
         ),
         db,
         platform,
+        evaluations,
     }
 }
 
@@ -347,16 +352,19 @@ async fn live_server(pool: PgPool, platform_url: &str) -> (Server, Live) {
         },
         rx,
     );
+    let evaluations = Arc::new(EvalCounter::default());
     let server = Server {
         app: router(
             db.clone(),
             platform.clone(),
             listener.clone(),
             hints,
+            evaluations.clone(),
             &config,
         ),
         db,
         platform,
+        evaluations,
     };
     (
         server,
@@ -2366,4 +2374,197 @@ async fn a_lapsed_claim_is_fenced_row_by_row(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(rejected, vec![r1]);
+}
+
+// ------------------------------------------------- metering production evaluations
+
+/// Move every counted hour into the past, past the close grace, so the next
+/// `close_due` closes it. The only way a test can age an hour.
+async fn age_hours(pool: &PgPool) {
+    sqlx::query("UPDATE usage_meter_hourly SET hour = hour - interval '3 hours'")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Flush the counter, age the hours, close them against the mock platform
+/// through the production lookup, and ship.
+async fn flush_close_ship(s: &Server) {
+    metering::flush(&s.db, &s.evaluations).await.unwrap();
+    age_hours(s.db.pool()).await;
+    let meter = flags_core::usage::Meter::new(s.platform.clone());
+    metering::close_due(&s.db, |org| {
+        let meter = meter.clone();
+        async move { meter.billable_blocked(org).await }
+    })
+    .await
+    .unwrap();
+    flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+}
+
+async fn evaluate_n(s: &Server, key: &str, flag: &str, n: usize) {
+    for _ in 0..n {
+        let (status, r) = sdk(
+            &s.app,
+            "POST",
+            &format!("/api/evaluate/{flag}"),
+            key,
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{r}");
+    }
+}
+
+async fn report_n(s: &Server, key: &str, flag: &str, n: usize) -> Value {
+    let now = chrono::Utc::now().timestamp();
+    let evals: Vec<Value> = (0..n)
+        .map(|i| {
+            json!({"flag_key": flag, "result": true, "user_id": format!("u{i}"),
+                        "environment": "production", "timestamp": now})
+        })
+        .collect();
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/telemetry/evaluations",
+        key,
+        Some(json!({"evaluations": evals})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    r
+}
+
+fn metered(p: &Shared, org: Uuid) -> Vec<UsageEvent> {
+    p.lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|e| e.org_id == org && e.tool == metering::EVALUATIONS_TOOL)
+        .cloned()
+        .collect()
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_larger_of_served_and_reported_is_metered(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let (org_a, org_b) = (Uuid::new_v4(), Uuid::new_v4());
+    let (_, _, a_key, _) = org_with_flag(&s, &platform, org_a, "checkout").await;
+    let (_, _, b_key, _) = org_with_flag(&s, &platform, org_b, "checkout").await;
+
+    // 3 served, 5 reported: 5. 4 served, nothing reported: 4.
+    evaluate_n(&s, &a_key, "checkout", 3).await;
+    let receipt = report_n(&s, &a_key, "checkout", 5).await;
+    assert_eq!(receipt["accepted"], 5);
+    evaluate_n(&s, &b_key, "checkout", 4).await;
+
+    flush_close_ship(&s).await;
+
+    let a = metered(&platform, org_a);
+    assert_eq!(a.len(), 1, "one metered event per app");
+    assert_eq!(a[0].meter.as_deref(), Some(metering::METER_EVALUATIONS));
+    assert_eq!(a[0].quantity, Some(5));
+    let b = metered(&platform, org_b);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].quantity, Some(4));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn unknown_flag_telemetry_and_missing_flags_count_nothing(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    let receipt = report_n(&s, &key, "no-such-flag", 3).await;
+    assert_eq!(receipt["accepted"], 0);
+    let (status, _) = sdk(
+        &s.app,
+        "POST",
+        "/api/evaluate/no-such-flag",
+        &key,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    assert!(s.evaluations.take().is_empty());
+    flush_close_ship(&s).await;
+    assert!(metered(&platform, org).is_empty());
+    assert_eq!(row_count(s.db.pool(), "usage_meter_hourly").await, 0);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_blocked_org_ships_its_evaluations_unmetered(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+    platform
+        .lock()
+        .unwrap()
+        .blocked_reason
+        .insert(org, "budget_exceeded".into());
+
+    evaluate_n(&s, &key, "checkout", 2).await;
+    flush_close_ship(&s).await;
+
+    let events: Vec<UsageEvent> = platform
+        .lock()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|e| e.org_id == org && e.tool == metering::EVALUATIONS_TOOL)
+        .cloned()
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].meter, None);
+    assert_eq!(events[0].quantity, None);
+    assert!(!events[0].billable);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn evaluating_never_asks_the_platform_about_a_blocked_org(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, _) = org_with_flag(&s, &platform, org, "checkout").await;
+    {
+        let mut p = platform.lock().unwrap();
+        p.blocked_reason.insert(org, "budget_exceeded".into());
+        p.budget.insert(
+            org,
+            json!({"monthly_budget_cents": 1, "spend_cents": 1, "percent_used": 100,
+                   "thresholds_reached": [100], "hard_stop": true, "blocked": true,
+                   "reason": "budget_exceeded"}),
+        );
+    }
+    let hits = |p: &Shared| {
+        p.lock()
+            .unwrap()
+            .usage_status_hits
+            .get(&org)
+            .copied()
+            .unwrap_or(0)
+    };
+    // The setup's MCP calls may have asked; only the request itself is measured.
+    let before = hits(&platform);
+    let (status, r) = sdk(
+        &s.app,
+        "POST",
+        "/api/evaluate/checkout",
+        &key,
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["key"], "checkout");
+    assert_eq!(r["enabled"], false);
+    assert_eq!(hits(&platform), before);
+    // Counted in memory only.
+    assert_eq!(s.evaluations.take().len(), 1);
 }

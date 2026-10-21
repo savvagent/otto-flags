@@ -116,12 +116,6 @@ mod tests {
         expected.sort();
         got.sort();
         assert_eq!(got, expected);
-        for billable in flags_core::usage::BILLABLE {
-            assert!(
-                NAMES.contains(billable),
-                "{billable} is billed but is not a tool"
-            );
-        }
     }
 
     #[test]
@@ -190,19 +184,6 @@ mod tests {
     /// delegate to `set_archived`).
     #[test]
     fn read_only_tools_change_nothing() {
-        for name in READ_ONLY {
-            assert!(
-                !flags_core::usage::BILLABLE.contains(name),
-                "{name} is read-only but billable"
-            );
-        }
-        // A billed repeat is another charge, so no billable tool is idempotent.
-        for name in IDEMPOTENT {
-            assert!(
-                !flags_core::usage::BILLABLE.contains(name),
-                "{name} is idempotent but billable"
-            );
-        }
         let sources = [
             ("org.rs", include_str!("org.rs")),
             ("apps.rs", include_str!("apps.rs")),

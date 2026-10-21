@@ -100,7 +100,7 @@ pub fn router(db: Db, config: Config) -> Router {
     let flags = Flags::new(
         db,
         config.platform.clone(),
-        Meter::new(config.platform.clone(), config.upgrade_url.clone()),
+        Meter::new(config.platform.clone()),
         Entitlements::new(config.platform.clone(), config.upgrade_url),
     );
     let service = StreamableHttpService::new(

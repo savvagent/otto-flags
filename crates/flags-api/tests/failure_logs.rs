@@ -109,6 +109,7 @@ fn deliver(secret: &str, body: Vec<u8>) -> StatusCode {
             otto_tenant::Db::from_pool(pool),
             Listener::detached(),
             Hints::detached(),
+            Default::default(),
             SECRET,
         ));
         let sig = otto_resource::webhook::sign(secret, chrono::Utc::now().timestamp(), &body);

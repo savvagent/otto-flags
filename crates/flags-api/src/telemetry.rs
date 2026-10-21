@@ -121,6 +121,13 @@ pub async fn evaluations(
     // it was lost.
     let armed = rollback::armed(&mut tx, &recorded.flags, sdk.0.kind).await?;
     tx.commit().await?;
+    if recorded.receipt.accepted > 0 {
+        state.evaluations.reported(
+            sdk.0.org_id,
+            sdk.0.app_id,
+            u64::try_from(recorded.receipt.accepted).unwrap_or(u64::MAX),
+        );
+    }
     state.hints.send(sdk.0.org_id, armed);
     Ok(Json(recorded.receipt))
 }

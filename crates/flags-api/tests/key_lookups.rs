@@ -35,6 +35,7 @@ async fn state_on_a_pool_of_five(pool: &PgPool, limit: KeyLookups) -> (AppState,
         otto_tenant::Db::from_pool(five.clone()),
         Listener::detached(),
         Hints::detached(),
+        Default::default(),
         "otto_whsec_test",
     );
     // What production gets from a pool of 5, before the test's own limit.
