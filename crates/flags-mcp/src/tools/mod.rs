@@ -105,7 +105,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_named_tool_is_routed_and_metered_consistently() {
+    fn every_named_tool_is_routed() {
         let routed: Vec<String> = router()
             .list_all()
             .into_iter()

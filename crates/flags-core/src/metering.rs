@@ -156,6 +156,9 @@ ON CONFLICT (org_id, app_id, hour) DO UPDATE SET \
   served = LEAST(usage_meter_hourly.served::numeric + EXCLUDED.served, 9223372036854775807)::bigint, \
   reported = LEAST(usage_meter_hourly.reported::numeric + EXCLUDED.reported, 9223372036854775807)::bigint";
 
+/// The most outbox rows one closed hour is split into; see [`CLOSE`].
+pub const MAX_SPLIT_ROWS: i64 = 1000;
+
 /// SQLSTATE `foreign_key_violation`.
 const FK_VIOLATION: &str = "23503";
 
@@ -210,7 +213,7 @@ async fn write(
     timeout: &str,
     pause: Duration,
 ) -> sqlx::Result<usize> {
-    let rows: Vec<Row> = taken
+    let mut rows: Vec<Row> = taken
         .iter()
         .map(|(&(org, app), c)| Row {
             org: org.as_uuid(),
@@ -219,6 +222,9 @@ async fn write(
             reported: clamp(c.reported),
         })
         .collect();
+    // One order on every machine: two flushes upserting the same rows in
+    // different orders (a HashMap has none) could deadlock on the row locks.
+    rows.sort_unstable_by_key(|r| (r.org, r.app));
     let mut tx = begin_bounded(db, timeout).await?;
     if !pause.is_zero() {
         tokio::time::sleep(pause).await;
@@ -315,6 +321,10 @@ GROUP BY org_id ORDER BY min(hour), org_id LIMIT $2";
 ///   `$3` (the meter), split into rows of at most `$4` that sum to it.
 /// - A row with nothing to bill (both counts zero) is deleted with no outbox
 ///   row.
+/// - An hour is billed at most `$4 * $7` ([`MAX_SPLIT_ROWS`] rows): far beyond
+///   any real hour, it keeps a saturated count from asking `generate_series`
+///   for billions of rows, failing on the statement timeout, and stalling
+///   every org in the batch behind it forever.
 ///
 /// Returns the rows closed and the billed and unbilled totals, for the log.
 const CLOSE: &str = "\
@@ -322,7 +332,9 @@ WITH gone AS ( \
   DELETE FROM usage_meter_hourly \
   WHERE org_id = ANY($1::uuid[]) \
     AND hour <= now() - interval '1 hour' - make_interval(secs => $5) \
-  RETURNING org_id, hour, GREATEST(served, reported) AS q, org_id = ANY($2::uuid[]) AS blocked \
+  RETURNING org_id, hour, \
+    LEAST(GREATEST(served, reported), $4::bigint * $7::bigint) AS q, \
+    org_id = ANY($2::uuid[]) AS blocked \
 ), shipped AS ( \
   INSERT INTO usage_outbox (org_id, user_id, tool, billable, occurred_at, meter, quantity) \
   SELECT g.org_id, NULL::uuid, $6::text, false, g.hour, NULL::text, NULL::bigint \
@@ -421,6 +433,7 @@ where
         .bind(cap)
         .bind(grace)
         .bind(EVALUATIONS_TOOL)
+        .bind(MAX_SPLIT_ROWS)
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -454,7 +467,7 @@ struct CloseTotals {
 }
 
 /// The server-side bound on the final flush at shutdown.
-const FINAL_FLUSH_TIMEOUT: &str = "5s";
+pub const FINAL_FLUSH_TIMEOUT: &str = "5s";
 /// The longest a failing pass waits before trying again.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 

@@ -156,7 +156,13 @@ async fn main() -> Result<()> {
     }
     // Evaluations answered during the drain, after the metering task's own
     // final flush. Bounded server-side: `flush` is not cancel-safe.
-    if let Err(e) = flags_core::metering::flush_with(&db, &evaluations, "5s", Duration::ZERO).await
+    if let Err(e) = flags_core::metering::flush_with(
+        &db,
+        &evaluations,
+        flags_core::metering::FINAL_FLUSH_TIMEOUT,
+        Duration::ZERO,
+    )
+    .await
     {
         let f = e.failure_reason();
         tracing::warn!(

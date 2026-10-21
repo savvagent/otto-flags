@@ -7265,6 +7265,24 @@ mod metering_close {
     }
 
     #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_saturated_hour_is_billed_at_most_the_split_limit(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        hour_row(&pool, org, app, DUE, i64::MAX, 0).await;
+
+        // With a cap of 1 a saturated count would ask for i64::MAX rows.
+        assert_eq!(
+            metering::close_due_with(&db, not_blocked, 1).await.unwrap(),
+            1
+        );
+        let out = outbox(&pool).await;
+        assert_eq!(out.len() as i64, metering::MAX_SPLIT_ROWS);
+        assert!(out.iter().all(|o| o.quantity == Some(1)));
+        assert_eq!(hourly_left(&pool).await, 0);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
     async fn a_failed_lookup_skips_the_rest_and_bills_every_org(pool: PgPool) {
         let db = db(pool.clone()).await;
         let mut orgs = Vec::new();

@@ -169,7 +169,8 @@ never the flags.
 **In:**
 - `BILLABLE` emptied and quota enforcement removed.
 - An in-memory evaluation counter in `flags-core`, fed by the evaluate and telemetry handlers.
-- A new hourly table and migration `0007`, plus `meter`/`quantity` on the outbox tables.
+- `meter`/`quantity` on the outbox tables (migration `0007`) and a new hourly table (migration
+  `0008`).
 - A background metering task that flushes the counter and closes hours into the outbox.
 - The shipper ships `meter`/`quantity` and declares the meter first.
 - The `whoami`/`usage` report shape.
@@ -245,7 +246,7 @@ usage::run (existing shipper)
   only when `accepted > 0`. A failed commit counts nothing.
 - No statement is added to either request transaction.
 
-**`usage_meter_hourly`** (migration `0007`): one row per (org, app, hour) that saw evaluations,
+**`usage_meter_hourly`** (migration `0008`): one row per (org, app, hour) that saw evaluations,
 deleted when its hour closes. Bounded by the active apps over the last ~2 hours.
 
 **Hour close (`metering::close_due`):**
@@ -321,7 +322,8 @@ deleted when its hour closes. Bounded by the active apps over the last ~2 hours.
 
 ### Invariants impact
 
-- **Append-only migrations:** a new `0007_usage_meter.sql`; nothing existing is touched.
+- **Append-only migrations:** new `0007_usage_outbox_meter.sql` and `0008_usage_meter_hourly.sql`;
+  nothing existing is touched.
 - **Rollout and rollback compatibility:** everything is additive.
   - The new columns are nullable.
   - The new table is unknown to the previous release.
@@ -367,7 +369,14 @@ deleted when its hour closes. Bounded by the active apps over the last ~2 hours.
 
 ## Migration
 
-`crates/flags-core/migrations/0007_usage_meter.sql`:
+Split in review into two files, so the outbox ALTERs never hold their ACCESS EXCLUSIVE locks while
+the new table's FK locks `flag_apps` (a deadlock with a tool call holding `flag_apps` and then
+writing `usage_outbox`). The CHECKs are `NOT VALID` (every existing row has both columns NULL), and
+the new table has `fillfactor = 70` for HOT updates. The committed files
+(`0007_usage_outbox_meter.sql`, `0008_usage_meter_hourly.sql`) are authoritative; the original
+single-file draft follows for the record.
+
+`crates/flags-core/migrations/0007_usage_meter.sql` (draft):
 
 ```sql
 SET LOCAL lock_timeout = '3s';

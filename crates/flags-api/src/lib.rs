@@ -14,7 +14,9 @@
 //! The contract is the one in `docs/SDK-DEVELOPER-GUIDE.md`, kept as-is so the
 //! SDKs in `packages/` work unchanged. Keys travel in `Authorization: Bearer`
 //! or `X-SDK-Key`, never in a URL. This surface is the hot path: nothing here
-//! calls the platform or an LLM, and no tool is metered. Telemetry may hint the
+//! calls the platform or an LLM. Evaluations are counted for billing in memory
+//! only ([`flags_core::metering::EvalCounter`]); no request statement is added
+//! for it, and a background task writes the counts. Telemetry may hint the
 //! rollback checker, in-process and after commit, which still makes no
 //! platform call.
 
