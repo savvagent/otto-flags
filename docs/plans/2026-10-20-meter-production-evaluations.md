@@ -289,7 +289,10 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     - It flushes every `FLUSH_EVERY` and closes every `CLOSE_EVERY`, using
       `meter.billable_blocked` as the lookup.
     - Failures are logged with the text-free reason and backoff in the shipper's style.
-    - On shutdown it does one final flush under a 5 s timeout, then logs the count total if any
+    - On shutdown it does one final flush bounded by the server-side timeout
+      `flush_with(db, counter, "5s", Duration::ZERO)`, never `tokio::time::timeout` (`flush` is
+      not cancel-safe, see its docs; no flush may sit in a `select!` branch that can lose). It
+      then logs the count total if any
       remain.
   - `main.rs`:
     - Build one `Arc<EvalCounter>`, pass it to the router and to `metering::run`, spawned beside

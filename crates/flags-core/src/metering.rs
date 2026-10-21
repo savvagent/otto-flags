@@ -151,6 +151,14 @@ const FK_VIOLATION: &str = "23503";
 /// pairs with both counts zero, tombstoned orgs and missing apps are not
 /// written and not counted. On any error the taken counts are restored to
 /// `counter` and the error is returned.
+///
+/// **Not cancel-safe.** The taken counts live only in this future until it
+/// commits or restores them, so dropping it mid-flight (an outer
+/// `tokio::time::timeout`, a `select!` branch losing) loses them silently.
+/// Bound a flush with the server-side timeout of [`flush_with`] instead, and
+/// always drive it to completion. A commit whose acknowledgement is lost is
+/// restored and written again on the next flush: a rare, bounded overcount
+/// that only idempotency keys could remove.
 pub async fn flush(db: &Db, counter: &EvalCounter) -> Result<usize> {
     flush_with(db, counter, TX_TIMEOUT, Duration::ZERO).await
 }

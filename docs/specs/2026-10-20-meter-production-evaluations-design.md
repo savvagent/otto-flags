@@ -204,7 +204,7 @@ metering::run (background, one per machine)
   every FLUSH_EVERY (10 s), and once more on shutdown:
      take the counter's map ──▶ maintenance tx (statement and idle timeouts set): UPSERT
                                 usage_meter_hourly(org, app, date_trunc('hour', now(), 'UTC'), served, reported)
-                                (joins flag_apps and skips tombstoned orgs; on failure the counts are added back)
+                                (skips tombstoned orgs; a pair whose app is gone is refused by the FK and dropped; on failure the counts are added back)
   every CLOSE_EVERY (60 s):
      1. maintenance tx: SELECT DISTINCT org_id of due hours (hour + 1 h + CLOSE_GRACE <= now()), LIMIT 100; commit
      2. per org, no connection held: Meter::blocked(org) → billable_blocked() (timeout 2 s; error ⇒ not blocked)
@@ -421,14 +421,18 @@ rather than queue.
   - The taken counts are added back to the counter, saturating, and retried next tick.
   - It logs at `warn` with a text-free reason.
   - The counter stays bounded by the active (org, app) pairs.
-- **Shutdown:** a final flush, bounded by a 5 s timeout. Counts it cannot write are lost and
+- **Shutdown:** a final flush, bounded by a server-side 5 s timeout (`flush_with(…, "5s", 0)`,
+  never an outer tokio timeout: `flush` is not cancel-safe). Counts it cannot write are lost and
   logged with their total.
 - **Crash:** at most one interval of counts is lost (an undercount).
 - **Close failure:** the transaction rolls back, the rows stay and are retried next minute.
   Nothing is double-closed.
 - **Platform lookup failure at close:** the hour is billed (fail open), logged at `warn`.
 - **Org or app deleted between flush and close:** the purge deletes the org's rows. At flush,
-  pending counter entries are filtered by `deleted_orgs` and by a join on `flag_apps`, so a race
+  pending counter entries are filtered by `deleted_orgs`. A join on `flag_apps` is impossible in a
+  maintenance transaction: `flag_apps` has only the pinned tenant policy, so it reads as empty
+  unpinned. Instead, the composite FK (whose checks bypass RLS) refuses a gone app, and the flush
+  retries that batch row by row in savepoints, dropping the refused rows. So a race
   never fails the whole batch on the FK.
 - **App deleted:** its hourly rows cascade away, unbilled. Apps are not normally deleted.
 - **Two machines:** each flushes its own counter (the UPSERT adds them). The close's
