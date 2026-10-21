@@ -14,12 +14,12 @@ import (
 
 // FlagClient is the main client for evaluating feature flags
 type FlagClient struct {
-	config              Config
-	httpClient          *http.Client
-	cache               *cache
-	configOverrides     map[string]configOverrideEntry
-	variationOverrides  map[string]variationOverrideEntry
-	overrideMutex       sync.RWMutex
+	config             Config
+	httpClient         *http.Client
+	cache              *cache
+	configOverrides    map[string]configOverrideEntry
+	variationOverrides map[string]variationOverrideEntry
+	overrideMutex      sync.RWMutex
 }
 
 // NewClient creates a new FlagClient with the given configuration

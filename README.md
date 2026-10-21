@@ -99,7 +99,7 @@ The evaluation-side SDKs, the example apps, and the observability MCP clients
   - OkHttp-based HTTP client
   - Comprehensive JavaDocs
 
-- **[otto-flags-go-server-sdk](./packages/go-server)** - Go Server SDK
+- **[`packages/go-server`](./packages/go-server)** - Go Server SDK
   - Goroutine-safe concurrent access
   - Idiomatic Go patterns
   - Minimal dependencies
@@ -414,7 +414,7 @@ pnpm --filter @otto-flags/sdk test:watch
 |---------|----------|---------|--------|
 | [@otto-flags/node-server](./packages/node-server) | Node.js | v0.1.0 | Beta |
 | [otto-flags-java-server-sdk](./packages/java-server) | Java 11+ | v0.1.0 | Beta |
-| [otto-flags-go-server-sdk](./packages/go-server) | Go 1.21+ | v0.1.0 | Beta |
+| [`packages/go-server`](./packages/go-server) | Go 1.21+ | v0.1.0 | Beta |
 | [ottoFlags](./packages/rust-server) | Rust 1.70+ | v0.1.0 | Beta |
 
 ### MCP Servers

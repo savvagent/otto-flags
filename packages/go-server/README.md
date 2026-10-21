@@ -18,7 +18,7 @@ Official Go Server SDK for Otto Flags - AI-powered feature flags with automatic 
 ## Installation
 
 ```bash
-go get github.com/savvagent/otto-flags-go-server-sdk
+go get github.com/savvagent/otto-flags/packages/go-server
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ import (
     "fmt"
     "log"
 
-    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {
@@ -104,7 +104,7 @@ package main
 
 import (
     "net/http"
-    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {
@@ -143,7 +143,7 @@ package main
 
 import (
     "github.com/gin-gonic/gin"
-    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {
@@ -190,7 +190,7 @@ import (
     "context"
 
     "google.golang.org/grpc"
-    ottoflags "github.com/savvagent/otto-flags-go-server-sdk"
+    ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func FlagInterceptor(client *ottoflags.FlagClient) grpc.UnaryServerInterceptor {

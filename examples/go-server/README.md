@@ -23,6 +23,9 @@ Example Go application demonstrating how to use the Otto Flags Go Server SDK wit
    go mod download
    ```
 
+   The example's `go.mod` has a `replace` directive that points the SDK import at
+   `../../packages/go-server`, so it builds against the checkout without a published version.
+
 2. **Configure environment variables:**
    ```bash
    export OTTO_FLAGS_API_URL=http://localhost:8080
@@ -87,16 +90,21 @@ Uses the `advanced-processing` flag to determine processing method.
 package main
 
 import (
+    "log"
+    "os"
+
     "github.com/gin-gonic/gin"
-    "github.com/savvagent/otto-flags-go-server-sdk/pkg/ottoflags"
+    ottoflags "github.com/savvagent/otto-flags/packages/go-server"
 )
 
 func main() {
-    client := ottoflags.NewClient(ottoflags.Config{
-        APIURL:      os.Getenv("OTTO_FLAGS_API_URL"),
-        SDKKey:      os.Getenv("OTTO_FLAGS_SDK_KEY"),
-        Environment: "development",
+    client, err := ottoflags.NewClient(ottoflags.Config{
+        APIKey:  os.Getenv("OTTO_FLAGS_SDK_KEY"),
+        BaseURL: os.Getenv("OTTO_FLAGS_API_URL"),
     })
+    if err != nil {
+        log.Fatal(err)
+    }
     defer client.Close()
 
     r := gin.Default()
@@ -104,17 +112,12 @@ func main() {
     r.GET("/api/features", func(c *gin.Context) {
         userId := c.Query("userId")
 
-        isEnabled, err := client.IsEnabled("new-feature", ottoflags.EvaluationContext{
+        isEnabled := client.IsEnabled("new-feature", &ottoflags.Context{
             UserID: userId,
             Attributes: map[string]interface{}{
                 "plan": "pro",
             },
         })
-
-        if err != nil {
-            c.JSON(500, gin.H{"error": err.Error()})
-            return
-        }
 
         c.JSON(200, gin.H{
             "userId":     userId,
