@@ -155,7 +155,6 @@ fn mcp_config(platform: Arc<PlatformClient>, config: &Config) -> flags_mcp::Conf
     );
     mcp.allowed_hosts = config.allowed_hosts();
     mcp.allowed_origins = config.allowed_origins.clone();
-    mcp.enforce_quotas = config.enforce_quotas;
     mcp.upgrade_url = config.upgrade_url();
     mcp
 }

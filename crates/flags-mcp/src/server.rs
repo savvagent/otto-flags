@@ -12,8 +12,8 @@
 //! is the only way `flags-core` hands out tenant data.
 //!
 //! **A tool body:** check the scope, open the transaction, charge, do one
-//! thing, commit. Charging inside the tool's own transaction means a failed
-//! call is never billed.
+//! thing, commit. Charging records a free usage row inside the tool's own
+//! transaction, so a failed call leaves none; no tool is refused for billing.
 
 use std::sync::Arc;
 
@@ -67,8 +67,10 @@ re-arms its policy.
 evaluate_flag answers what a given user would get, and why, without changing \
 any flag. Use it to check targeting before turning a flag on.
 
-You are billed for changes, not for looking: reads, evaluate_flag, \
-flag_health, whoami and usage are free. Call usage to see where you stand.";
+Every tool here is free, and none is ever refused for billing. Billing is on \
+production evaluations by the SDKs (the otto-flags/evaluations meter). Call \
+usage to read this month's meters, the budget, and blockedReason: when it is \
+set, evaluations keep serving and are not billed.";
 
 /// The service. Cheap to clone, because `rmcp` builds one per session.
 #[derive(Clone)]
@@ -120,16 +122,13 @@ impl Flags {
     /// Open a transaction pinned to the caller's org, refused if the org was
     /// deleted or the caller removed since their token was introspected.
     pub async fn tx(&self, caller: &Principal) -> Result<Tx<'static>, ErrorData> {
-        // The quota lookup is a network call: make it before a pooled
-        // connection is held.
-        self.meter.warm(caller.org_id).await;
         flags_core::platform_events::begin_live(&self.db, caller.org_id, Some(caller.user_id))
             .await
             .mcp()
     }
 
-    /// Record this call (and refuse it if the org is out of budget), inside
-    /// the tool's own transaction and before it does anything.
+    /// Record this call, free, inside the tool's own transaction and before
+    /// it does anything. Never refuses a call for billing.
     pub async fn charge(
         &self,
         tx: &mut Tx<'_>,

@@ -57,7 +57,7 @@ pub const NAMES: &[&str] = &[
 
 /// Tools that only read. The rule: no write scope is required and no state a
 /// caller can observe changes. Every tool but `propose_rollback` records a usage row through
-/// `Flags::charge`, but a read's row is not billable. `readOnlyHint = true`
+/// `Flags::charge`, but no row is billable. `readOnlyHint = true`
 /// lets connector clients run these without asking. `propose_rollback` is a
 /// dry run and belongs here.
 ///
@@ -95,11 +95,9 @@ pub const DESTRUCTIVE: &[&str] = &[
     "remove_rollback_policy",
 ];
 
-/// Writes whose repeat has no further effect (`idempotentHint = true`). This
-/// excludes every billable tool, since each call records usage: a repeat is
-/// another charge. Of the writes, only `remove_rollback_policy` is not
-/// billable, and removing an absent policy deletes nothing and writes no audit
-/// row; only its non-billable usage row repeats.
+/// Writes whose repeat has no further effect (`idempotentHint = true`). Of the
+/// writes, only `remove_rollback_policy` qualifies: removing an absent policy
+/// deletes nothing and writes no audit row; only its free usage row repeats.
 pub const IDEMPOTENT: &[&str] = &["remove_rollback_policy"];
 
 #[cfg(test)]
@@ -122,6 +120,18 @@ mod tests {
             assert!(
                 NAMES.contains(billable),
                 "{billable} is billed but is not a tool"
+            );
+        }
+    }
+
+    #[test]
+    fn no_tool_is_billable() {
+        assert!(flags_core::usage::BILLABLE.is_empty());
+        for tool in router().list_all() {
+            let name = tool.name.to_string();
+            assert!(
+                !flags_core::usage::is_billable(&name),
+                "{name} is billable; every MCP tool is free"
             );
         }
     }

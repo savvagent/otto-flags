@@ -46,6 +46,14 @@ struct Platform {
     legacy: HashSet<Uuid>,
     /// Orgs whose usage status the platform cannot serve (503).
     unavailable: HashSet<Uuid>,
+    /// Meters, as the platform reports them in the usage status, per org.
+    /// Orgs absent here are answered as a platform that predates meters does:
+    /// no `meters`, `budget` or `blocked_reason` keys.
+    meters: HashMap<Uuid, Value>,
+    /// The budget object in the usage status, per org.
+    budget: HashMap<Uuid, Value>,
+    /// The `blocked_reason` in the usage status, per org.
+    blocked_reason: HashMap<Uuid, String>,
     /// Usage-status requests received, per org.
     usage_status_hits: HashMap<Uuid, usize>,
     /// When set, every shipped usage event is rejected with this reason.
@@ -122,6 +130,15 @@ async fn usage_status(
         "included_ops": 1000,
         "hard_stop": false,
     });
+    if let Some(m) = p.meters.get(&org) {
+        status["meters"] = m.clone();
+    }
+    if let Some(b) = p.budget.get(&org) {
+        status["budget"] = b.clone();
+    }
+    if let Some(r) = p.blocked_reason.get(&org) {
+        status["blocked_reason"] = json!(r);
+    }
     if !p.legacy.contains(&org) {
         status["features"] = if p.entitled.contains(&org) {
             json!({"auto_rollback": true})
@@ -1630,10 +1647,10 @@ async fn tools_list_carries_annotations(pool: PgPool) {
     assert!(evaluate.contains("not billed"), "{evaluate}");
 }
 
-/// Only setting a policy is billed; the rest record a free row, except the
-/// dry run, which records none. A refused set is never billed.
+/// Every tool is free: setting a policy records a row with `billable = false`
+/// like the rest, except the dry run, which records none.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
-async fn only_setting_a_policy_is_billed(pool: PgPool) {
+async fn setting_a_policy_is_recorded_as_not_billable(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool.clone(), &url).await;
     let org = Uuid::new_v4();
@@ -1682,9 +1699,66 @@ async fn only_setting_a_policy_is_billed(pool: PgPool) {
             ("list_rollback_policies".to_string(), false, 1),
             ("remove_rollback_policy".to_string(), false, 1),
             ("rollback_events".to_string(), false, 1),
-            ("set_rollback_policy".to_string(), true, 1),
+            ("set_rollback_policy".to_string(), false, 1),
         ]
     );
+}
+
+/// `whoami` and `usage` report the platform's meters, budget and blocked reason,
+/// and every write tool records a free row. A platform that predates meters
+/// still answers: the new fields are empty, the legacy ones are filled.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn whoami_and_usage_report_meters_and_budget(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let (org, legacy_org) = (Uuid::new_v4(), Uuid::new_v4());
+    {
+        let mut p = platform.lock().unwrap();
+        p.meters.insert(
+            org,
+            json!([{"meter": "otto-flags/evaluations", "display_name": "Evaluations",
+                    "unit": "evaluation", "quantity": 1200}]),
+        );
+        p.budget.insert(
+            org,
+            json!({"monthly_budget_cents": 5000, "spend_cents": 5000, "percent_used": 100,
+                   "thresholds_reached": [50, 80, 100], "hard_stop": true, "blocked": true,
+                   "reason": "budget_exceeded"}),
+        );
+        p.blocked_reason.insert(org, "budget_exceeded".into());
+    }
+    let (t, _, _, _) = org_with_flag(&s, &platform, org, "risky").await;
+
+    // A write tool is recorded, free, even while the platform reports blocked.
+    let billable: Vec<bool> =
+        sqlx::query_scalar("SELECT billable FROM usage_outbox WHERE tool = 'create_flag'")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(billable, vec![false]);
+
+    let who = tool(&s.app, &t, "whoami", json!({})).await.unwrap();
+    let usage = tool(&s.app, &t, "usage", json!({})).await.unwrap();
+    for status in [&who["usage"], &usage["usage"]] {
+        assert_eq!(status["meters"][0]["meter"], "otto-flags/evaluations");
+        assert_eq!(status["meters"][0]["displayName"], "Evaluations");
+        assert_eq!(status["meters"][0]["quantity"], 1200);
+        assert_eq!(status["budget"]["monthlyBudgetCents"], 5000);
+        assert_eq!(status["budget"]["reason"], "budget_exceeded");
+        assert_eq!(status["blockedReason"], "budget_exceeded");
+        assert_eq!(status["enforced"], true);
+    }
+
+    // The legacy shape: no meters, no budget, nothing blocked.
+    let (lt, _, _, _) = {
+        platform.lock().unwrap().legacy.insert(legacy_org);
+        org_with_flag(&s, &platform, legacy_org, "risky").await
+    };
+    let usage = tool(&s.app, &lt, "usage", json!({})).await.unwrap();
+    assert_eq!(usage["usage"]["meters"], json!([]));
+    assert_eq!(usage["usage"]["budget"], Value::Null);
+    assert_eq!(usage["usage"]["blockedReason"], Value::Null);
+    assert_eq!(usage["usage"]["includedOps"], 1000);
 }
 
 /// A failed plan lookup is remembered for a few seconds, so an outage costs

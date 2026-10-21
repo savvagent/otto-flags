@@ -48,7 +48,6 @@ pub struct Config {
     pub allowed_hosts: Vec<String>,
     /// Accepted browser `Origin`s; empty disables the check (CLI agents send none).
     pub allowed_origins: Vec<String>,
-    pub enforce_quotas: bool,
     pub upgrade_url: String,
 }
 
@@ -72,7 +71,6 @@ impl Config {
             resource_uri: resource_uri.into(),
             allowed_hosts: if host.is_empty() { vec![] } else { vec![host] },
             allowed_origins: vec![],
-            enforce_quotas: false,
             public_url,
         }
     }
@@ -102,11 +100,7 @@ pub fn router(db: Db, config: Config) -> Router {
     let flags = Flags::new(
         db,
         config.platform.clone(),
-        Meter::new(
-            config.platform.clone(),
-            config.enforce_quotas,
-            config.upgrade_url.clone(),
-        ),
+        Meter::new(config.platform.clone(), config.upgrade_url.clone()),
         Entitlements::new(config.platform.clone(), config.upgrade_url),
     );
     let service = StreamableHttpService::new(

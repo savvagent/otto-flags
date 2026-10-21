@@ -25,6 +25,7 @@ async fn main() -> Result<()> {
          variables named above in the deployment",
     )?;
     init_tracing(config.log_format);
+    config.warn_retired();
     if let Ok(path) = dotenv {
         tracing::debug!(path = %path.display(), "loaded .env");
     }
@@ -105,7 +106,6 @@ async fn main() -> Result<()> {
         public_url = %config.public_url,
         resource_uri = %config.resource_uri,
         platform_url = %config.platform_url,
-        enforce_quotas = config.enforce_quotas,
         "flags-server listening"
     );
 
