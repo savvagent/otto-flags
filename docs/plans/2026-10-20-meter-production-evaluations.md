@@ -51,7 +51,7 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-core/src/platform_events.rs`
 - `crates/flags-core/tests/db.rs`
 
-- [ ] Write the failing DB tests in `tests/db.rs`:
+- [x] Write the failing DB tests in `tests/db.rs`:
   - `usage_meter_hourly` is in the tenant-isolation proof: add `"usage_meter_hourly"` to the
     explicit name list in `tenant_isolation_is_enforced_on_every_tenant_table`
     (`crates/flags-core/tests/db.rs:46`). That list asserts the table exists with RLS enabled and
@@ -63,14 +63,14 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     `quantity = 0`, and accept both NULL or both set, on both outbox tables.
   - The `org.deleted` purge removes the org's `usage_meter_hourly` rows and reports their count in
     its detail.
-- [ ] Run the test gate and see these fail.
-- [ ] Add `0007_usage_meter.sql` exactly as in the spec's Migration section: `lock_timeout`, the
+- [x] Run the test gate and see these fail.
+- [x] Add `0007_usage_meter.sql` exactly as in the spec's Migration section: `lock_timeout`, the
   rejected table first, the paired CHECKs, the new table with the `served`/`reported` columns, the
   composite FK, the hour index, RLS enable and force, the two policies, and no GRANT.
-- [ ] Add `"usage_meter_hourly"` to the purge list in `platform_events.rs`, just before
+- [x] Add `"usage_meter_hourly"` to the purge list in `platform_events.rs`, just before
   `"flag_apps"`, with a one-line comment on why it is there.
-- [ ] Touch `migrate.rs`, then run the test gate and see the tests pass. Also run lint and format.
-- [ ] Commit `feat(core): add the hourly evaluation meter table and outbox meter columns`.
+- [x] Touch `migrate.rs`, then run the test gate and see the tests pass. Also run lint and format.
+- [x] Commit `feat(core): add the hourly evaluation meter table and outbox meter columns`.
 
 ### Task 2: The evaluation counter and its flush
 
@@ -81,12 +81,12 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-core/src/lib.rs` (`pub mod metering;`)
 - `crates/flags-core/tests/db.rs`
 
-- [ ] Write failing unit tests in `metering.rs`:
+- [x] Write failing unit tests in `metering.rs`:
   - `served`/`reported` accumulate per (org, app).
   - `take` empties the counter.
   - `restore` adds counts back without losing concurrent adds.
   - The counts saturate at `u64::MAX`.
-- [ ] Write failing DB tests:
+- [x] Write failing DB tests:
   - `flush` upserts `served`/`reported` into hour `date_trunc('hour', now(), 'UTC')` and adds to
     an existing row.
   - It skips orgs in `deleted_orgs` and pairs whose app is missing from `flag_apps`, without
@@ -99,8 +99,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     sleeps `pause` between the `SET LOCAL`s and the UPSERT. With `timeout = "200ms"` and
     `pause = 1 s`, the call fails and the counts are restored. `flush` calls
     `flush_with(…, TX_TIMEOUT, Duration::ZERO)`.
-- [ ] Run and see them fail.
-- [ ] Implement in `metering.rs`:
+- [x] Run and see them fail.
+- [x] Implement in `metering.rs`:
   - `Counts { served: u64, reported: u64 }`
   - `EvalCounter`, a `Mutex<HashMap<(OrgId, FlagAppId), Counts>>`, with `served`, `reported`,
     `take` and `restore`. A poisoned lock recovers with `into_inner`, never a panic on the request
@@ -113,8 +113,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
       clamp.
     - On any error it restores and returns the error.
   - Module docs explain the served/reported split and the `GREATEST` rule, citing the spec.
-- [ ] Run the tests and see them pass. Run lint and format.
-- [ ] Commit `feat(core): count served and reported evaluations and flush them to the hourly table`.
+- [x] Run the tests and see them pass. Run lint and format.
+- [x] Commit `feat(core): count served and reported evaluations and flush them to the hourly table`.
 
 ### Task 3: Closing hours into the outbox
 
@@ -125,7 +125,7 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-core/src/usage.rs` (`Meter::billable_blocked`)
 - `crates/flags-core/tests/db.rs`
 
-- [ ] Write failing DB tests:
+- [x] Write failing DB tests:
   - Only due hours (`hour + 1 h + CLOSE_GRACE <= now()`) close. Insert the rows with explicit past
     hours.
   - A billed org gets an outbox row with `tool = 'sdk_evaluations'`, `billable = true`,
@@ -142,8 +142,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     (billed) rows.
   - Rows with `GREATEST = 0` (both zero) are deleted without an outbox row.
   - At most `CLOSE_BATCH_ORGS` orgs are closed per pass.
-- [ ] Run and see them fail.
-- [ ] Implement:
+- [x] Run and see them fail.
+- [x] Implement:
   - `pub enum BlockedLookup { Blocked, NotBlocked, Failed }` in `usage.rs`.
   - `usage::Meter::billable_blocked(&self, org) -> BlockedLookup`: the platform `usage_status`
     with the existing 2 s timeout, then `UsageStatus::billable_blocked()`. Any failure is
@@ -161,8 +161,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
        usage_outbox (…) SELECT …`, splitting with `generate_series` over `ceil(q / cap)` and
        choosing metered or unmetered by `org_id = ANY($blocked)`.
     - It logs at info, per pass, the totals billed and unbilled, with no org text.
-- [ ] Run the tests and see them pass. Run lint and format.
-- [ ] Commit `feat(core): close evaluation hours into the usage outbox, unbilled while blocked`.
+- [x] Run the tests and see them pass. Run lint and format.
+- [x] Commit `feat(core): close evaluation hours into the usage outbox, unbilled while blocked`.
 
 ### Task 4: Ship meters, and declare them first
 
@@ -173,15 +173,15 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-core/tests/db.rs`
 - `crates/flags-server/tests/e2e.rs` (mock: `PUT /internal/meters`)
 
-- [ ] Write failing tests (all in `crates/flags-server/tests/e2e.rs`, beside
+- [x] Write failing tests (all in `crates/flags-server/tests/e2e.rs`, beside
   `a_rejected_usage_event_keeps_a_capped_reason`, because they need the platform mock):
   - e2e: `ship_once` sends `meter`/`quantity` for a metered row.
   - e2e: a rejected metered row keeps `meter`/`quantity` in `usage_outbox_rejected`.
   - e2e: the shipper declares `otto-flags/evaluations` before its first `POST /internal/usage`.
   - e2e: a declaration that answers 409, or rejects the meter, holds shipping. It retries, and
     ships once the declaration succeeds.
-- [ ] Run and see them fail.
-- [ ] Implement:
+- [x] Run and see them fail.
+- [x] Implement:
   - `Row`, the claim `RETURNING`, the `UsageEvent` mapping (`meter`, `quantity as u64`,
     `service: None`), and the rejected-move CTE all carry `meter`/`quantity`.
   - `declare_meters(platform, cfg, shutdown) -> bool`, ported from otto-factory's
@@ -193,8 +193,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     - returns `false` on shutdown
   - `run` calls it first and returns without shipping if shutdown came first.
   - Update the module docs (Metering section).
-- [ ] Run the tests and see them pass. Run lint and format.
-- [ ] Commit `feat(core): declare the evaluations meter and ship metered usage`.
+- [x] Run the tests and see them pass. Run lint and format.
+- [x] Commit `feat(core): declare the evaluations meter and ship metered usage`.
 
 ### Task 5: Free MCP tools, the new usage report, and retiring FLAGS_ENFORCE_QUOTAS
 
@@ -207,7 +207,7 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-server/src/{config.rs,lib.rs,main.rs}`
 - tests where these live
 
-- [ ] Write failing tests:
+- [x] Write failing tests:
   - `BILLABLE` is empty, and every name in the MCP tool registry is not billable. The test goes
     in `crates/flags-mcp/src/tools/mod.rs` tests, which already iterate `router().list_all()`
     (`flags-core` cannot see the registry).
@@ -229,8 +229,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
   - e2e: a write tool records `billable = false`. `whoami` and `usage` include `meters`,
     `budget` and `blockedReason` from the mock (extend the mock with settable `meters`, `budget`
     and `blocked_reason`, and keep the legacy-shape path).
-- [ ] Run and see them fail.
-- [ ] Implement:
+- [x] Run and see them fail.
+- [x] Implement:
   - `BILLABLE: &[&str] = &[]`.
   - `Meter::charge` only records, with no lookup.
   - Remove `Meter::warm`, `enforce`, the `fail_open` map, `status_for`'s quota use,
@@ -246,8 +246,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
       production evaluations by the SDKs; read `meters`, `budget` and `blockedReason`.
     - The server INSTRUCTIONS billing paragraph (`server.rs:70-71`) is rewritten the same way.
     - The module doc of `org.rs`.
-- [ ] Run the tests and see them pass. Run lint and format.
-- [ ] Commit `feat(mcp)!: make every tool free and report meters and budget`, with the
+- [x] Run the tests and see them pass. Run lint and format.
+- [x] Commit `feat(mcp)!: make every tool free and report meters and budget`, with the
   `BREAKING CHANGE:` footer from the spec.
 
 ### Task 6: Wire the counter into the SDK path and run the metering task
@@ -261,7 +261,7 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `crates/flags-server/tests/e2e.rs`
 - the `crates/flags-api/tests` that build `AppState`
 
-- [ ] Write failing e2e tests:
+- [x] Write failing e2e tests:
   - An `/api/evaluate` call plus a telemetry batch, then `metering::flush` and `close_due`, with
     the rows' hour moved into the past by a test UPDATE in a maintenance transaction, or a
     test-only hour parameter. Then `ship_once` yields one metered event per app at the mock, with
@@ -272,8 +272,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
   - With the mock reporting `budget_exceeded`, `/api/evaluate` returns the same answer and the
     mock's usage-status hit count for that org does not move during the request. The test does
     not spawn `metering::run`.
-- [ ] Run and see them fail.
-- [ ] Implement (invariants: no statement is added to any request transaction, `begin_live` is
+- [x] Run and see them fail.
+- [x] Implement (invariants: no statement is added to any request transaction, `begin_live` is
   unchanged, and the SDK path never calls the platform):
   - `AppState` gains `evaluations: Arc<EvalCounter>`, set through `AppState::new`. Its callers
     are `crates/flags-server/src/lib.rs:62`, `crates/flags-api/tests/failure_logs.rs:108`,
@@ -300,8 +300,8 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     - On shutdown, await it after the stop signal, as the shipper is awaited.
     - The `Meter` passed is the same platform-backed meter the MCP side uses, or a new one built
       on the same `PlatformClient`.
-- [ ] Run the tests and see them pass. Run lint and format.
-- [ ] Commit `feat(api): meter served and reported evaluations from the sdk path`.
+- [x] Run the tests and see them pass. Run lint and format.
+- [x] Commit `feat(api): meter served and reported evaluations from the sdk path`.
 
 ### Task 7: Docs
 
@@ -313,7 +313,7 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
 - `.env.example`
 - `crates/flags-core/src/usage.rs` module doc, if not already done
 
-- [ ] `CLAUDE.md`:
+- [x] `CLAUDE.md`:
   - Rewrite the Metering invariant per the spec:
     - MCP tools record free rows in their own transaction.
     - Production evaluations are counted in memory, flushed to `usage_meter_hourly`, and closed
@@ -324,24 +324,24 @@ meter, as specced in `docs/specs/2026-10-20-meter-production-evaluations-design.
     only.
   - Fix the Development Workflow section only if a gate, CI job or reviewer fact changed. None is
     expected.
-- [ ] `docs/deploy/fly.md`:
+- [x] `docs/deploy/fly.md`:
   - `FLAGS_ENFORCE_QUOTAS` is retired.
   - The meter `otto-flags/evaluations` and the `set-service` prerequisite, which is done.
   - The rollback note: the old shipper ships hour rows unmetered during an overlap or after a
     rollback.
   - Idle suspend delays hour closes: an hour closed after the platform's month cutoff bills in
     the month it arrives.
-- [ ] `.env.example`: mark `FLAGS_ENFORCE_QUOTAS` as retired.
-- [ ] `crates/flags-core/src/entitlements.rs:4`: fix the module doc's stale `FLAGS_ENFORCE_QUOTAS`
+- [x] `.env.example`: mark `FLAGS_ENFORCE_QUOTAS` as retired.
+- [x] `crates/flags-core/src/entitlements.rs:4`: fix the module doc's stale `FLAGS_ENFORCE_QUOTAS`
   mention.
-- [ ] Run the gates (format and lint at least, plus the full test run if any code comment
+- [x] Run the gates (format and lint at least, plus the full test run if any code comment
   changed).
-- [ ] Commit `docs: record evaluation metering and the retired quota switch`.
+- [x] Commit `docs: record evaluation metering and the retired quota switch`.
 
 ### Task 8: Final gates and record as shipped
 
 **Model:** n/a (orchestrator)
 
-- [ ] Run the full gate set, including `podman build -t otto-flags:check .` and the extra check.
-- [ ] After review and before merge, add a docs commit: the spec's `**Status:**` becomes
+- [x] Run the full gate set, including `podman build -t otto-flags:check .` and the extra check.
+- [x] After review and before merge, add a docs commit: the spec's `**Status:**` becomes
   `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked.

@@ -1,6 +1,6 @@
 # Meter production evaluations
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#146)
 **Ticket:** savvagent/otto-flags#140 (PR 2 of 2; PR 1, #141, pinned otto-platform v0.10.0)
 
 ## Brief
