@@ -1,6 +1,6 @@
 # Pin otto-platform 0.10.0
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#141)
 **Ticket:** savvagent/otto-flags#140 (first of two PRs; the second meters evaluations)
 
 ## Brief

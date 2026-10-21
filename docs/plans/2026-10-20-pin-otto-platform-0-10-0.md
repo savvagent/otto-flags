@@ -21,17 +21,17 @@
 
 **Files:** `Cargo.toml`, `Cargo.lock`, `crates/flags-core/src/usage.rs`
 
-- [ ] Set both `rev` values to `bfda55e155be8985761850a7c42980cc926fd4cb`.
-- [ ] Run `cargo build --workspace --all-targets`. It fails on the `UsageEvent` literal in
+- [x] Set both `rev` values to `bfda55e155be8985761850a7c42980cc926fd4cb`.
+- [x] Run `cargo build --workspace --all-targets`. It fails on the `UsageEvent` literal in
   `ship_once` (missing `meter`, `quantity` and `service`).
-- [ ] Add `service: None, meter: None, quantity: None` to that literal, then rebuild.
-- [ ] Confirm that `git diff Cargo.lock` changes only the two platform packages, plus their
+- [x] Add `service: None, meter: None, quantity: None` to that literal, then rebuild.
+- [x] Confirm that `git diff Cargo.lock` changes only the two platform packages, plus their
   `hmac`/`sha2` edges.
-- [ ] Run the gates.
-- [ ] Run the extra migrations check after committing (it compares committed history).
-- [ ] Commit `chore: pin otto-platform 0.10.0 for service meters`, with a body ending
+- [x] Run the gates.
+- [x] Run the extra migrations check after committing (it compares committed history).
+- [x] Commit `chore: pin otto-platform 0.10.0 for service meters`, with a body ending
   `Refs #140` (#140 closes with the metering PR).
-- [ ] Open the PR with `Refs #140` in its body, not `Fixes #140`, and say why (see the spec's
+- [x] Open the PR with `Refs #140` in its body, not `Fixes #140`, and say why (see the spec's
   Brief).
-- [ ] Before merging, add a final docs commit: the spec's `**Status:**` becomes
+- [x] Before merging, add a final docs commit: the spec's `**Status:**` becomes
   `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked.
