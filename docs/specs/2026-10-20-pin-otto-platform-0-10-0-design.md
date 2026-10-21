@@ -15,6 +15,10 @@ fields.
 The Development Workflow section (Out-of-band) says the otto-platform pin moves in its own PR. This
 spec covers that PR only. Metering lands in the next PR.
 
+Because #140 spans two PRs, this one references it with `Refs #140` (commit and PR body), not
+`Fixes #140`: closing #140 here would close it before its acceptance criteria are met. The metering
+PR carries `Fixes #140`. This is a deliberate exception to the section's "PR body must contain".
+
 ## Premise corrections
 
 None.
@@ -24,7 +28,8 @@ None.
 - The Run Profile is complete in CLAUDE.md; no key was assumed.
 - Dependency changes are not fast-path eligible, hence this spec.
 - v0.10.0 is rev `bfda55e155be8985761850a7c42980cc926fd4cb` (tag v0.10.0). It was deployed to
-  production on 2026-10-21 (Fly v14), so this service already talks to a v0.10.0 platform.
+  production as Fly release v14 of `otto-platform` (2026-10-21 UTC). This fact comes from the
+  platform's deploy run, not from this repo, so this service already talks to a v0.10.0 platform.
 
 ## Goal and success criteria
 
@@ -74,11 +79,13 @@ No public interface of this service changes.
   `otto-tenant` and are never applied to `otto_flags`. No schema change here; the RLS proof is
   unchanged.
 - **Metering:** recording is unchanged. Rows ship without a meter, as today.
+- **The SDK REST contract** and **the SDK path never calls the platform**: untouched.
 - **Licensing:** no code is copied.
 
 ## Out-of-band
 
-None: no new secret, config key or scope. The merge redeploys the rebuilt server (ci-auto).
+None: no new secret, config key or scope, and no new recurring cost (no VM, volume, app or paid
+service). The merge redeploys the rebuilt server (ci-auto).
 
 ## Error handling and edge cases
 
@@ -90,7 +97,8 @@ A rev that cannot be fetched fails the build. The container-build gate covers th
 - clippy, fmt, the migrations-append-only check, and `podman build -t otto-flags:check .`.
 
 The e2e platform mock answers `usage_status` as JSON without the new fields, which proves that
-their serde defaults hold against an older answer shape.
+their serde defaults hold against an older answer shape. The `entitlements.rs` test helper also
+deserializes that older shape.
 
 ## Risks
 

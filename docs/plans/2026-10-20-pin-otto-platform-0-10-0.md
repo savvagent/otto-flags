@@ -28,5 +28,10 @@
 - [ ] Confirm that `git diff Cargo.lock` changes only the two platform packages, plus their
   `hmac`/`sha2` edges.
 - [ ] Run the gates.
-- [ ] Commit `build: pin otto-platform 0.10.0 for service meters`, with a body ending
+- [ ] Run the extra migrations check after committing (it compares committed history).
+- [ ] Commit `chore: pin otto-platform 0.10.0 for service meters`, with a body ending
   `Refs #140` (#140 closes with the metering PR).
+- [ ] Open the PR with `Refs #140` in its body, not `Fixes #140`, and say why (see the spec's
+  Brief).
+- [ ] Before merging, add a final docs commit: the spec's `**Status:**` becomes
+  `IMPLEMENTED (#<PR>)` and this plan's boxes are ticked.
