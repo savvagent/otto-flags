@@ -17,9 +17,12 @@
 //! [`EvalCounter`] does no I/O and holds its lock for one map operation, so
 //! the SDK request path never waits on the database or the platform.
 //! [`flush`] moves its contents into `usage_meter_hourly` in one set-based
-//! statement inside a maintenance transaction.
+//! statement inside a maintenance transaction. [`close_due`] then turns each
+//! finished hour into usage outbox rows: metered while the org is billed,
+//! unmetered while the platform blocks it.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -30,6 +33,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::ids::FlagAppId;
+use crate::usage::BlockedLookup;
 
 /// How often the background task flushes the counter.
 pub const FLUSH_EVERY: Duration = Duration::from_secs(10);
@@ -205,6 +209,19 @@ async fn write(
             reported: clamp(c.reported),
         })
         .collect();
+    let mut tx = begin_bounded(db, timeout).await?;
+    if !pause.is_zero() {
+        tokio::time::sleep(pause).await;
+    }
+    let written = upsert_all(&mut tx, &rows).await?;
+    tx.commit().await?;
+    Ok(written)
+}
+
+/// A maintenance transaction whose `statement_timeout` and
+/// `idle_in_transaction_session_timeout` are `timeout` (`SET LOCAL`, so they
+/// end with it).
+async fn begin_bounded(db: &Db, timeout: &str) -> sqlx::Result<Transaction<'static, Postgres>> {
     let mut tx = crate::maintenance::begin(db).await?;
     for setting in ["statement_timeout", "idle_in_transaction_session_timeout"] {
         sqlx::query("SELECT set_config($1, $2, true)")
@@ -213,12 +230,7 @@ async fn write(
             .execute(&mut *tx)
             .await?;
     }
-    if !pause.is_zero() {
-        tokio::time::sleep(pause).await;
-    }
-    let written = upsert_all(&mut tx, &rows).await?;
-    tx.commit().await?;
-    Ok(written)
+    Ok(tx)
 }
 
 struct Row {
@@ -271,6 +283,164 @@ async fn upsert_all(tx: &mut Transaction<'static, Postgres>, rows: &[Row]) -> sq
 
 fn is_fk_violation(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(d) if d.code().as_deref() == Some(FK_VIOLATION))
+}
+
+// ------------------------------------------------------------------ hour close
+
+/// The orgs with a due hour, oldest due hour first, at most `$2` of them. An
+/// hour `H` is due once `H + 1 h + CLOSE_GRACE <= now()`; written as a bound
+/// on `hour` so the `hour` index serves it.
+const DUE_ORGS: &str = "\
+SELECT org_id FROM usage_meter_hourly \
+WHERE hour <= now() - interval '1 hour' - make_interval(secs => $1) \
+GROUP BY org_id ORDER BY min(hour), org_id LIMIT $2";
+
+/// Close the due rows of the orgs `$1` in one statement: the `DELETE …
+/// RETURNING` takes each row once, so a concurrent pass waiting on the same
+/// rows finds them gone and closes nothing twice.
+///
+/// - `$2`: the orgs (a subset of `$1`) whose hours ship unmetered, one
+///   `billable = false` row per closed hour row.
+/// - Every other org's row is billed `GREATEST(served, reported)` on
+///   `$3` (the meter), split into rows of at most `$4` that sum to it.
+/// - A row with nothing to bill (both counts zero) is deleted with no outbox
+///   row.
+///
+/// Returns the rows closed and the billed and unbilled totals, for the log.
+const CLOSE: &str = "\
+WITH gone AS ( \
+  DELETE FROM usage_meter_hourly \
+  WHERE org_id = ANY($1::uuid[]) \
+    AND hour <= now() - interval '1 hour' - make_interval(secs => $5) \
+  RETURNING org_id, hour, GREATEST(served, reported) AS q, org_id = ANY($2::uuid[]) AS blocked \
+), shipped AS ( \
+  INSERT INTO usage_outbox (org_id, user_id, tool, billable, occurred_at, meter, quantity) \
+  SELECT g.org_id, NULL::uuid, $6::text, false, g.hour, NULL::text, NULL::bigint \
+  FROM gone g WHERE g.blocked AND g.q > 0 \
+  UNION ALL \
+  SELECT g.org_id, NULL::uuid, $6::text, true, g.hour, $3::text, LEAST($4::bigint, g.q - i * $4::bigint) \
+  FROM gone g, generate_series(0::bigint, ceil(g.q::numeric / $4::bigint)::bigint - 1) AS i \
+  WHERE NOT g.blocked AND g.q > 0 \
+  RETURNING billable \
+) \
+SELECT \
+  (SELECT count(*) FROM gone) AS closed, \
+  (SELECT count(*) FROM gone WHERE NOT blocked AND q > 0) AS billed_hours, \
+  (SELECT coalesce(sum(q), 0)::numeric::text FROM gone WHERE NOT blocked) AS billed_quantity, \
+  (SELECT count(*) FROM shipped WHERE billable) AS billed_events, \
+  (SELECT count(*) FROM gone WHERE blocked AND q > 0) AS unbilled_hours, \
+  (SELECT coalesce(sum(q), 0)::numeric::text FROM gone WHERE blocked) AS unbilled_quantity";
+
+/// Close every due hour of up to [`CLOSE_BATCH_ORGS`] orgs into the usage
+/// outbox.
+///
+/// `lookup` says whether each org is blocked; it is called in sequence, with
+/// no database connection held. Only [`BlockedLookup::Blocked`] ships an
+/// org's hours unmetered (`billable = false`, no meter): both
+/// [`BlockedLookup::NotBlocked`] and [`BlockedLookup::Failed`] bill (fail
+/// open). After the first `Failed`, `lookup` is not called again in this
+/// pass and the remaining orgs are billed, so a platform outage costs one
+/// lookup timeout per pass.
+///
+/// A billed (org, app, hour) row becomes `GREATEST(served, reported)` on
+/// [`METER_EVALUATIONS`] under the [`EVALUATIONS_TOOL`] tool, at
+/// `occurred_at = hour`, split across several rows if it exceeds
+/// [`otto_resource::MAX_METER_QUANTITY`]. A row with both counts zero is
+/// deleted without an outbox row.
+///
+/// Returns the number of hourly rows closed (deleted), including the ones
+/// with nothing to bill. A failure rolls the close back: the rows stay and
+/// are closed by a later pass. Concurrent passes (two machines) close each
+/// row exactly once.
+///
+/// In production `lookup` is `|org| meter.billable_blocked(org)`
+/// ([`crate::usage::Meter::billable_blocked`]); never call this on a request
+/// path.
+pub async fn close_due<F, Fut>(db: &Db, lookup: F) -> Result<usize>
+where
+    F: FnMut(OrgId) -> Fut,
+    Fut: Future<Output = BlockedLookup>,
+{
+    let cap = i64::try_from(otto_resource::MAX_METER_QUANTITY).unwrap_or(i64::MAX);
+    close_due_with(db, lookup, cap).await
+}
+
+/// [`close_due`] with the largest quantity one outbox row may carry, so a
+/// test can exercise the split with small numbers. `cap` below 1 is taken as 1.
+#[doc(hidden)]
+pub async fn close_due_with<F, Fut>(db: &Db, mut lookup: F, cap: i64) -> Result<usize>
+where
+    F: FnMut(OrgId) -> Fut,
+    Fut: Future<Output = BlockedLookup>,
+{
+    let cap = cap.max(1);
+    let grace = CLOSE_GRACE.as_secs_f64();
+
+    let mut tx = begin_bounded(db, TX_TIMEOUT).await?;
+    let orgs: Vec<Uuid> = sqlx::query_scalar(DUE_ORGS)
+        .bind(grace)
+        .bind(CLOSE_BATCH_ORGS)
+        .fetch_all(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    if orgs.is_empty() {
+        return Ok(0);
+    }
+
+    // No connection is held across the platform calls.
+    let mut blocked = Vec::new();
+    let mut skipped = 0usize;
+    let mut failed = false;
+    for &org in &orgs {
+        if failed {
+            skipped += 1;
+            continue;
+        }
+        match lookup(OrgId(org)).await {
+            BlockedLookup::Blocked => blocked.push(org),
+            BlockedLookup::NotBlocked => {}
+            BlockedLookup::Failed => failed = true,
+        }
+    }
+
+    let mut tx = begin_bounded(db, TX_TIMEOUT).await?;
+    let totals: CloseTotals = sqlx::query_as(CLOSE)
+        .bind(&orgs)
+        .bind(&blocked)
+        .bind(METER_EVALUATIONS)
+        .bind(cap)
+        .bind(grace)
+        .bind(EVALUATIONS_TOOL)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        orgs = orgs.len(),
+        blocked_orgs = blocked.len(),
+        lookups_skipped = skipped,
+        hours_closed = totals.closed,
+        billed_hours = totals.billed_hours,
+        billed_evaluations = %totals.billed_quantity,
+        billed_events = totals.billed_events,
+        unbilled_hours = totals.unbilled_hours,
+        unbilled_evaluations = %totals.unbilled_quantity,
+        "closed evaluation hours into the usage outbox"
+    );
+    Ok(usize::try_from(totals.closed).unwrap_or(usize::MAX))
+}
+
+/// What one close statement did. The quantities are summed as `numeric`, so
+/// a pass over saturated rows cannot overflow, and are read (and logged) as
+/// their decimal text.
+#[derive(sqlx::FromRow)]
+struct CloseTotals {
+    closed: i64,
+    billed_hours: i64,
+    billed_quantity: String,
+    billed_events: i64,
+    unbilled_hours: i64,
+    unbilled_quantity: String,
 }
 
 #[cfg(test)]

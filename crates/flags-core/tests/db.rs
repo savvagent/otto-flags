@@ -7003,3 +7003,349 @@ mod metering_flush {
         );
     }
 }
+
+// ---- metering: closing finished hours into the usage outbox (#140) ----
+
+mod metering_close {
+    use super::*;
+    use flags_core::ids::FlagAppId;
+    use flags_core::metering::{self, CLOSE_BATCH_ORGS, EVALUATIONS_TOOL, METER_EVALUATIONS};
+    use flags_core::usage::BlockedLookup;
+    use std::future::{ready, Ready};
+    use std::sync::Mutex;
+
+    async fn app_for(db: &Db, org: OrgId, name: &str) -> FlagAppId {
+        let mut tx = db.begin(org).await.unwrap();
+        let (app, _) = tx.create_app(name, &[], UserId::new()).await.unwrap();
+        tx.commit().await.unwrap();
+        app.id
+    }
+
+    /// Insert a row for the hour holding `now() - ago` (any SQL interval),
+    /// truncated as a flush writes it, returning its hour.
+    async fn hour_row(
+        pool: &PgPool,
+        org: OrgId,
+        app: FlagAppId,
+        ago: &str,
+        served: i64,
+        reported: i64,
+    ) -> chrono::DateTime<Utc> {
+        insert_row(pool, org, app, ago, true, (served, reported)).await
+    }
+
+    /// Insert a row at exactly `now() - ago`, not truncated, to probe the due
+    /// boundary to the second.
+    async fn exact_row(
+        pool: &PgPool,
+        org: OrgId,
+        app: FlagAppId,
+        ago: &str,
+        served: i64,
+    ) -> chrono::DateTime<Utc> {
+        insert_row(pool, org, app, ago, false, (served, 0)).await
+    }
+
+    async fn insert_row(
+        pool: &PgPool,
+        org: OrgId,
+        app: FlagAppId,
+        ago: &str,
+        truncate: bool,
+        (served, reported): (i64, i64),
+    ) -> chrono::DateTime<Utc> {
+        sqlx::query_scalar(
+            "INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, reported) \
+             VALUES ($1, $2, CASE WHEN $6 THEN date_trunc('hour', now() - $3::interval, 'UTC') \
+                                  ELSE now() - $3::interval END, $4, $5) RETURNING hour",
+        )
+        .bind(org)
+        .bind(app)
+        .bind(ago)
+        .bind(served)
+        .bind(reported)
+        .bind(truncate)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Two hours back: always due.
+    const DUE: &str = "2 hours";
+
+    async fn hourly_left(pool: &PgPool) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM usage_meter_hourly")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[derive(Debug, PartialEq, Eq, sqlx::FromRow)]
+    struct Out {
+        org: OrgId,
+        tool: String,
+        billable: bool,
+        meter: Option<String>,
+        quantity: Option<i64>,
+        occurred_at: chrono::DateTime<Utc>,
+        user_id: Option<uuid::Uuid>,
+    }
+
+    async fn outbox(pool: &PgPool) -> Vec<Out> {
+        sqlx::query_as(
+            "SELECT org_id AS org, tool, billable, meter, quantity, occurred_at, user_id \
+             FROM usage_outbox ORDER BY org_id, occurred_at, quantity",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    fn not_blocked(_: OrgId) -> Ready<BlockedLookup> {
+        ready(BlockedLookup::NotBlocked)
+    }
+
+    fn billed(org: OrgId, quantity: i64, occurred_at: chrono::DateTime<Utc>) -> Out {
+        Out {
+            org,
+            tool: EVALUATIONS_TOOL.to_string(),
+            billable: true,
+            meter: Some(METER_EVALUATIONS.to_string()),
+            quantity: Some(quantity),
+            occurred_at,
+            user_id: None,
+        }
+    }
+
+    fn unbilled(org: OrgId, occurred_at: chrono::DateTime<Utc>) -> Out {
+        Out {
+            org,
+            tool: EVALUATIONS_TOOL.to_string(),
+            billable: false,
+            meter: None,
+            quantity: None,
+            occurred_at,
+            user_id: None,
+        }
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn only_due_hours_close(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        // Due: the hour ended at least CLOSE_GRACE (5 min) ago.
+        let old = hour_row(&pool, org, app, DUE, 4, 1).await;
+        let edge = exact_row(&pool, org, app, "65 minutes 1 second", 2).await;
+        // Not due: still inside the grace, or the current, open hour.
+        exact_row(&pool, org, app, "64 minutes", 3).await;
+        hour_row(&pool, org, app, "0 seconds", 5, 0).await;
+
+        assert_eq!(metering::close_due(&db, not_blocked).await.unwrap(), 2);
+        assert_eq!(hourly_left(&pool).await, 2);
+        let mut want = vec![billed(org, 4, old), billed(org, 2, edge)];
+        want.sort_by_key(|o| o.occurred_at);
+        assert_eq!(outbox(&pool).await, want);
+
+        // Nothing more is due: a second pass closes nothing.
+        assert_eq!(metering::close_due(&db, not_blocked).await.unwrap(), 0);
+        assert_eq!(outbox(&pool).await.len(), 2);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_billed_org_gets_the_larger_count_metered_at_its_hour(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let (web, api) = (
+            app_for(&db, org, "web").await,
+            app_for(&db, org, "api").await,
+        );
+        let h_web = hour_row(&pool, org, web, DUE, 3, 7).await;
+        let h_api = hour_row(&pool, org, api, DUE, 9, 2).await;
+        assert_eq!(h_web, h_api);
+
+        assert_eq!(metering::close_due(&db, not_blocked).await.unwrap(), 2);
+        // GREATEST per (org, app, hour), never the sum of the two sources.
+        assert_eq!(
+            outbox(&pool).await,
+            vec![billed(org, 7, h_web), billed(org, 9, h_api)]
+        );
+        assert_eq!(hourly_left(&pool).await, 0);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_blocked_org_ships_unmetered(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let (blocked, paying) = (OrgId::new(), OrgId::new());
+        let b_app = app_for(&db, blocked, "web").await;
+        let p_app = app_for(&db, paying, "web").await;
+        let b1 = hour_row(&pool, blocked, b_app, DUE, 5, 6).await;
+        let b2 = hour_row(&pool, blocked, b_app, "3 hours", 1, 0).await;
+        let p1 = hour_row(&pool, paying, p_app, DUE, 8, 0).await;
+
+        let lookup = |org: OrgId| {
+            ready(if org == blocked {
+                BlockedLookup::Blocked
+            } else {
+                BlockedLookup::NotBlocked
+            })
+        };
+        assert_eq!(metering::close_due(&db, lookup).await.unwrap(), 3);
+        let mut want = vec![
+            unbilled(blocked, b1),
+            unbilled(blocked, b2),
+            billed(paying, 8, p1),
+        ];
+        want.sort_by(|a, b| {
+            (a.org.as_uuid(), a.occurred_at).cmp(&(b.org.as_uuid(), b.occurred_at))
+        });
+        assert_eq!(outbox(&pool).await, want);
+        assert_eq!(hourly_left(&pool).await, 0);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn concurrent_passes_close_each_row_exactly_once(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let mut total = 0i64;
+        let mut rows = 0usize;
+        for i in 0..8 {
+            let org = OrgId::new();
+            let app = app_for(&db, org, "web").await;
+            for (h, ago) in ["2 hours", "3 hours", "4 hours"].into_iter().enumerate() {
+                let (served, reported) = (i * 10 + h as i64 + 1, i);
+                hour_row(&pool, org, app, ago, served, reported).await;
+                total += served.max(reported);
+                rows += 1;
+            }
+        }
+        // A lookup that yields, so the two passes interleave.
+        let slow = |_: OrgId| async {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            BlockedLookup::NotBlocked
+        };
+        let (a, b) = tokio::join!(
+            metering::close_due(&db, slow),
+            metering::close_due(&db, slow)
+        );
+        assert_eq!(a.unwrap() + b.unwrap(), rows);
+        let out = outbox(&pool).await;
+        assert_eq!(out.len(), rows);
+        assert_eq!(out.iter().filter_map(|o| o.quantity).sum::<i64>(), total);
+        assert_eq!(hourly_left(&pool).await, 0);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_quantity_above_the_cap_is_split_into_rows_that_sum_to_it(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let (a, b, c) = (
+            app_for(&db, org, "a").await,
+            app_for(&db, org, "b").await,
+            app_for(&db, org, "c").await,
+        );
+        let h = hour_row(&pool, org, a, DUE, 25, 3).await;
+        hour_row(&pool, org, b, DUE, 0, 20).await;
+        hour_row(&pool, org, c, DUE, 10, 0).await;
+
+        assert_eq!(
+            metering::close_due_with(&db, not_blocked, 10)
+                .await
+                .unwrap(),
+            3
+        );
+        let mut q: Vec<i64> = outbox(&pool)
+            .await
+            .into_iter()
+            .inspect(|o| assert_eq!(*o, billed(org, o.quantity.unwrap(), h)))
+            .map(|o| o.quantity.unwrap())
+            .collect();
+        q.sort_unstable();
+        // 25 → 10 + 10 + 5; 20 → 10 + 10; 10 → 10.
+        assert_eq!(q, vec![5, 10, 10, 10, 10, 10]);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_failed_lookup_skips_the_rest_and_bills_every_org(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let mut orgs = Vec::new();
+        for _ in 0..3 {
+            let org = OrgId::new();
+            let app = app_for(&db, org, "web").await;
+            hour_row(&pool, org, app, DUE, 4, 0).await;
+            orgs.push(org);
+        }
+        let calls = Mutex::new(Vec::new());
+        let lookup = |org: OrgId| {
+            let mut calls = calls.lock().unwrap();
+            calls.push(org);
+            // Fails for the first org asked; would block every later one.
+            ready(if calls.len() == 1 {
+                BlockedLookup::Failed
+            } else {
+                BlockedLookup::Blocked
+            })
+        };
+        assert_eq!(metering::close_due(&db, lookup).await.unwrap(), 3);
+        assert_eq!(calls.lock().unwrap().len(), 1, "no lookups after a failure");
+        let out = outbox(&pool).await;
+        assert_eq!(out.len(), 3);
+        assert!(
+            out.iter().all(|o| o.billable && o.quantity == Some(4)),
+            "{out:?}"
+        );
+        let billed_orgs: BTreeSet<_> = out.iter().map(|o| o.org.as_uuid()).collect();
+        let all: BTreeSet<_> = orgs.iter().map(|o| o.as_uuid()).collect();
+        assert_eq!(billed_orgs, all);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn rows_with_nothing_to_bill_are_deleted_without_an_outbox_row(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let (org, blocked) = (OrgId::new(), OrgId::new());
+        let app = app_for(&db, org, "web").await;
+        let b_app = app_for(&db, blocked, "web").await;
+        hour_row(&pool, org, app, DUE, 0, 0).await;
+        hour_row(&pool, blocked, b_app, DUE, 0, 0).await;
+        let lookup = |o: OrgId| {
+            ready(if o == blocked {
+                BlockedLookup::Blocked
+            } else {
+                BlockedLookup::NotBlocked
+            })
+        };
+        assert_eq!(metering::close_due(&db, lookup).await.unwrap(), 2);
+        assert_eq!(hourly_left(&pool).await, 0);
+        assert!(outbox(&pool).await.is_empty());
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_pass_closes_at_most_the_batch_of_orgs(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let n = usize::try_from(CLOSE_BATCH_ORGS).unwrap() + 3;
+        for _ in 0..n {
+            let org = OrgId::new();
+            let app = app_for(&db, org, "web").await;
+            hour_row(&pool, org, app, DUE, 1, 0).await;
+            hour_row(&pool, org, app, "3 hours", 1, 0).await;
+        }
+        let calls = Mutex::new(0usize);
+        let counting = |_: OrgId| {
+            *calls.lock().unwrap() += 1;
+            ready(BlockedLookup::NotBlocked)
+        };
+        let batch = usize::try_from(CLOSE_BATCH_ORGS).unwrap();
+        assert_eq!(
+            metering::close_due(&db, &counting).await.unwrap(),
+            2 * batch
+        );
+        assert_eq!(*calls.lock().unwrap(), batch);
+        let orgs: BTreeSet<_> = outbox(&pool)
+            .await
+            .iter()
+            .map(|o| o.org.as_uuid())
+            .collect();
+        assert_eq!(orgs.len(), batch);
+        assert_eq!(metering::close_due(&db, &counting).await.unwrap(), 6);
+        assert_eq!(hourly_left(&pool).await, 0);
+    }
+}

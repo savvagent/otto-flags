@@ -65,6 +65,23 @@ pub const REJECTED_RETENTION_DAYS: i32 = 90;
 /// characters are enough to read it, and bound the column.
 const MAX_REJECTED_REASON: usize = 500;
 
+/// Whether an org's evaluations are billed when its hour closes
+/// ([`Meter::billable_blocked`]).
+///
+/// Only [`BlockedLookup::Blocked`] ships an hour unmetered; the hour close
+/// bills on both [`BlockedLookup::NotBlocked`] and [`BlockedLookup::Failed`]
+/// (fail open).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockedLookup {
+    /// The platform says billable usage is blocked (budget exceeded or
+    /// payment required).
+    Blocked,
+    /// The platform says billable usage is allowed.
+    NotBlocked,
+    /// The platform could not be asked, or did not answer in time.
+    Failed,
+}
+
 #[derive(Clone)]
 pub struct Meter {
     platform: Arc<PlatformClient>,
@@ -181,6 +198,41 @@ impl Meter {
             m.insert(org, Instant::now() + FAIL_OPEN_FOR);
         }
         None
+    }
+
+    /// Whether the platform blocks the org's billable usage
+    /// (`UsageStatus::billable_blocked`), for the evaluation meter's hour close
+    /// ([`crate::metering::close_due`]). Background only: never called on a
+    /// request path.
+    ///
+    /// The lookup is bounded by the same 2 s timeout as the quota lookup. Any
+    /// failure is [`BlockedLookup::Failed`], logged at `warn` with the
+    /// text-free [`Failure`] (the error text only at `debug`), and is not
+    /// remembered.
+    pub async fn billable_blocked(&self, org: OrgId) -> BlockedLookup {
+        let failure = match tokio::time::timeout(
+            QUOTA_LOOKUP_TIMEOUT,
+            self.platform.usage_status(org.as_uuid()),
+        )
+        .await
+        {
+            Ok(Ok(status)) if status.billable_blocked() => return BlockedLookup::Blocked,
+            Ok(Ok(_)) => return BlockedLookup::NotBlocked,
+            Ok(Err(e)) => Some(e),
+            Err(_) => None,
+        };
+        // A timeout has no text; it is named as entitlements names it.
+        let f = failure.as_ref().map_or(
+            Failure::reason("timeout"),
+            crate::error::platform_failure_reason,
+        );
+        tracing::warn!(org = %org, reason = f.reason, status = f.status, transport = f.transport,
+            "could not read usage from the platform; billing the org's closed evaluation hours");
+        if let Some(e) = &failure {
+            tracing::debug!(org = %org, reason = f.reason, status = f.status, transport = f.transport, error = %e,
+                "could not read usage from the platform; billing the org's closed evaluation hours");
+        }
+        BlockedLookup::Failed
     }
 
     /// The org's standing, for the free `whoami` and `usage` tools.
@@ -608,6 +660,91 @@ mod tests {
         ] {
             assert!(!is_billable(t), "{t}");
         }
+    }
+
+    /// A platform that answers every request with `status` and `body`.
+    async fn platform_answering(status: u16, body: String) -> Arc<PlatformClient> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let res = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(res.as_bytes()).await;
+            }
+        });
+        let cfg = otto_resource::ClientConfig::new(
+            format!("http://{addr}"),
+            "https://flags.test/mcp",
+            "secret",
+        );
+        Arc::new(PlatformClient::new(cfg).expect("client"))
+    }
+
+    fn usage_body(org: OrgId, blocked_reason: Option<&str>) -> String {
+        serde_json::json!({
+            "org_id": org.as_uuid(),
+            "plan": "team",
+            "period_start": "2026-10-01",
+            "billable_count": 0,
+            "total_count": 0,
+            "included_ops": 0,
+            "hard_stop": false,
+            "blocked_reason": blocked_reason,
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn billable_blocked_follows_the_platform() {
+        let org = OrgId::new();
+        let blocked = Meter::new(
+            platform_answering(200, usage_body(org, Some("payment_required"))).await,
+            false,
+            "",
+        );
+        assert_eq!(blocked.billable_blocked(org).await, BlockedLookup::Blocked);
+        let open = Meter::new(
+            platform_answering(200, usage_body(org, None)).await,
+            false,
+            "",
+        );
+        assert_eq!(open.billable_blocked(org).await, BlockedLookup::NotBlocked);
+    }
+
+    #[tokio::test]
+    async fn billable_blocked_is_failed_when_the_platform_cannot_answer() {
+        let org = OrgId::new();
+        let erroring = Meter::new(platform_answering(502, "{}".into()).await, false, "");
+        assert_eq!(erroring.billable_blocked(org).await, BlockedLookup::Failed);
+        // Nothing listens on the port.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind")
+            .local_addr()
+            .expect("addr")
+            .port();
+        let cfg = otto_resource::ClientConfig::new(
+            format!("http://127.0.0.1:{port}"),
+            "https://flags.test/mcp",
+            "secret",
+        );
+        let unreachable = Meter::new(
+            Arc::new(PlatformClient::new(cfg).expect("client")),
+            false,
+            "",
+        );
+        assert_eq!(
+            unreachable.billable_blocked(org).await,
+            BlockedLookup::Failed
+        );
     }
 
     #[test]
