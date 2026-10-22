@@ -12,7 +12,9 @@ trip.
 **Agents** connect an MCP client to `https://otto-flags.savvagent.com/mcp`. There is
 nothing to install: the client is sent to the otto platform to sign in (one account
 covers every otto service), then calls tools such as `create_flag`,
-`set_flag_environment`, `flag_health`, and `rollback_flag`. Call `whoami` first.
+`set_flag_environment`, `flag_health`, and `rollback_flag`. Call `whoami` first. To wire an
+SDK into a project, call `sdk_guide` with the project's language (and the app, to have its id
+filled in).
 
 **Auto-rollback** (paid plans) turns a flag off in one environment when the errors reported
 behind it say it is hurting the app. Manage it with `set_rollback_policy`,

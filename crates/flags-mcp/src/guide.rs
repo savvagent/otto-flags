@@ -335,6 +335,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn agents_md_points_agents_at_the_guide() {
+        let text = std::fs::read_to_string(repo("AGENTS.md")).expect("AGENTS.md exists");
+        for needle in [
+            "llms.txt",
+            "sdk_guide",
+            "docs/SDK-DEVELOPER-GUIDE.md",
+            "<commit>",
+        ] {
+            assert!(text.contains(needle), "AGENTS.md should mention {needle}");
+        }
+        let lower = text.to_lowercase();
+        for w in FORBIDDEN {
+            assert!(!lower.contains(w), "AGENTS.md mentions {w:?}");
+        }
+        assert!(!lower.contains("srv_"), "AGENTS.md mentions srv_");
+    }
+
     /// (language, manifest path from the repo root, identifier the manifest must declare,
     /// identifier the guide must use). Keeps the guides honest about names.
     const MANIFESTS: &[(&str, &str, &str, &str)] = &[

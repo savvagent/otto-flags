@@ -4,6 +4,11 @@ This guide is for developers building SDKs that integrate with the Otto Flags fe
 
 > **Note:** For official SDKs and examples, see the [otto-flags repository](https://github.com/savvagent/otto-flags).
 
+> **Wiring an existing SDK into a project?** An agent connected over MCP should call
+> `sdk_guide(language, app?)`; otherwise read [`/llms.txt`](../llms.txt) or
+> [`AGENTS.md`](../AGENTS.md). SDKs are installed from a pinned commit of
+> savvagent/otto-flags. This document is the REST contract those SDKs implement.
+
 ## Table of Contents
 
 - [Authentication](#authentication)

@@ -41,6 +41,9 @@ Getting started in a session:
 that evaluates flags). If the app you need is missing, create_app makes one and \
 returns its SDK keys; that needs the apps:admin scope and an owner or admin role.
   3. Call list_flags for the app, then get_flag for the one you are working on.
+  4. To wire an SDK into a project, call sdk_guide(language, app?) with the \
+project's language; it returns the install, initialization, and usage steps, \
+filled in with the app's id when you pass app.
 
 Shipping a feature behind a flag:
   - create_flag creates it switched off in every environment.
@@ -225,6 +228,7 @@ mod tests {
             "usage",
             "set_rollback_policy",
             "propose_rollback",
+            "sdk_guide",
         ] {
             assert!(
                 INSTRUCTIONS.contains(tool),
