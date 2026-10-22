@@ -1,4 +1,4 @@
-# ottoFlags
+# otto-flags
 
 Official Python Server SDK for Otto Flags - AI-powered feature flags with automatic error detection.
 
@@ -14,16 +14,28 @@ Official Python Server SDK for Otto Flags - AI-powered feature flags with automa
 
 ## Installation
 
+The package is not published to PyPI yet. Install it from the repository, pinned to a commit:
+
 ```bash
-pip install ottoFlags
+pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server"
 ```
+
+or in `pyproject.toml`:
+
+```toml
+dependencies = [
+    "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server",
+]
+```
+
+The distribution is `otto-flags`; the import name is `otto_flags`.
 
 ## Quick Start
 
 ### Synchronous Usage
 
 ```python
-from ottoFlags import FlagClient, FlagClientConfig, FlagContext
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
 
 # Initialize the client
 config = FlagClientConfig(
@@ -47,7 +59,7 @@ with FlagClient(config) as client:
 ### Asynchronous Usage
 
 ```python
-from ottoFlags import AsyncFlagClient, FlagClientConfig, FlagContext
+from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
 
 config = FlagClientConfig(api_key="sdk_your_api_key_here")
 
@@ -59,7 +71,7 @@ async with AsyncFlagClient(config) as client:
 ## Configuration
 
 ```python
-from ottoFlags import FlagClientConfig
+from otto_flags import FlagClientConfig
 
 config = FlagClientConfig(
     api_key="sdk_your_api_key_here",
@@ -156,7 +168,7 @@ atexit.register(client.close)
 ### Configuration Overrides (Testing)
 
 ```python
-from ottoFlags import ConfigOverrideOptions
+from otto_flags import ConfigOverrideOptions
 
 # Override configuration for testing
 client.set_config_override("ui-settings", {"theme": "dark", "new_feature": True})
@@ -182,7 +194,7 @@ client.clear_all_overrides()
 ```python
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, Request
-from ottoFlags import AsyncFlagClient, FlagClientConfig, FlagContext
+from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
 
 client: AsyncFlagClient | None = None
 
@@ -215,7 +227,7 @@ async def get_feature(user_id: str, context: FlagContext = Depends(get_flag_cont
 ```python
 import atexit
 from flask import Flask, g, request
-from ottoFlags import FlagClient, FlagClientConfig, FlagContext
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
 
 app = Flask(__name__)
 
@@ -241,7 +253,7 @@ def get_feature(user_id: str):
 
 ```python
 # middleware.py
-from ottoFlags import FlagClient, FlagClientConfig, FlagContext
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
 
 _client = None
 
@@ -259,7 +271,7 @@ class OttoFlagsMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        request.ottoFlags = get_client()
+        request.otto_flags = get_client()
         request.flag_context = FlagContext(
             user_id=str(request.user.id) if request.user.is_authenticated else None,
             ip_address=request.META.get("REMOTE_ADDR"),
@@ -268,7 +280,7 @@ class OttoFlagsMiddleware:
 
 # views.py
 def my_view(request):
-    enabled = request.ottoFlags.is_enabled("new-feature", request.flag_context)
+    enabled = request.otto_flags.is_enabled("new-feature", request.flag_context)
     return JsonResponse({"enabled": enabled})
 ```
 
