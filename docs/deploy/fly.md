@@ -309,7 +309,10 @@ Production evaluations are billed on the meter `otto-flags/evaluations`. MCP too
 
 - **Declaration.** The server declares the meter to the platform at startup. The platform side
   (`resource set-service`, `service=otto-flags`) is already done for production. Until a
-  declaration succeeds nothing ships, and rows wait in `usage_outbox`.
+  declaration succeeds nothing ships, and rows wait in `usage_outbox`. If the platform later
+  forgets the meter and refuses events as `unknown_meter`, the shipper declares again and
+  retries those events with backoff instead of moving them to `usage_outbox_rejected`; look for
+  `re-declared usage meters` in the logs.
 - **What is counted.** Served evaluations (both key kinds) and reported evaluations (server-key
   telemetry only). Each app's hour is billed as the larger of the two, not the sum. The counts are
   held in memory, flushed to `usage_meter_hourly`, and closed into `usage_outbox` once the hour
