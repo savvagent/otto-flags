@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod guide;
 pub mod server;
 pub mod tools;
 
@@ -27,6 +28,9 @@ use otto_resource::PlatformClient;
 use otto_tenant::Db;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+
+/// The `llms.txt` served at `/llms.txt` and kept byte-identical at the repository root.
+pub const LLMS_TXT: &str = include_str!("../content/llms.txt");
 
 pub use auth::ResourceServer;
 pub use server::Flags;

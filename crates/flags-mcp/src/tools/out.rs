@@ -5,6 +5,7 @@
 use flags_core::apps::{FlagApp, IssuedKeys};
 use flags_core::eval::Evaluation;
 use flags_core::flags::{FeatureFlag, FlagVersion};
+use flags_core::ids::FlagAppId;
 use flags_core::rollback::{Event, PolicyView, Proposal};
 use flags_core::telemetry::Health;
 use flags_core::usage::Status;
@@ -191,4 +192,28 @@ pub struct ProposalOut {
 pub struct EventsOut {
     /// Newest first. Numbers and ids only.
     pub events: Vec<Event>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SdkGuideOut {
+    /// The canonical name of the guide returned (an alias resolves to it).
+    pub language: String,
+    /// The guide, in Markdown.
+    pub guide: String,
+    /// The app the guide was filled in from, when one was named.
+    pub app: Option<GuideApp>,
+    /// Every language with a guide.
+    pub supported: Vec<String>,
+}
+
+/// The app a guide was filled in from. Only its public client key: a server
+/// key is never stored in clear and never returned here.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideApp {
+    pub name: String,
+    pub id: FlagAppId,
+    /// The public client-side key (`sdk_…`).
+    pub client_key: String,
 }
