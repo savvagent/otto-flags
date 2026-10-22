@@ -16,6 +16,7 @@ use crate::server::Flags;
 
 pub mod apps;
 pub mod flags;
+pub mod guide;
 pub mod insight;
 pub mod org;
 pub mod out;
@@ -27,6 +28,7 @@ pub fn router() -> ToolRouter<Flags> {
         + Flags::flags_router()
         + Flags::insight_router()
         + Flags::rollback_router()
+        + Flags::guide_router()
 }
 
 /// Every tool name, in one place for tests and documentation.
@@ -53,6 +55,7 @@ pub const NAMES: &[&str] = &[
     "list_rollback_policies",
     "propose_rollback",
     "rollback_events",
+    "sdk_guide",
 ];
 
 /// Tools that only read. The rule: no write scope is required and no state a
@@ -76,6 +79,7 @@ pub const READ_ONLY: &[&str] = &[
     "list_rollback_policies",
     "propose_rollback",
     "rollback_events",
+    "sdk_guide",
 ];
 
 /// Writes that can switch off or alter live evaluation, or delete something
@@ -190,6 +194,7 @@ mod tests {
             ("flags.rs", include_str!("flags.rs")),
             ("insight.rs", include_str!("insight.rs")),
             ("rollback.rs", include_str!("rollback.rs")),
+            ("guide.rs", include_str!("guide.rs")),
         ];
         for name in NAMES {
             let head = format!("pub async fn {name}(");

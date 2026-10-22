@@ -1646,6 +1646,7 @@ async fn tools_list_carries_annotations(pool: PgPool) {
     assert_eq!(hint("set_flag_environment", "destructiveHint"), true);
     assert_eq!(hint("create_flag", "destructiveHint"), false);
     assert_eq!(hint("remove_rollback_policy", "idempotentHint"), true);
+    assert_eq!(hint("sdk_guide", "readOnlyHint"), true);
     // evaluate_flag writes an unbilled usage row (#89), so its description,
     // read next to the read-only hint, must not claim it records nothing.
     let evaluate = tools.iter().find(|t| t["name"] == "evaluate_flag").unwrap()["description"]
@@ -1653,6 +1654,112 @@ async fn tools_list_carries_annotations(pool: PgPool) {
         .unwrap();
     assert!(!evaluate.contains("records nothing"), "{evaluate}");
     assert!(evaluate.contains("not billed"), "{evaluate}");
+}
+
+/// `sdk_guide` renders a language's guide, filled in with a named app's id and
+/// public client key and never its server key; it checks `flags:read` first,
+/// rejects an unknown language before recording anything, and records one free
+/// usage row per successful call.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn sdk_guide_renders_a_guide_and_personalizes_it_with_the_apps_public_key(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, server_key, client_key) = org_with_flag(&s, &platform, org, "k").await;
+    let reader = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Member,
+        &["flags:read"],
+    );
+
+    // No app: placeholders stay, and nothing names a server key.
+    let plain = tool(&s.app, &reader, "sdk_guide", json!({"language": "python"}))
+        .await
+        .unwrap();
+    assert_eq!(plain["language"], "python", "{plain}");
+    let text = plain["guide"].as_str().unwrap();
+    assert!(text.contains("otto_flags"), "{text}");
+    assert!(text.contains("<commit>"), "{text}");
+    assert!(!plain.to_string().contains("srv_"), "{plain}");
+    assert!(plain["app"].is_null(), "{plain}");
+    let supported: Vec<&str> = plain["supported"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(supported.contains(&"python"), "{supported:?}");
+
+    // A named app (through an alias): its id and public key, never the server key.
+    let apps = tool(&s.app, &reader, "list_apps", json!({})).await.unwrap();
+    let app_id = apps["apps"][0]["id"].as_str().unwrap().to_string();
+    let named = tool(
+        &s.app,
+        &reader,
+        "sdk_guide",
+        json!({"language": "py", "app": "web"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(named["language"], "python", "{named}");
+    assert_eq!(named["app"]["name"], "web", "{named}");
+    assert_eq!(named["app"]["id"], app_id.as_str(), "{named}");
+    assert_eq!(named["app"]["clientKey"], client_key.as_str(), "{named}");
+    let text = named["guide"].as_str().unwrap();
+    assert!(text.contains(&app_id), "{text}");
+    let whole = named.to_string();
+    assert!(!whole.contains("srv_"), "{whole}");
+    assert!(!whole.contains(&server_key), "{whole}");
+
+    // An unknown language lists what is supported and echoes at most 64 chars.
+    let long = format!("COBOL{}", "x".repeat(200));
+    let err = tool(&s.app, &reader, "sdk_guide", json!({"language": long}))
+        .await
+        .unwrap_err();
+    assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
+    let message = err["message"].as_str().unwrap();
+    assert!(message.contains("python"), "{message}");
+    assert!(message.contains("COBOL"), "{message}");
+    assert!(!message.contains(&"x".repeat(60)), "{message}");
+
+    // An unknown app.
+    let err = tool(
+        &s.app,
+        &reader,
+        "sdk_guide",
+        json!({"language": "python", "app": "nope"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["data"]["code"], "app_not_found", "{err}");
+
+    // flags:read is required.
+    let writer = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Owner,
+        &["flags:write"],
+    );
+    let err = tool(&s.app, &writer, "sdk_guide", json!({"language": "python"}))
+        .await
+        .unwrap_err();
+    assert_eq!(err["data"]["code"], "insufficient_scope", "{err}");
+
+    // One free row per successful call; the rejected language and the
+    // refused scope recorded nothing. The unknown-app call's transaction rolled
+    // back with its row.
+    let rows: Vec<(String, bool, i64)> = sqlx::query_as(
+        "SELECT tool, billable, count(*) FROM usage_outbox \
+         WHERE org_id = $1 AND tool = 'sdk_guide' GROUP BY 1, 2 ORDER BY 1, 2",
+    )
+    .bind(org)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, vec![("sdk_guide".to_string(), false, 2)]);
 }
 
 /// Every tool is free: setting a policy records a row with `billable = false`
