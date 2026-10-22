@@ -54,7 +54,7 @@ documentation.
 ## Initialize
 
 Create one client for the app's lifetime (an application class or a dependency-injection singleton)
-and reuse it; it holds the cache, a polling job and an optional WebSocket.
+and reuse it; it holds the cache.
 
 ```kotlin
 import com.savvagent.ottoflags.sdk.OttoFlagsClient
@@ -134,9 +134,11 @@ class CheckoutViewModel(private val client: OttoFlagsClient) : ViewModel() {
 - Lookups return a `Result`, so a network or server failure arrives as `onFailure`; use
   `getOrDefault`, or `getVariation`, which falls back to the default you pass.
 - Results are cached in memory per flag and per user context, so one user's result is never served
-  to another; `pollingInterval` and WebSocket messages refresh them. `client.flagUpdates` is a
-  `StateFlow` of the latest value of each flag the app has evaluated.
-- `track(eventName, userContext, properties)` sends custom events; flag evaluations themselves are
-  not counted by this SDK, so `flag_health` and auto-rollback get no data from it.
+  to another. The cache has no expiry and this SDK does not refresh it from the server, so a flag
+  changed afterwards (including a kill switch or rollback) reaches a running app only after it
+  restarts or the user context changes. `client.flagUpdates` is a `StateFlow` of the latest value of
+  each flag the app has evaluated.
+- Flag evaluations are not counted by this SDK and `track(eventName, userContext, properties)` posts
+  to an endpoint the server does not serve, so `flag_health` and auto-rollback get no data from it.
 - Create flags before code references them: an unknown flag key is answered with 404, which the SDK reports as a failed lookup.
 - The wire contract the SDK speaks is `docs/SDK-DEVELOPER-GUIDE.md` in the repository.

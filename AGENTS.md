@@ -10,7 +10,7 @@ Pick the first route that works:
 
 1. Over MCP, call `whoami`, then `list_apps`, then `sdk_guide(language, app?)` with the
    project's language. It returns install, initialization, and usage steps, filled in with
-   the app's id and name when you pass `app`.
+   the app's id, name and public client key when you pass `app`.
 2. Without MCP, read `https://otto-flags.savvagent.com/llms.txt` (the root `llms.txt` in
    this repository is the same file).
 3. Otherwise read `packages/<dir>/README.md` for the language you need (for example

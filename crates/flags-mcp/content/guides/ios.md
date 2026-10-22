@@ -45,8 +45,7 @@ submodule pinned to that commit.
 
 ## Initialize
 
-Create one client for the app's lifetime and reuse it; it holds the cache, a polling timer and an
-optional WebSocket.
+Create one client for the app's lifetime and reuse it; it holds the cache.
 
 ```swift
 import OttoFlagsSDK
@@ -134,8 +133,10 @@ struct CheckoutView: View {
   server failure surfaces as an `OttoFlagsError`, so handle it and fall back to a safe default.
   `getVariation(flagKey:context:defaultValue:)` is the variant that swallows failures.
 - Results are cached in memory per flag and per user context, so one user's result is never served
-  to another; `pollingInterval` and WebSocket messages refresh them.
-- `track(eventName:context:properties:)` sends custom events; flag evaluations themselves are not
-  counted by this SDK, so `flag_health` and auto-rollback get no data from it.
+  to another. The cache has no expiry and this SDK does not refresh it from the server, so a flag
+  changed afterwards (including a kill switch or rollback) reaches a running app only after it
+  restarts or the user context changes.
+- Flag evaluations are not counted by this SDK and `track(eventName:context:properties:)` posts to an
+  endpoint the server does not serve, so `flag_health` and auto-rollback get no data from it.
 - Create flags before code references them: an unknown flag key is answered with 404, which the SDK reports as a failed lookup.
 - The wire contract the SDK speaks is `docs/SDK-DEVELOPER-GUIDE.md` in the repository.

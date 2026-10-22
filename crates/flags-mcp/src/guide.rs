@@ -312,7 +312,7 @@ mod tests {
 
     /// Words that would claim or imply a package is available from a registry.
     // Not "publish": Gradle's `publishToMavenLocal` task name is a legitimate local-install command.
-    pub(crate) const FORBIDDEN: &[&str] = &[
+    const FORBIDDEN: &[&str] = &[
         "pypi",
         "npmjs",
         "crates.io",

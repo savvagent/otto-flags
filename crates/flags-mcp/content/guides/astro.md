@@ -112,9 +112,11 @@ callback, context)`, `trackError(flagKey, error, context)`, `getRequestContext(r
 Route on a flag in middleware:
 
 ```typescript
-// src/middleware.ts
+// src/middleware.ts (the same file as the initialization above)
 import { sequence } from "astro/middleware";
-import { createFlagMiddleware } from "@otto-flags/astro";
+import { createFlagMiddleware, initOttoFlags } from "@otto-flags/astro";
+
+initOttoFlags({ apiKey: "{{CLIENT_KEY}}", applicationId: "{{APP_ID}}" });
 
 export const onRequest = sequence(
   createFlagMiddleware({
@@ -131,7 +133,7 @@ For interactive islands, use the matching framework package inside the island (`
 - Flag keys are 1 to 128 characters of letters, digits, `.`, `_` and `-`. A lookup with any other
   key is not sent; it returns the default and reports the problem to `onError`.
 - A flag lookup never throws into the app: on a network or server error the value falls back to the
-  `defaultValue` you pass (or to `defaults` in the config) and `reason` is `"error"`. Only a missing
+  `defaults` in the config and `reason` is `"error"`. Only a missing
   or malformed key makes the client constructor throw.
 - Results are cached per flag and per evaluation context, so two users never share a cached result.
   With real-time updates on (the default) a change made with `set_flag_environment` or
