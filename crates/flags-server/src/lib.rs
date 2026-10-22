@@ -6,6 +6,7 @@
 //!                                     flags-mcp   agents: bearer tokens from the platform
 //!   /api/…                            flags-api   SDKs: sdk_/srv_ keys
 //!   /platform/webhooks                flags-api   the platform's signed lifecycle events
+//!   /llms.txt                         static text for agents; no auth, no database
 //!   /                                 install page  browsers (Accept: text/html, no
 //!                                                   Authorization); else JSON 404
 //!   everything else                   JSON 404
@@ -21,6 +22,7 @@
 pub mod config;
 pub mod health;
 pub mod install_page;
+mod llms;
 
 use std::sync::Arc;
 
@@ -75,6 +77,7 @@ pub fn router(
     health::router(db)
         .merge(mcp)
         .merge(api)
+        .merge(llms::router())
         // `any`, not `get`: a GET-only route would answer other methods
         // with 405 (and add `Allow` to its fallback's responses); `root`
         // keeps them on the JSON 404.
@@ -380,6 +383,24 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(json(&body), the_json_404("/nope"));
         assert!(h.get("vary").is_none());
+    }
+
+    #[tokio::test]
+    async fn llms_txt_is_served_without_authorization() {
+        let (status, h, body) = request_root(http::Method::GET, "/llms.txt", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(h["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain"));
+        assert_eq!(h["cache-control"], "public, max-age=3600");
+        assert_eq!(body, flags_mcp::LLMS_TXT.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn llms_txt_is_get_only() {
+        let (status, _, _) = request_root(http::Method::POST, "/llms.txt", &[]).await;
+        assert_ne!(status, StatusCode::OK);
     }
 
     #[test]

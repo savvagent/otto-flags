@@ -1,0 +1,87 @@
+# Otto Flags
+
+> Otto Flags is a feature flag service that AI agents manage over MCP and running apps evaluate through SDKs. If you are an agent wiring an SDK into a project, connect to the MCP endpoint, call `whoami`, then call `sdk_guide` with the project's language.
+
+The server is at https://otto-flags.savvagent.com. Agents manage flags at `/mcp` (Streamable HTTP MCP, OAuth bearer tokens issued by the otto platform). Applications evaluate flags through an SDK over REST at `/api/...` with an app key; the SDK path never goes through the agent surface.
+
+## Start here
+
+- Connect to https://otto-flags.savvagent.com/mcp, call `whoami` to see the organization and your scopes, then call `sdk_guide(language, app?)`. It returns install, initialization and usage steps for that language, filled in with the app's id and name when `app` is given.
+- Every SDK install is pinned to a commit of savvagent/otto-flags. Find one with `git ls-remote https://github.com/savvagent/otto-flags main` and use that SHA where a guide says `<commit>`.
+- [AGENTS.md](https://github.com/savvagent/otto-flags/blob/main/AGENTS.md): how an agent finds the right SDK in this repository.
+- [SDK developer guide](https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md): the REST wire contract every SDK implements.
+
+## MCP tools
+
+- `whoami`: the organization, role and scopes this token opens.
+- `usage`: this month's usage meters, the budget and any billing block.
+- `list_apps`: the apps (one per codebase or service) that own flags.
+- `create_app`: create an app and return its SDK keys (owner or admin).
+- `update_app`: rename or change an app's settings.
+- `rotate_app_keys`: issue new SDK keys for an app (owner or admin).
+- `list_flags`: the flags in an app.
+- `get_flag`: one flag with its environments, rules and current version.
+- `create_flag`: create a flag, switched off everywhere.
+- `update_flag`: change a flag's description, variations or tags.
+- `set_flag_environment`: turn a flag on or off per environment, set rollout, targeting and the default variation.
+- `archive_flag`: retire a flag.
+- `restore_flag`: bring an archived flag back.
+- `rollback_flag`: restore a flag's previous version, or any version from its history.
+- `flag_history`: every version of a flag and why it changed.
+- `evaluate_flag`: what a given user would get, and why, without changing anything.
+- `flag_health`: error rate with the flag on versus off, from SDK reports.
+- `set_rollback_policy`: arm auto-rollback for a flag in one environment.
+- `remove_rollback_policy`: delete a rollback policy.
+- `list_rollback_policies`: the policies and whether each is armed.
+- `propose_rollback`: a dry run of what auto-rollback would do right now.
+- `rollback_events`: what auto-rollback has done.
+- `sdk_guide`: the integration guide for one language, filled in for an app.
+
+## SDKs
+
+Each language below is a `sdk_guide` name. The link is the package README.
+
+- `python`: [packages/python-server](https://github.com/savvagent/otto-flags/blob/main/packages/python-server/README.md)
+- `typescript`: [packages/typescript](https://github.com/savvagent/otto-flags/blob/main/packages/typescript/README.md)
+- `node`: [packages/node-server](https://github.com/savvagent/otto-flags/blob/main/packages/node-server/README.md)
+- `react`: [packages/react](https://github.com/savvagent/otto-flags/blob/main/packages/react/README.md)
+- `vue`: [packages/vue](https://github.com/savvagent/otto-flags/blob/main/packages/vue/README.md)
+- `svelte`: [packages/svelte](https://github.com/savvagent/otto-flags/blob/main/packages/svelte/README.md)
+- `sveltekit`: [packages/sveltekit](https://github.com/savvagent/otto-flags/blob/main/packages/sveltekit/README.md)
+- `solid`: [packages/solid](https://github.com/savvagent/otto-flags/blob/main/packages/solid/README.md)
+- `angular`: [packages/angular](https://github.com/savvagent/otto-flags/blob/main/packages/angular/README.md)
+- `astro`: [packages/astro](https://github.com/savvagent/otto-flags/blob/main/packages/astro/README.md)
+- `nextjs`: [packages/nextjs](https://github.com/savvagent/otto-flags/blob/main/packages/nextjs/README.md)
+- `remix`: [packages/remix](https://github.com/savvagent/otto-flags/blob/main/packages/remix/README.md)
+- `go`: [packages/go-server](https://github.com/savvagent/otto-flags/blob/main/packages/go-server/README.md)
+- `rust`: [packages/rust-server](https://github.com/savvagent/otto-flags/blob/main/packages/rust-server/README.md)
+- `java`: [packages/java-server](https://github.com/savvagent/otto-flags/blob/main/packages/java-server/README.md)
+- `ios`: [packages/ios-sdk](https://github.com/savvagent/otto-flags/blob/main/packages/ios-sdk/README.md)
+- `android`: [packages/android-sdk](https://github.com/savvagent/otto-flags/blob/main/packages/android-sdk/README.md)
+
+## Quick start (Python)
+
+Install from source, pinned to a commit:
+
+```bash
+pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server"
+```
+
+```python
+import os
+
+from otto_flags import FlagClient, FlagClientConfig, FlagContext
+
+client = FlagClient(
+    FlagClientConfig(
+        api_key=os.environ["OTTO_FLAGS_API_KEY"],
+        application_id="<app id from list_apps>",
+        defaults={"new-checkout": False},
+    )
+)
+
+if client.is_enabled("new-checkout", FlagContext(user_id="user-123")):
+    ...
+```
+
+Keep the server key in the app's secret store, never in code. `sdk_guide` with `language: "python"` and an `app` returns the full guide with the app's id filled in.

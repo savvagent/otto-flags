@@ -788,4 +788,37 @@ mod tests {
             assert!(fields.contains(&k), "{k}");
         }
     }
+
+    #[test]
+    fn llms_txt_is_one_definition_and_covers_every_tool_and_language() {
+        let root = std::fs::read_to_string(repo("llms.txt")).unwrap();
+        assert_eq!(
+            root,
+            crate::LLMS_TXT,
+            "root llms.txt must equal crates/flags-mcp/content/llms.txt"
+        );
+        for tool in crate::tools::NAMES {
+            assert!(
+                crate::LLMS_TXT.contains(tool),
+                "llms.txt does not mention tool {tool}"
+            );
+        }
+        for l in LANGUAGES {
+            // Backticked, so short names such as `go` are not matched inside other words.
+            let needle = format!("`{}`", l.name);
+            assert!(
+                crate::LLMS_TXT.contains(&needle),
+                "llms.txt does not list {needle}"
+            );
+        }
+        assert!(
+            !crate::LLMS_TXT.contains("ottoFlags/"),
+            "stale org in llms.txt"
+        );
+        let lower = crate::LLMS_TXT.to_lowercase();
+        for w in FORBIDDEN {
+            assert!(!lower.contains(w), "llms.txt mentions {w:?}");
+        }
+        assert!(!crate::LLMS_TXT.contains("srv_"));
+    }
 }
