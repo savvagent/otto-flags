@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod error;
+pub mod guide;
 pub mod server;
 pub mod tools;
 
