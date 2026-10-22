@@ -9,8 +9,10 @@ use anyhow::{Context, Result};
 use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::CheckerConfig;
-use flags_core::usage::{Meter, ShipperConfig};
-use flags_server::{platform_client, router, spawn_checker, watch_checker, Config, LogFormat};
+use flags_core::usage::{DeclarationHealth, Meter, ShipperConfig};
+use flags_server::{
+    platform_client, router_with_meter_health, spawn_checker, watch_checker, Config, LogFormat,
+};
 use otto_tenant::Db;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
@@ -83,11 +85,13 @@ async fn main() -> Result<()> {
     // drain keeps receiving changes (a kill switch included).
     let (stop_usage, usage_shutdown) = tokio::sync::watch::channel(false);
     let listener = Listener::spawn(db.pool().clone(), shutdown.clone());
-    let shipper = tokio::spawn(flags_core::usage::run(
+    let meter_health = DeclarationHealth::default();
+    let shipper = tokio::spawn(flags_core::usage::run_reporting(
         db.clone(),
         platform.clone(),
         ShipperConfig::default(),
         usage_shutdown.clone(),
+        meter_health.clone(),
     ));
     let evaluations = Arc::new(EvalCounter::default());
     let metering = tokio::spawn(flags_core::metering::run(
@@ -111,13 +115,14 @@ async fn main() -> Result<()> {
     let checker_abort = checker.abort_handle();
     let mut checker = tokio::spawn(watch_checker(checker, shutdown.clone()));
 
-    let app = router(
+    let app = router_with_meter_health(
         db.clone(),
         platform,
         listener,
         hints,
         evaluations.clone(),
         &config,
+        meter_health,
     );
     let tcp = TcpListener::bind(config.bind)
         .await

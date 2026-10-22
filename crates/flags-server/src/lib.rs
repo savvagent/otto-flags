@@ -1,7 +1,8 @@
 //! `flags-server` — one binary, one port, every surface.
 //!
 //! ```text
-//!   /healthz /readyz                  health      no database on the liveness path
+//!   /healthz /readyz /statusz         health      no database on the liveness path;
+//!                                                   /statusz never gates readiness
 //!   /.well-known/oauth-protected-resource, /mcp
 //!                                     flags-mcp   agents: bearer tokens from the platform
 //!   /api/…                            flags-api   SDKs: sdk_/srv_ keys
@@ -34,6 +35,7 @@ use flags_core::entitlements::Entitlements;
 use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::{Checker, CheckerConfig, Hints};
+use flags_core::usage::DeclarationHealth;
 use http::{header, HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use otto_resource::{ClientConfig, PlatformClient};
 use otto_tenant::Db;
@@ -62,6 +64,27 @@ pub fn router(
     evaluations: Arc<EvalCounter>,
     config: &Config,
 ) -> Router {
+    router_with_meter_health(
+        db,
+        platform,
+        listener,
+        hints,
+        evaluations,
+        config,
+        DeclarationHealth::default(),
+    )
+}
+
+/// [`router`], with the shipper's [`DeclarationHealth`] for `/statusz`.
+pub fn router_with_meter_health(
+    db: Db,
+    platform: Arc<PlatformClient>,
+    listener: Listener,
+    hints: Hints,
+    evaluations: Arc<EvalCounter>,
+    config: &Config,
+    meters: DeclarationHealth,
+) -> Router {
     let mcp = flags_mcp::router(db.clone(), mcp_config(platform, config));
     let api = flags_api::router(flags_api::AppState::new(
         db.clone(),
@@ -74,7 +97,7 @@ pub fn router(
         &config.resource_uri,
         &config.platform_url,
     ));
-    health::router(db)
+    health::router(db, meters)
         .merge(mcp)
         .merge(api)
         .merge(llms::router())

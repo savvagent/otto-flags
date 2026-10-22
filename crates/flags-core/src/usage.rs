@@ -22,6 +22,8 @@
 //!   refuses events as `unknown_meter` (it forgot the declaration), the shipper
 //!   re-declares and retries those events with backoff instead of
 //!   dead-lettering them (#144).
+//!   A stall is also visible outside the log, on `/statusz`
+//!   ([`DeclarationHealth`]), which never affects readiness.
 //! - **Refused events are kept, then swept.** An event the platform rejects
 //!   outright moves to `usage_outbox_rejected` with its reason (and, for a
 //!   metered row, its meter and quantity), is kept for
@@ -664,6 +666,87 @@ async fn redeclare_meters(platform: &PlatformClient) {
     }
 }
 
+/// Where the meter declaration stands, shared between the shipper (which
+/// writes it) and the server's `/statusz` (which reads it).
+///
+/// Informational only: nothing gates on it. A stalled declaration delays
+/// billing and loses no usage, and SDK evaluation must keep serving, so this
+/// is deliberately not part of readiness. Clones share one state.
+#[derive(Debug, Clone, Default)]
+pub struct DeclarationHealth(Arc<std::sync::Mutex<DeclarationState>>);
+
+#[derive(Debug, Default)]
+struct DeclarationState {
+    declared: bool,
+    failing_since: Option<std::time::Instant>,
+    rows_waiting: Option<i64>,
+    reason: Option<&'static str>,
+    status: Option<u16>,
+}
+
+/// A point-in-time view of [`DeclarationHealth`], serialized as the
+/// `metering` object of `/statusz`. Text-free: `reason` is a fixed name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeclarationReport {
+    /// `declaring` before the first attempt has failed or succeeded,
+    /// `stalled` while attempts keep failing, `declared` once one succeeded.
+    pub declaration: &'static str,
+    /// Seconds since the first failed attempt of the current stall.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failing_for_secs: Option<u64>,
+    /// Rows in `usage_outbox` when the failure was last logged (about once a
+    /// minute), or `None` if they could not be counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows_waiting: Option<i64>,
+    /// The latest failure's fixed reason name (as in the error log).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+    /// The HTTP status of the latest failure, when it had one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+}
+
+impl DeclarationHealth {
+    fn state(&self) -> std::sync::MutexGuard<'_, DeclarationState> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn failed(&self, f: &Failure) {
+        let mut st = self.state();
+        st.failing_since.get_or_insert_with(std::time::Instant::now);
+        st.reason = Some(f.reason);
+        st.status = f.status;
+    }
+
+    fn rows_waiting(&self, n: Option<i64>) {
+        self.state().rows_waiting = n;
+    }
+
+    fn succeeded(&self) {
+        *self.state() = DeclarationState {
+            declared: true,
+            ..Default::default()
+        };
+    }
+
+    /// The current state.
+    pub fn report(&self) -> DeclarationReport {
+        let st = self.state();
+        let stalled = st.failing_since.is_some();
+        DeclarationReport {
+            declaration: match (st.declared, stalled) {
+                (_, true) => "stalled",
+                (true, false) => "declared",
+                (false, false) => "declaring",
+            },
+            failing_for_secs: st.failing_since.map(|t| t.elapsed().as_secs()),
+            rows_waiting: st.rows_waiting,
+            reason: st.reason,
+            status: st.status,
+        }
+    }
+}
+
 /// How often a stuck meter declaration is logged.
 const DECLARE_LOG_EVERY: Duration = Duration::from_secs(60);
 
@@ -713,6 +796,7 @@ async fn declare_meters(
     platform: &PlatformClient,
     cfg: &ShipperConfig,
     shutdown: &mut watch::Receiver<bool>,
+    health: &DeclarationHealth,
 ) -> bool {
     let declarations = meter_declarations();
     let mut attempt: u32 = 0;
@@ -726,6 +810,7 @@ async fn declare_meters(
             _ = shutdown.changed() => return false,
         };
         let Some((f, text)) = declaration_failure(result) else {
+            health.succeeded();
             tracing::info!(meters = declarations.len(), "declared usage meters");
             return true;
         };
@@ -739,6 +824,7 @@ async fn declare_meters(
                     None
                 }
             };
+            health.rows_waiting(rows_waiting);
             tracing::error!(
                 reason = f.reason,
                 status = f.status,
@@ -752,6 +838,7 @@ async fn declare_meters(
                 "could not declare the usage meters"
             );
         }
+        health.failed(&f);
         let wait = cfg
             .base_backoff
             .saturating_mul(1u32 << attempt.min(20))
@@ -775,9 +862,21 @@ pub async fn run(
     db: Db,
     platform: Arc<PlatformClient>,
     cfg: ShipperConfig,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) {
-    if !declare_meters(&db, &platform, &cfg, &mut shutdown).await {
+    run_reporting(db, platform, cfg, shutdown, DeclarationHealth::default()).await;
+}
+
+/// [`run`], recording the state of the meter declaration in `health` for the
+/// server's `/statusz`.
+pub async fn run_reporting(
+    db: Db,
+    platform: Arc<PlatformClient>,
+    cfg: ShipperConfig,
+    mut shutdown: watch::Receiver<bool>,
+    health: DeclarationHealth,
+) {
+    if !declare_meters(&db, &platform, &cfg, &mut shutdown, &health).await {
         return;
     }
     let mut failures: u32 = 0;
