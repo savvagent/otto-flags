@@ -1,6 +1,6 @@
 # Agent onboarding: `sdk_guide` tool, served `llms.txt`, AGENTS.md
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#153)
 **Ticket:** savvagent/otto-flags#152 (platform convention: savvagent/otto-platform#101)
 
 ## Brief
@@ -66,7 +66,7 @@ changes to any SDK package.
 
 - `crates/flags-mcp/src/guide.rs` (new): `LANGUAGES: &[Lang]` where `Lang { name, aliases, md }`
   and `md` is `include_str!("../content/guides/<name>.md")`; `render(language, Option<&FlagApp>)
-  -> Result<String, GuideError>`. Placeholders `{{APP_NAME}}`, `{{APP_ID}}`, `{{CLIENT_KEY}}` are
+  -> Result<(&'static str, String), GuideError> (the canonical language name and the text)`. Placeholders `{{APP_NAME}}`, `{{APP_ID}}`, `{{CLIENT_KEY}}` are
   replaced with the app's values, or with `<app-name>`, `<app-id>`, `<client-key>` when no app.
   Lookup is case-insensitive over `name` and `aliases`. `GuideError::Unknown` lists the supported
   names. Pure, no I/O.
@@ -152,8 +152,10 @@ verified (see Testing).
   and every language in `LANGUAGES`.
 - E2E (`crates/flags-server/tests/e2e.rs`): `sdk_guide` with and without `app` (fields, the app's
   client key present, no `srv_`), unknown language and unknown app errors, missing-scope refusal,
-  a usage row recorded and not billable, tool listed with `readOnlyHint`; `GET /llms.txt` returns
-  200, `text/plain`, equals `LLMS_TXT`, with no `Authorization` header.
+  a usage row recorded and not billable, tool listed with `readOnlyHint`.
+- `flags-server` unit tests (`crates/flags-server/src/lib.rs`, with `request_root`): `GET /llms.txt`
+  returns 200, `text/plain`, the cache header, equals `LLMS_TXT`, with no `Authorization` header;
+  `POST /llms.txt` is 405. (The e2e `send` helper drops headers and parses JSON, so it cannot test this.)
 - Gates per CLAUDE.md: cargo test/clippy/fmt, the migrations check, `podman build`. No pnpm gate
   (no `packages/**` change). `llms.txt`/`AGENTS.md` are docs.
 - Post-deploy: `/readyz`, boot log markers, then `curl https://otto-flags.savvagent.com/llms.txt` and

@@ -400,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn llms_txt_is_get_only() {
         let (status, _, _) = request_root(http::Method::POST, "/llms.txt", &[]).await;
-        assert_ne!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     }
 
     #[test]

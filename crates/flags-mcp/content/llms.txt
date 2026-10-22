@@ -17,7 +17,7 @@ The server is at https://otto-flags.savvagent.com. Agents manage flags at `/mcp`
 - `usage`: this month's usage meters, the budget and any billing block.
 - `list_apps`: the apps (one per codebase or service) that own flags.
 - `create_app`: create an app and return its SDK keys (owner or admin).
-- `update_app`: rename or change an app's settings.
+- `update_app`: replace an app's list of environments (owner or admin).
 - `rotate_app_keys`: issue new SDK keys for an app (owner or admin).
 - `list_flags`: the flags in an app.
 - `get_flag`: one flag with its environments, rules and current version.
