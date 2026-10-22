@@ -42,11 +42,68 @@ pub enum GuideError {
     },
 }
 
-pub const LANGUAGES: &[Lang] = &[Lang {
-    name: "python",
-    aliases: &["py", "python3"],
-    md: include_str!("../content/guides/python.md"),
-}];
+pub const LANGUAGES: &[Lang] = &[
+    Lang {
+        name: "python",
+        aliases: &["py", "python3"],
+        md: include_str!("../content/guides/python.md"),
+    },
+    Lang {
+        name: "typescript",
+        aliases: &["ts", "js", "javascript"],
+        md: include_str!("../content/guides/typescript.md"),
+    },
+    Lang {
+        name: "node",
+        aliases: &["nodejs", "node-server"],
+        md: include_str!("../content/guides/node.md"),
+    },
+    Lang {
+        name: "react",
+        aliases: &[],
+        md: include_str!("../content/guides/react.md"),
+    },
+    Lang {
+        name: "vue",
+        aliases: &[],
+        md: include_str!("../content/guides/vue.md"),
+    },
+    Lang {
+        name: "svelte",
+        aliases: &[],
+        md: include_str!("../content/guides/svelte.md"),
+    },
+    Lang {
+        name: "sveltekit",
+        aliases: &[],
+        md: include_str!("../content/guides/sveltekit.md"),
+    },
+    Lang {
+        name: "solid",
+        aliases: &[],
+        md: include_str!("../content/guides/solid.md"),
+    },
+    Lang {
+        name: "angular",
+        aliases: &[],
+        md: include_str!("../content/guides/angular.md"),
+    },
+    Lang {
+        name: "astro",
+        aliases: &[],
+        md: include_str!("../content/guides/astro.md"),
+    },
+    Lang {
+        name: "nextjs",
+        aliases: &["next"],
+        md: include_str!("../content/guides/nextjs.md"),
+    },
+    Lang {
+        name: "remix",
+        aliases: &[],
+        md: include_str!("../content/guides/remix.md"),
+    },
+];
 
 /// The canonical name of every language with a guide, in [`LANGUAGES`] order.
 pub fn supported() -> Vec<&'static str> {
@@ -255,12 +312,80 @@ mod tests {
 
     /// (language, manifest path from the repo root, identifier the manifest must declare,
     /// identifier the guide must use). Keeps the guides honest about names.
-    const MANIFESTS: &[(&str, &str, &str, &str)] = &[(
+    const MANIFESTS: &[(&str, &str, &str, &str)] = &[
+        (
         "python",
         "packages/python-server/pyproject.toml",
         "name = \"otto-flags\"",
         "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server",
-    )];
+    ),
+    (
+        "typescript",
+        "packages/typescript/package.json",
+        "\"name\": \"@otto-flags/sdk\"",
+        "@otto-flags/sdk",
+    ),
+    (
+        "node",
+        "packages/node-server/package.json",
+        "\"name\": \"@otto-flags/node-server\"",
+        "@otto-flags/node-server",
+    ),
+    (
+        "react",
+        "packages/react/package.json",
+        "\"name\": \"@otto-flags/react\"",
+        "@otto-flags/react",
+    ),
+    (
+        "vue",
+        "packages/vue/package.json",
+        "\"name\": \"@otto-flags/vue\"",
+        "@otto-flags/vue",
+    ),
+    (
+        "svelte",
+        "packages/svelte/package.json",
+        "\"name\": \"@otto-flags/svelte\"",
+        "@otto-flags/svelte",
+    ),
+    (
+        "sveltekit",
+        "packages/sveltekit/package.json",
+        "\"name\": \"@otto-flags/sveltekit\"",
+        "@otto-flags/sveltekit",
+    ),
+    (
+        "solid",
+        "packages/solid/package.json",
+        "\"name\": \"@otto-flags/solid\"",
+        "@otto-flags/solid",
+    ),
+    (
+        "angular",
+        "packages/angular/package.json",
+        "\"name\": \"@otto-flags/angular\"",
+        "@otto-flags/angular",
+    ),
+    (
+        "astro",
+        "packages/astro/package.json",
+        "\"name\": \"@otto-flags/astro\"",
+        "@otto-flags/astro",
+    ),
+    (
+        "nextjs",
+        "packages/nextjs/package.json",
+        "\"name\": \"@otto-flags/nextjs\"",
+        "@otto-flags/nextjs",
+    ),
+    (
+        "remix",
+        "packages/remix/package.json",
+        "\"name\": \"@otto-flags/remix\"",
+        "@otto-flags/remix",
+    ),
+    ];
 
     #[test]
     fn guide_names_match_the_package_manifests() {
@@ -283,6 +408,74 @@ mod tests {
                 l.name
             );
         }
+    }
+
+    /// Every non-test source file under `dir`, concatenated.
+    fn source_text(dir: &std::path::Path) -> String {
+        let mut text = String::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())) {
+                let path = entry.unwrap().path();
+                let file = path.file_name().unwrap().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if !file.contains(".test.") && !file.contains(".spec.") {
+                    text.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
+                }
+            }
+        }
+        text
+    }
+
+    /// True when `name` occurs in `text` as a whole identifier.
+    fn mentions_identifier(text: &str, name: &str) -> bool {
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+        text.match_indices(name).any(|(i, _)| {
+            !text[..i].chars().next_back().is_some_and(is_ident)
+                && !text[i + name.len()..].chars().next().is_some_and(is_ident)
+        })
+    }
+
+    #[test]
+    fn javascript_import_names_exist_in_the_packages() {
+        let mut checked = 0;
+        for l in LANGUAGES {
+            for line in l.md.lines().map(str::trim) {
+                let Some(rest) = line.strip_prefix("import {") else {
+                    continue;
+                };
+                let Some((names, from)) = rest.split_once("} from ") else {
+                    continue;
+                };
+                let spec = from.trim().trim_end_matches(';').trim_matches(['"', '\'']);
+                let Some(pkg) = spec.strip_prefix("@otto-flags/") else {
+                    continue;
+                };
+                let pkg = pkg.split('/').next().unwrap();
+                let (_, manifest, _, _) = MANIFESTS
+                    .iter()
+                    .find(|m| m.3 == format!("@otto-flags/{pkg}"))
+                    .unwrap_or_else(|| panic!("{}: imports unknown package {spec}", l.name));
+                let src = repo(manifest).parent().unwrap().join("src");
+                let text = source_text(&src);
+                for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                    // `import { a as b }` and `import { type T }` name the exported identifier.
+                    let name = name
+                        .trim_start_matches("type ")
+                        .split(" as ")
+                        .next()
+                        .unwrap();
+                    checked += 1;
+                    assert!(
+                        mentions_identifier(&text, name),
+                        "{} guide imports {name} from {spec}, which {pkg}'s src does not mention",
+                        l.name
+                    );
+                }
+            }
+        }
+        assert!(checked > 0, "no javascript guide imports anything");
     }
 
     #[test]
