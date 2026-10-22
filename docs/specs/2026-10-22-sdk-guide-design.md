@@ -89,6 +89,12 @@ changes to any SDK package.
 - `AGENTS.md` (root): short, human- and agent-readable: what this repo is, where `llms.txt`
   lives, how to find the SDK for a language, the commit-pin rule, where the wire contract is.
 
+- `crates/flags-mcp/src/server.rs`: one line in `INSTRUCTIONS` tells a connected agent that
+  `sdk_guide` is how to wire an SDK into a project; `the_instructions_name_the_opening_moves`
+  gains `"sdk_guide"` (every tool name is already checked against `INSTRUCTIONS` there).
+- Docs: `README.md` (its tool list) gains `sdk_guide`; `docs/deploy/fly.md` does not list the
+  tool surface and is not changed.
+
 Public-interface changes (all additive): new MCP tool `sdk_guide`; new route `GET /llms.txt`.
 
 ## Invariants impact
@@ -120,6 +126,9 @@ verified (see Testing).
 - Unknown `app`: the standard "unknown app" error listing apps, as sibling tools.
 - Aliases: `js`/`javascript` -> typescript, `node`/`nodejs` -> node, `py` -> python, `golang` -> go,
   `swift` -> ios, `kotlin` -> android, `next` -> nextjs.
+- Server-side SDK guides (node, python, go, java, rust) say where the server key comes from: it is
+  shown once by `create_app` / `rotate_app_keys` and belongs in the app's secret store, read from
+  the environment (`OTTO_FLAGS_API_KEY`); written in words, never the literal prefix.
 - `{{...}}` placeholders with no app: replaced by angle-bracket placeholders, so snippets stay valid
   shape for a human to fill. A test asserts no `{{` survives rendering.
 - App names allow letters, digits, `-_.` only, so substitution cannot inject Markdown structure
