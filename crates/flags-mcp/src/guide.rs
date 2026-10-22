@@ -103,6 +103,31 @@ pub const LANGUAGES: &[Lang] = &[
         aliases: &[],
         md: include_str!("../content/guides/remix.md"),
     },
+    Lang {
+        name: "go",
+        aliases: &["golang"],
+        md: include_str!("../content/guides/go.md"),
+    },
+    Lang {
+        name: "rust",
+        aliases: &[],
+        md: include_str!("../content/guides/rust.md"),
+    },
+    Lang {
+        name: "java",
+        aliases: &["jvm"],
+        md: include_str!("../content/guides/java.md"),
+    },
+    Lang {
+        name: "ios",
+        aliases: &["swift"],
+        md: include_str!("../content/guides/ios.md"),
+    },
+    Lang {
+        name: "android",
+        aliases: &["kotlin"],
+        md: include_str!("../content/guides/android.md"),
+    },
 ];
 
 /// The canonical name of every language with a guide, in [`LANGUAGES`] order.
@@ -385,6 +410,36 @@ mod tests {
         "\"name\": \"@otto-flags/remix\"",
         "@otto-flags/remix",
     ),
+    (
+        "go",
+        "packages/go-server/go.mod",
+        "module github.com/savvagent/otto-flags/packages/go-server",
+        "github.com/savvagent/otto-flags/packages/go-server@<commit>",
+    ),
+    (
+        "rust",
+        "packages/rust-server/Cargo.toml",
+        "name = \"otto-flags\"",
+        "otto-flags = { git = \"https://github.com/savvagent/otto-flags\", rev = \"<commit>\" }",
+    ),
+    (
+        "java",
+        "packages/java-server/pom.xml",
+        "<artifactId>otto-flags-java-server-sdk</artifactId>",
+        "otto-flags-java-server-sdk",
+    ),
+    (
+        "ios",
+        "packages/ios-sdk/Package.swift",
+        "name: \"OttoFlagsSDK\"",
+        "OttoFlagsSDK",
+    ),
+    (
+        "android",
+        "packages/android-sdk/build.gradle.kts",
+        "artifactId = \"android-sdk\"",
+        "android-sdk",
+    ),
     ];
 
     #[test]
@@ -435,6 +490,21 @@ mod tests {
             !text[..i].chars().next_back().is_some_and(is_ident)
                 && !text[i + name.len()..].chars().next().is_some_and(is_ident)
         })
+    }
+
+    #[test]
+    fn jvm_guides_use_the_manifests_group_id() {
+        for (lang, manifest) in [
+            ("java", "packages/java-server/pom.xml"),
+            ("android", "packages/android-sdk/build.gradle.kts"),
+        ] {
+            let m = std::fs::read_to_string(repo(manifest)).unwrap();
+            assert!(m.contains("com.savvagent.ottoflags"), "{manifest}");
+            assert!(
+                guide(lang).contains("com.savvagent.ottoflags"),
+                "{lang} guide must contain the group id"
+            );
+        }
     }
 
     #[test]
@@ -560,6 +630,19 @@ mod tests {
             {
                 problems.push(format!("pnpm/yarn add without a local path: {line}"));
             }
+            if has_cmd(&line, "go get") && !line.contains("@<commit>") {
+                problems.push(format!("go get without @<commit>: {line}"));
+            }
+            if has_cmd(&line, "cargo add") && !(line.contains("--git") && line.contains("--rev")) {
+                problems.push(format!("cargo add without --git and --rev: {line}"));
+            }
+            // A Cargo.toml dependency line for the crate (`otto-flags = ...`).
+            let dep = line.trim_start();
+            if dep.starts_with("otto-flags =")
+                && !(dep.contains("git = ") && dep.contains("rev = \"<commit>\""))
+            {
+                problems.push(format!("otto-flags dependency without git and rev: {line}"));
+            }
         }
         problems
     }
@@ -582,6 +665,18 @@ mod tests {
             "python guide has no pip install line"
         );
         assert!(npm > 0, "no guide has an npm install command");
+        assert!(
+            logical_lines(guide("go"))
+                .iter()
+                .any(|c| has_cmd(c, "go get") && c.contains("@<commit>")),
+            "go guide has no go get line"
+        );
+        assert!(
+            logical_lines(guide("rust"))
+                .iter()
+                .any(|c| c.trim_start().starts_with("otto-flags =")),
+            "rust guide has no dependency line"
+        );
     }
 
     #[test]
@@ -593,6 +688,13 @@ mod tests {
             "npm install \\\n  @otto-flags/sdk",
             "pnpm add @otto-flags/sdk",
             "yarn add @otto-flags/sdk",
+            "go get github.com/savvagent/otto-flags/packages/go-server",
+            "go get github.com/savvagent/otto-flags/packages/go-server@latest",
+            "cargo add otto-flags",
+            "cargo add otto-flags --git https://x/y",
+            "otto-flags = \"0.1\"",
+            "otto-flags = { version = \"0.1\" }",
+            "otto-flags = { git = \"https://x/y\" }",
         ] {
             assert!(!install_line_problems(bad).is_empty(), "{bad:?} passed");
         }
@@ -600,6 +702,9 @@ mod tests {
             "pip install \"otto-flags @ git+https://x/y@<commit>\"",
             "npm install \\\n  /p/otto-flags-sdk-*.tgz",
             "pnpm add ./otto-flags-sdk-1.tgz",
+            "go get github.com/savvagent/otto-flags/packages/go-server@<commit>",
+            "cargo add otto-flags --git https://x/y --rev <commit>",
+            "otto-flags = { git = \"https://x/y\", rev = \"<commit>\" }",
         ] {
             assert!(install_line_problems(good).is_empty(), "{good:?} failed");
         }
