@@ -501,4 +501,186 @@ mod tests {
         }
         assert!(imported > 0, "python guide imports nothing from otto_flags");
     }
+
+    #[test]
+    fn lookup_trims_surrounding_whitespace() {
+        assert_eq!(lookup(" python ").unwrap().name, "python");
+        assert_eq!(lookup("\tPy\n").unwrap().name, "python");
+    }
+
+    /// Fenced-code lines of `md` as logical commands: a trailing `\` joins the next line.
+    fn logical_lines(md: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        for line in md.lines() {
+            match line.trim_end().strip_suffix('\\') {
+                Some(head) => {
+                    cur.push_str(head);
+                    cur.push(' ');
+                }
+                None => {
+                    cur.push_str(line);
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    /// True when `cmd` occurs in `line` as a whole command (`pnpm install` is not `npm install`).
+    fn has_cmd(line: &str, cmd: &str) -> bool {
+        line.match_indices(cmd).any(|(i, _)| {
+            !line[..i]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '-')
+        })
+    }
+
+    /// The problems with the install commands in `md`, one message per offending command.
+    fn install_line_problems(md: &str) -> Vec<String> {
+        let mut problems = Vec::new();
+        for line in logical_lines(md) {
+            if has_cmd(&line, "pip install") && !line.contains("git+") {
+                problems.push(format!("pip install without git+: {line}"));
+            }
+            if has_cmd(&line, "npm install") {
+                if !line.contains(".tgz") {
+                    problems.push(format!("npm install without a local tarball: {line}"));
+                }
+                if line.contains("@otto-flags/") {
+                    problems.push(format!("npm install by package name: {line}"));
+                }
+            }
+            if (has_cmd(&line, "pnpm add") || has_cmd(&line, "yarn add"))
+                && !(line.contains(".tgz") || line.contains("file:"))
+            {
+                problems.push(format!("pnpm/yarn add without a local path: {line}"));
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn install_commands_use_pinned_source_routes() {
+        let mut npm = 0;
+        for l in LANGUAGES {
+            let problems = install_line_problems(l.md);
+            assert!(problems.is_empty(), "{}: {problems:?}", l.name);
+            npm += logical_lines(l.md)
+                .iter()
+                .filter(|c| has_cmd(c, "npm install"))
+                .count();
+        }
+        assert!(
+            logical_lines(guide("python"))
+                .iter()
+                .any(|c| c.contains("pip install") && c.contains("git+")),
+            "python guide has no pip install line"
+        );
+        assert!(npm > 0, "no guide has an npm install command");
+    }
+
+    #[test]
+    fn the_install_check_rejects_registry_style_commands() {
+        for bad in [
+            "pip install otto-flags",
+            "npm install @otto-flags/sdk",
+            "npm install ./a.tgz @otto-flags/sdk",
+            "npm install \\\n  @otto-flags/sdk",
+            "pnpm add @otto-flags/sdk",
+            "yarn add @otto-flags/sdk",
+        ] {
+            assert!(!install_line_problems(bad).is_empty(), "{bad:?} passed");
+        }
+        for good in [
+            "pip install \"otto-flags @ git+https://x/y@<commit>\"",
+            "npm install \\\n  /p/otto-flags-sdk-*.tgz",
+            "pnpm add ./otto-flags-sdk-1.tgz",
+        ] {
+            assert!(install_line_problems(good).is_empty(), "{good:?} failed");
+        }
+    }
+
+    /// Keyword names passed at the top level of every `FlagClientConfig(...)` call in `md`.
+    fn config_keywords(md: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut rest = md;
+        while let Some(at) = rest.find("FlagClientConfig(") {
+            let body = &rest[at + "FlagClientConfig(".len()..];
+            let (mut depth, mut quote, mut word) = (1usize, None::<char>, String::new());
+            let mut chars = body.chars().peekable();
+            let mut consumed = 0;
+            while let Some(c) = chars.next() {
+                consumed += c.len_utf8();
+                if let Some(q) = quote {
+                    if c == q {
+                        quote = None;
+                    }
+                    continue;
+                }
+                match c {
+                    '"' | '\'' => quote = Some(c),
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    '=' if depth == 1 && chars.peek() != Some(&'=') && !word.is_empty() => {
+                        found.push(std::mem::take(&mut word));
+                    }
+                    c if depth == 1 && (c.is_alphanumeric() || c == '_') => word.push(c),
+                    _ => word.clear(),
+                }
+            }
+            rest = &body[consumed..];
+        }
+        found
+    }
+
+    #[test]
+    fn python_config_keywords_are_fields_of_the_config() {
+        let types = std::fs::read_to_string(repo("packages/python-server/src/otto_flags/types.py"))
+            .expect("types.py");
+        let class = types
+            .split("class FlagClientConfig")
+            .nth(1)
+            .expect("FlagClientConfig");
+        let fields: Vec<&str> = class
+            .lines()
+            .skip(1)
+            .take_while(|l| l.is_empty() || l.starts_with(' '))
+            .filter_map(|l| l.strip_prefix("    "))
+            .filter(|l| !l.starts_with(' '))
+            .filter_map(|l| l.split_once(':').map(|(n, _)| n.trim()))
+            .filter(|n| !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_'))
+            .collect();
+        assert!(
+            fields.contains(&"api_key") && fields.contains(&"on_error"),
+            "{fields:?}"
+        );
+        let used = config_keywords(guide("python"));
+        assert!(used.len() >= 5, "found too few keywords: {used:?}");
+        for k in &used {
+            assert!(
+                fields.contains(&k.as_str()),
+                "python guide passes {k}=, not a config field"
+            );
+        }
+        // The prose list of optional fields names real fields too.
+        for k in [
+            "base_url",
+            "cache_ttl",
+            "enable_realtime",
+            "enable_telemetry",
+            "timeout",
+        ] {
+            assert!(fields.contains(&k), "{k}");
+        }
+    }
 }

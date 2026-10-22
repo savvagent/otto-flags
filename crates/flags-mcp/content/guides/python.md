@@ -107,7 +107,8 @@ context)` to report an exception raised in flagged code, which is what `flag_hea
 auto-rollback compare.
 
 Results are cached per flag and per evaluation context (the context as sent) for `cache_ttl`
-seconds, so two users never share a cached result. `invalidate_cache()` clears it by hand.
+seconds, so two users never share a cached result. `invalidate_cache()` clears it by hand; on the async client it is a
+coroutine, so `await client.invalidate_cache()`.
 
 ## Frameworks
 
@@ -118,11 +119,12 @@ Open the async client in the lifespan and hand it out as a dependency:
 ```python
 import os
 from contextlib import asynccontextmanager
+from typing import Optional
 
 from fastapi import Depends, FastAPI, Request
 from otto_flags import AsyncFlagClient, FlagClientConfig, FlagContext
 
-client: AsyncFlagClient | None = None
+client: Optional[AsyncFlagClient] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -179,6 +181,8 @@ middleware:
 
 ```python
 # settings.py
+import os
+
 OTTO_FLAGS_API_KEY = os.environ["OTTO_FLAGS_API_KEY"]
 MIDDLEWARE = [..., "myapp.middleware.OttoFlagsMiddleware"]
 
@@ -216,10 +220,14 @@ def checkout(request):
 
 ## Notes
 
-- A flag lookup never raises into the app: on a network or server error the SDK returns the value
-  from `defaults` (or `False`) with `reason == "error"`, and passes the error to
-  `on_error` if set. Only constructing a client with a missing or malformed key raises
-  (`InvalidAPIKeyError`), so a misconfigured deploy fails at start-up, not per request.
+- A flag lookup does not raise on a network or server error: the SDK returns the value from
+  `defaults` (or `False`) with `reason == "error"`, and passes the error to `on_error` if set.
+  Two cases still raise into your code. If your `on_error` callback itself raises, that exception
+  propagates out of the lookup, so keep the callback exception-safe. And the async client raises
+  `RuntimeError` ("Client not initialized") when a lookup runs on a client that was not entered
+  with `async with`, so enter it before serving requests. Constructing a client with a missing or
+  malformed key raises `InvalidAPIKeyError`, so a misconfigured deploy fails at start-up, not per
+  request.
 - Telemetry (evaluation counts and tracked errors) is batched and sent in the background; it feeds
   `flag_health` and auto-rollback. Set `enable_telemetry=False` to turn it off.
 - With `enable_realtime` on, the client holds a Server-Sent Events connection and invalidates its
