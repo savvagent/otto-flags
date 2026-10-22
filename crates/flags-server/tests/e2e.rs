@@ -2179,8 +2179,7 @@ async fn a_stalled_meter_declaration_shows_on_statusz_but_not_readyz(pool: PgPoo
         health,
     ));
 
-    // While it keeps failing: stalled, with how long and how many rows wait,
-    // and the service is still ready.
+    // While it keeps failing: stalled, and the service is still ready.
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let (_, body) = get_json(&app, "/statusz").await;
@@ -2192,10 +2191,8 @@ async fn a_stalled_meter_declaration_shows_on_statusz_but_not_readyz(pool: PgPoo
     })
     .await
     .map(|body| {
-        let m = &body["metering"];
-        assert!(m["failing_for_secs"].is_u64(), "{body}");
-        assert_eq!(m["rows_waiting"], 1, "{body}");
-        assert_eq!(m["reason"], "http_status", "{body}");
+        // Only the coarse state: no queue depth, duration, reason or status.
+        assert_eq!(body, json!({"metering": {"declaration": "stalled"}}));
     })
     .expect("statusz reports the stall");
     let (status, body) = get_json(&app, "/readyz").await;
@@ -2207,7 +2204,7 @@ async fn a_stalled_meter_declaration_shows_on_statusz_but_not_readyz(pool: PgPoo
         loop {
             let (_, body) = get_json(&app, "/statusz").await;
             if body["metering"]["declaration"] == "declared" {
-                assert!(body["metering"].get("failing_for_secs").is_none(), "{body}");
+                assert_eq!(body, json!({"metering": {"declaration": "declared"}}));
                 return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;

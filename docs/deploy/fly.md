@@ -316,8 +316,10 @@ Production evaluations are billed on the meter `otto-flags/evaluations`. MCP too
 
   declaration succeeds nothing ships, and rows wait in `usage_outbox`. A declaration that keeps
   failing is also visible at `GET /statusz` (always `200`, never part of `/readyz`, so SDK
-  evaluation keeps serving): `{"metering": {"declaration": "stalled", "failing_for_secs": …,
-  "rows_waiting": …, "reason": …}}`, and `"declared"` once it succeeds.
+  evaluation keeps serving): `{"metering": {"declaration": "stalled"}}`, and `"declared"` once it succeeds (`"declaring"`
+  before the first attempt finishes). It is unauthenticated, so it carries only that coarse
+  state; the failure reason, HTTP status and `rows_waiting` are in the shipper's error log line
+  (about once a minute).
 - **What is counted.** Served evaluations (both key kinds) and reported evaluations (server-key
   telemetry only). Each app's hour is billed as the larger of the two, not the sum. The counts are
   held in memory, flushed to `usage_meter_hourly`, and closed into `usage_outbox` once the hour

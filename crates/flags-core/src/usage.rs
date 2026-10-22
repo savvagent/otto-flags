@@ -678,32 +678,19 @@ pub struct DeclarationHealth(Arc<std::sync::Mutex<DeclarationState>>);
 #[derive(Debug, Default)]
 struct DeclarationState {
     declared: bool,
-    failing_since: Option<std::time::Instant>,
-    rows_waiting: Option<i64>,
-    reason: Option<&'static str>,
-    status: Option<u16>,
+    failing: bool,
 }
 
 /// A point-in-time view of [`DeclarationHealth`], serialized as the
-/// `metering` object of `/statusz`. Text-free: `reason` is a fixed name.
+/// `metering` object of `/statusz`. Deliberately only the coarse state:
+/// `/statusz` is unauthenticated, so the queue depth (platform-wide, across
+/// every tenant), how long it has been failing and why stay in the shipper's
+/// log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeclarationReport {
     /// `declaring` before the first attempt has failed or succeeded,
     /// `stalled` while attempts keep failing, `declared` once one succeeded.
     pub declaration: &'static str,
-    /// Seconds since the first failed attempt of the current stall.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failing_for_secs: Option<u64>,
-    /// Rows in `usage_outbox` when the failure was last logged (about once a
-    /// minute), or `None` if they could not be counted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_waiting: Option<i64>,
-    /// The latest failure's fixed reason name (as in the error log).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<&'static str>,
-    /// The HTTP status of the latest failure, when it had one.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<u16>,
 }
 
 impl DeclarationHealth {
@@ -711,38 +698,26 @@ impl DeclarationHealth {
         self.0.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    fn failed(&self, f: &Failure) {
-        let mut st = self.state();
-        st.failing_since.get_or_insert_with(std::time::Instant::now);
-        st.reason = Some(f.reason);
-        st.status = f.status;
-    }
-
-    fn rows_waiting(&self, n: Option<i64>) {
-        self.state().rows_waiting = n;
+    fn failed(&self) {
+        self.state().failing = true;
     }
 
     fn succeeded(&self) {
         *self.state() = DeclarationState {
             declared: true,
-            ..Default::default()
+            failing: false,
         };
     }
 
     /// The current state.
     pub fn report(&self) -> DeclarationReport {
         let st = self.state();
-        let stalled = st.failing_since.is_some();
         DeclarationReport {
-            declaration: match (st.declared, stalled) {
+            declaration: match (st.declared, st.failing) {
                 (_, true) => "stalled",
                 (true, false) => "declared",
                 (false, false) => "declaring",
             },
-            failing_for_secs: st.failing_since.map(|t| t.elapsed().as_secs()),
-            rows_waiting: st.rows_waiting,
-            reason: st.reason,
-            status: st.status,
         }
     }
 }
@@ -824,7 +799,6 @@ async fn declare_meters(
                     None
                 }
             };
-            health.rows_waiting(rows_waiting);
             tracing::error!(
                 reason = f.reason,
                 status = f.status,
@@ -838,7 +812,7 @@ async fn declare_meters(
                 "could not declare the usage meters"
             );
         }
-        health.failed(&f);
+        health.failed();
         let wait = cfg
             .base_backoff
             .saturating_mul(1u32 << attempt.min(20))

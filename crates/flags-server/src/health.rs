@@ -48,7 +48,8 @@ pub fn router(db: Db, meters: DeclarationHealth) -> Router {
 /// `GET /statusz` — what is degraded without making this replica unfit to
 /// serve. Always `200`: it is for people and monitors to read, never for a
 /// load balancer, so a stall here cannot take the service out of rotation.
-/// It touches no database and holds only fixed names and counts.
+/// It touches no database and, being unauthenticated, holds only the coarse
+/// declaration state (`declaring`, `stalled`, `declared`); the detail is in the log.
 async fn statusz(State(meters): State<DeclarationHealth>) -> Response {
     (
         StatusCode::OK,
