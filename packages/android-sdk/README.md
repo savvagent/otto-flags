@@ -5,7 +5,7 @@ The official Android SDK for [Otto Flags](https://github.com/savvagent/otto-flag
 ## Features
 
 - **Native Kotlin API** - Idiomatic Kotlin with coroutines support
-- **Polling Refresh** - the flag list is polled from `GET /api/sdk/flags` (no real-time stream yet)
+- **Polling Refresh** - the flag list is polled from `GET /api/sdk/flags`, with an optional real-time stream (`enableRealtime`)
 - **Automatic Caching** - Smart caching with configurable polling
 - **Type-Safe** - Full type safety with Kotlin's type system
 - **Lightweight** - Minimal dependencies
@@ -177,6 +177,7 @@ val config = OttoFlagsConfig(
     environment = "production",
     pollingInterval = 60_000L,     // Poll every 60 seconds
     enableWebSocket = true,         // Ignored: no WebSocket endpoint exists
+    enableRealtime = true,          // default: false; true opens the SSE update stream
     timeout = 30_000L,              // Request timeout in milliseconds
     enableLogging = true            // Enable debug logging
 )
@@ -256,7 +257,9 @@ val context = UserContext(
 
 ### Real-time Updates
 
-The server has no WebSocket endpoint, so the SDK opens no real-time connection (savvagent/otto-flags#125). `enableWebSocket` is ignored and kept only so existing code compiles. The documented real-time channel is the SSE stream `GET /api/flags/stream`, which this SDK does not consume yet; until it does, changes reach the client through the polling interval: each poll calls `GET /api/sdk/flags?environment=<env>` and drops the cached results of the flags it lists.
+The server has no WebSocket endpoint (savvagent/otto-flags#125); `enableWebSocket` is ignored and kept only so existing code compiles. The real-time channel is the SSE stream `GET /api/flags/stream`, which the SDK reads when you set `enableRealtime = true`. It is **off by default** because a held connection costs battery and radio wake-ups on a phone.
+
+With it on, the client reads the stream on a background coroutine and drops a changed flag's cached results as soon as the change arrives, so a kill switch does not wait for the next poll. Polling stays on as the fallback: while the stream is down, or with `enableRealtime` off, changes reach the client through the polling interval (each poll calls `GET /api/sdk/flags?environment=<env>` and drops the cached results of the flags it lists). The stream never delays or fails a lookup. It reconnects with exponential backoff (about 1 second up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every connection, since changes may have been missed. It runs while the client is open, so call `close()` when the app goes to the background if you do not want the connection held.
 
 ### Caching
 
