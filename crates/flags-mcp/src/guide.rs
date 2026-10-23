@@ -1,7 +1,7 @@
 //! Per-language guides for consuming the otto-flags SDKs, rendered for the `sdk_guide` tool.
 //!
 //! Content is Markdown under `content/guides/`, compiled in. Static: nothing here reads a
-//! database or the network. Install routes are commit-pinned source routes (`<commit>`); no
+//! database or the network. Install routes are commit-pinned source routes (`{{SDK_REF}}`); no
 //! guide may mention a registry or publication, which `tests::no_guide_mentions_a_registry`
 //! enforces.
 //!
@@ -10,8 +10,9 @@
 //! carries a key step that differs by SDK: a server-key SDK stops for the person to store the
 //! key, a client-key SDK has nothing to hand off (see [`Lang::server_key`]).
 //!
-//! A guide or the recipe may carry four placeholders, filled from the app the caller names or,
-//! without one, left as angle-bracket placeholders a human fills in:
+//! A guide or the recipe may carry five placeholders. Four are filled from the app the caller names
+//! or, without one, left as angle-bracket placeholders a human fills in; `{{SDK_REF}}` is always the
+//! constant:
 //!
 //! | Placeholder        | From an app          | Without one      |
 //! |--------------------|----------------------|------------------|
@@ -19,6 +20,7 @@
 //! | `{{APP_ID}}`       | `FlagApp.id`         | `<app-id>`       |
 //! | `{{CLIENT_KEY}}`   | `FlagApp.client_key` | `<client-key>`   |
 //! | `{{ENVIRONMENTS}}` | `FlagApp.environments`, each in backticks | `<environments>` |
+//! | `{{SDK_REF}}`      | [`SDK_REF`]          | [`SDK_REF`]      |
 //!
 //! Only the public client key is ever substituted. A server key is shown once by `create_app`
 //! or `rotate_app_keys` and is never stored in clear, so no guide can contain one; guides name
@@ -206,6 +208,20 @@ fn environments_text(app: Option<&FlagApp>) -> String {
     }
 }
 
+/// The commit of `savvagent/otto-flags` every SDK install in the guides, `AGENTS.md` and
+/// `llms.txt` is pinned to, so a consuming developer does not have to review a SHA an agent
+/// picked: the maintainers choose it here, once.
+///
+/// It must be a full 40-character lowercase commit SHA already on `main`. A PR cannot name its own
+/// squash-merge commit, so bump it in a separate small PR after a merge that changes SDK code or a
+/// guide's claims about SDK behavior. Moving it changes what every consuming agent installs, so it
+/// is a human decision (Rob's, like an SDK release): the bump PR's reviewer compares the old and
+/// new ref (`git diff <old> <new> -- packages/`) and checks the new one is on `main` with
+/// `git merge-base --is-ancestor <new> origin/main`. Bumping means changing this constant and every
+/// literal copy in `AGENTS.md` and both `llms.txt` files; `every_full_sha_is_the_sdk_ref` fails
+/// until all agree.
+pub const SDK_REF: &str = "4c5afb7f5efabfbf32dad22e6252aa6f26e59a66";
+
 /// Renders the guide for `language`, filled from `app` when given, below the integration recipe.
 ///
 /// The app's name and environments are checked again here, whatever wrote them: they land in
@@ -249,7 +265,8 @@ pub fn render(language: &str, app: Option<&FlagApp>) -> Result<(&'static str, St
         .replace("{{APP_NAME}}", &name)
         .replace("{{APP_ID}}", &id)
         .replace("{{CLIENT_KEY}}", &key)
-        .replace("{{ENVIRONMENTS}}", &environments_text(app));
+        .replace("{{ENVIRONMENTS}}", &environments_text(app))
+        .replace("{{SDK_REF}}", SDK_REF);
     Ok((lang.name, text))
 }
 
@@ -398,9 +415,21 @@ mod tests {
     }
 
     #[test]
+    fn sdk_ref_is_a_full_lowercase_sha() {
+        assert_eq!(SDK_REF.len(), 40, "SDK_REF must be a full 40-character SHA");
+        assert!(
+            SDK_REF
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "SDK_REF must be lowercase hex: {SDK_REF}"
+        );
+    }
+
+    #[test]
     fn every_guide_has_the_commit_pin_and_the_standard_sections() {
         for l in LANGUAGES {
-            assert!(l.md.contains("<commit>"), "{}: no commit pin", l.name);
+            assert!(l.md.contains("{{SDK_REF}}"), "{}: no pinned ref", l.name);
+            assert!(!l.md.contains("<commit>"), "{}: still has <commit>", l.name);
             for h in ["## Install", "## Initialize", "## Evaluate a flag"] {
                 assert!(
                     l.md.lines().any(|line| line.trim_end() == h),
@@ -411,33 +440,80 @@ mod tests {
         }
     }
 
-    /// The sentence #156 requires wherever an agent is told to pick a commit SHA, so a person
-    /// checks what gets pinned instead of whatever `main` happens to be.
-    const REVIEW_SHA: &str = "Ask a person to review and approve the SHA before you pin it, \
-        or use the SHA of a commit they have already checked. It must be a commit on `main` of \
-        `savvagent/otto-flags`, not one from a fork.";
-
     /// Markdown wraps lines, so compare on single-spaced text.
     fn flat(text: &str) -> String {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// #184: the guide supplies the ref, so nothing may still ask a person to approve a SHA or tell
+    /// the agent to go and find one. The phrase list is best-effort; `every_full_sha_is_the_sdk_ref`
+    /// and the install-line checks are what keep the ref itself from drifting.
     #[test]
-    fn every_guide_tells_the_agent_to_have_the_sha_reviewed() {
+    fn no_guide_asks_a_person_to_approve_a_sha_or_to_find_one() {
         for l in LANGUAGES {
+            let text = flat(l.md);
+            for gone in [
+                "review and approve the SHA",
+                "the approved SHA",
+                "git ls-remote",
+                "Find the current tip",
+            ] {
+                assert!(!text.contains(gone), "{}: still says {gone:?}", l.name);
+            }
             assert!(
-                flat(l.md).contains(REVIEW_SHA),
-                "{}: no review-the-SHA sentence",
+                text.contains("not a fork") || text.contains("from a fork"),
+                "{}: lost the not-a-fork rule",
                 l.name
             );
         }
     }
 
+    /// Runs of 40 or more hex digits: a full commit SHA, or a longer string that contains one.
+    fn long_hex_runs(text: &str) -> Vec<&str> {
+        text.split(|c: char| !c.is_ascii_hexdigit())
+            .filter(|run| run.len() >= 40)
+            .collect()
+    }
+
+    /// A bump that edits the constant but misses a copy (a second mention in `llms.txt`, a guide
+    /// that hard-codes a SHA) must fail here rather than leave two refs in circulation.
     #[test]
-    fn agents_md_and_llms_txt_tell_the_agent_to_have_the_sha_reviewed() {
+    fn every_full_sha_is_the_sdk_ref() {
         let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
-        assert!(flat(&agents).contains(REVIEW_SHA), "AGENTS.md");
-        assert!(flat(crate::LLMS_TXT).contains(REVIEW_SHA), "llms.txt");
+        for l in LANGUAGES {
+            assert!(
+                long_hex_runs(l.md).is_empty(),
+                "{}: a guide must say {{{{SDK_REF}}}}, not a literal SHA",
+                l.name
+            );
+            let text = render(l.name, None).unwrap().1;
+            for run in long_hex_runs(&text) {
+                assert_eq!(run, SDK_REF, "{}: a rendering has another SHA", l.name);
+            }
+        }
+        for (what, text) in [
+            ("AGENTS.md", agents.as_str()),
+            ("llms.txt", crate::LLMS_TXT),
+        ] {
+            let runs = long_hex_runs(text);
+            assert!(!runs.is_empty(), "{what} carries no SHA");
+            for run in runs {
+                assert_eq!(run, SDK_REF, "{what}: stale SHA, bump it with SDK_REF");
+            }
+        }
+    }
+
+    #[test]
+    fn every_rendering_pins_the_sdk_ref() {
+        let app = sample_app();
+        for l in LANGUAGES {
+            for app in [None, Some(&app)] {
+                let text = render(l.name, app).unwrap().1;
+                assert!(text.contains(SDK_REF), "{}: ref not in rendering", l.name);
+                assert!(!text.contains("<commit>"), "{}: <commit> left", l.name);
+                assert!(!text.contains("{{SDK_REF}}"), "{}: unfilled", l.name);
+            }
+        }
     }
 
     /// The JS guides build from a fresh clone with pnpm, whose install runs dependency install
@@ -683,12 +759,7 @@ mod tests {
     #[test]
     fn agents_md_points_agents_at_the_guide() {
         let text = std::fs::read_to_string(repo("AGENTS.md")).expect("AGENTS.md exists");
-        for needle in [
-            "llms.txt",
-            "sdk_guide",
-            "docs/SDK-DEVELOPER-GUIDE.md",
-            "<commit>",
-        ] {
+        for needle in ["llms.txt", "sdk_guide", "docs/SDK-DEVELOPER-GUIDE.md"] {
             assert!(text.contains(needle), "AGENTS.md should mention {needle}");
         }
         let lower = text.to_lowercase();
@@ -698,6 +769,25 @@ mod tests {
         assert!(!lower.contains("srv_"), "AGENTS.md mentions srv_");
     }
 
+    #[test]
+    fn agents_md_and_llms_txt_pin_the_sdk_ref() {
+        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
+        for (what, text) in [
+            ("AGENTS.md", agents.as_str()),
+            ("llms.txt", crate::LLMS_TXT),
+        ] {
+            assert!(
+                text.contains(SDK_REF),
+                "{what} must carry SDK_REF {SDK_REF}; bump it with the constant"
+            );
+            assert!(!text.contains("<commit>"), "{what}: <commit> left");
+            let text = flat(text);
+            for gone in ["review and approve the SHA", "git ls-remote"] {
+                assert!(!text.contains(gone), "{what}: still says {gone:?}");
+            }
+        }
+    }
+
     /// (language, manifest path from the repo root, identifier the manifest must declare,
     /// identifier the guide must use). Keeps the guides honest about names.
     const MANIFESTS: &[(&str, &str, &str, &str)] = &[
@@ -705,7 +795,7 @@ mod tests {
         "python",
         "packages/python-server/pyproject.toml",
         "name = \"otto-flags\"",
-        "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server",
+        "otto-flags @ git+https://github.com/savvagent/otto-flags@{{SDK_REF}}#subdirectory=packages/python-server",
     ),
     (
         "typescript",
@@ -777,13 +867,13 @@ mod tests {
         "go",
         "packages/go-server/go.mod",
         "module github.com/savvagent/otto-flags/packages/go-server",
-        "github.com/savvagent/otto-flags/packages/go-server@<commit>",
+        "github.com/savvagent/otto-flags/packages/go-server@{{SDK_REF}}",
     ),
     (
         "rust",
         "packages/rust-server/Cargo.toml",
         "name = \"otto-flags\"",
-        "otto-flags = { git = \"https://github.com/savvagent/otto-flags\", rev = \"<commit>\" }",
+        "otto-flags = { git = \"https://github.com/savvagent/otto-flags\", rev = \"{{SDK_REF}}\" }",
     ),
     (
         "java",
@@ -980,6 +1070,12 @@ mod tests {
             if has_cmd(&line, "pip install") && !line.contains("git+") {
                 problems.push(format!("pip install without git+: {line}"));
             }
+            if line.contains("git+") && !line.contains("@{{SDK_REF}}") {
+                problems.push(format!("git+ install without the SDK ref: {line}"));
+            }
+            if has_cmd(&line, "git checkout") && !line.contains("{{SDK_REF}}") {
+                problems.push(format!("git checkout without the SDK ref: {line}"));
+            }
             if has_cmd(&line, "npm install") {
                 if !line.contains(".tgz") {
                     problems.push(format!("npm install without a local tarball: {line}"));
@@ -993,16 +1089,18 @@ mod tests {
             {
                 problems.push(format!("pnpm/yarn add without a local path: {line}"));
             }
-            if has_cmd(&line, "go get") && !line.contains("@<commit>") {
-                problems.push(format!("go get without @<commit>: {line}"));
+            if has_cmd(&line, "go get") && !line.contains("@{{SDK_REF}}") {
+                problems.push(format!("go get without the SDK ref: {line}"));
             }
-            if has_cmd(&line, "cargo add") && !(line.contains("--git") && line.contains("--rev")) {
-                problems.push(format!("cargo add without --git and --rev: {line}"));
+            if has_cmd(&line, "cargo add")
+                && !(line.contains("--git") && line.contains("--rev {{SDK_REF}}"))
+            {
+                problems.push(format!("cargo add without --git and the SDK ref: {line}"));
             }
             // A Cargo.toml dependency line for the crate (`otto-flags = ...`).
             let dep = line.trim_start();
             if dep.starts_with("otto-flags =")
-                && !(dep.contains("git = ") && dep.contains("rev = \"<commit>\""))
+                && !(dep.contains("git = ") && dep.contains("rev = \"{{SDK_REF}}\""))
             {
                 problems.push(format!("otto-flags dependency without git and rev: {line}"));
             }
@@ -1031,7 +1129,7 @@ mod tests {
         assert!(
             logical_lines(guide("go"))
                 .iter()
-                .any(|c| has_cmd(c, "go get") && c.contains("@<commit>")),
+                .any(|c| has_cmd(c, "go get") && c.contains("@{{SDK_REF}}")),
             "go guide has no go get line"
         );
         assert!(
@@ -1055,6 +1153,10 @@ mod tests {
             "go get github.com/savvagent/otto-flags/packages/go-server@latest",
             "cargo add otto-flags",
             "cargo add otto-flags --git https://x/y",
+            "cargo add otto-flags --git https://x/y --rev abc123",
+            "pip install \"otto-flags @ git+https://x/y@main\"",
+            "git checkout main",
+            "git checkout 4c5afb7f5efabfbf32dad22e6252aa6f26e59a66",
             "otto-flags = \"0.1\"",
             "otto-flags = { version = \"0.1\" }",
             "otto-flags = { git = \"https://x/y\" }",
@@ -1062,12 +1164,13 @@ mod tests {
             assert!(!install_line_problems(bad).is_empty(), "{bad:?} passed");
         }
         for good in [
-            "pip install \"otto-flags @ git+https://x/y@<commit>\"",
+            "pip install \"otto-flags @ git+https://x/y@{{SDK_REF}}\"",
             "npm install \\\n  /p/otto-flags-sdk-*.tgz",
             "pnpm add ./otto-flags-sdk-1.tgz",
-            "go get github.com/savvagent/otto-flags/packages/go-server@<commit>",
-            "cargo add otto-flags --git https://x/y --rev <commit>",
-            "otto-flags = { git = \"https://x/y\", rev = \"<commit>\" }",
+            "go get github.com/savvagent/otto-flags/packages/go-server@{{SDK_REF}}",
+            "cargo add otto-flags --git https://x/y --rev {{SDK_REF}}",
+            "git checkout {{SDK_REF}}",
+            "otto-flags = { git = \"https://x/y\", rev = \"{{SDK_REF}}\" }",
         ] {
             assert!(install_line_problems(good).is_empty(), "{good:?} failed");
         }

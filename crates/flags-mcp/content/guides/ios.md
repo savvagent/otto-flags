@@ -10,20 +10,14 @@ id: the key identifies the app.
 
 The package is not installable by version from the repository yet, and Swift Package Manager cannot
 use a sub-directory of a git repository, so add it as a local package from a checkout, pinned to a
-full commit SHA of `savvagent/otto-flags`. Find the current tip of `main` with:
-
-```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`:
+full commit SHA of `savvagent/otto-flags`. Pin to `{{SDK_REF}}`, a commit on `main` of
+`savvagent/otto-flags` that the maintainers have reviewed. Use it exactly: do not substitute a
+branch, a newer commit, or a commit from a fork, and use the same commit everywhere in one project.
 
 ```bash
 git clone https://github.com/savvagent/otto-flags
 cd otto-flags
-git checkout <commit>
+git checkout {{SDK_REF}}
 ```
 
 The package is the directory `packages/ios-sdk` of that checkout. In Xcode choose File, Add
@@ -42,7 +36,7 @@ targets: [
 ]
 ```
 
-Keep the checkout at `<commit>` wherever your app is built (CI included), for example as a git
+Keep the checkout at `{{SDK_REF}}` wherever your app is built (CI included), for example as a git
 submodule pinned to that commit.
 
 ## Initialize

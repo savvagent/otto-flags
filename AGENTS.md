@@ -21,14 +21,11 @@ Pick the first route that works:
 
 ## Install from a pinned commit
 
-SDKs are installed from a commit of this repository, never from a floating branch. Wherever a
-guide says `<commit>`, put a full commit SHA there. Find one with:
-
-    git ls-remote https://github.com/savvagent/otto-flags main
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork.
-Use the same SHA everywhere in one project.
+SDKs are installed from a commit of this repository, never from a floating branch. The commit is
+`4c5afb7f5efabfbf32dad22e6252aa6f26e59a66`, a commit on `main` of `savvagent/otto-flags` that the
+maintainers have reviewed; `sdk_guide` pins its installs to the same commit. Use it exactly: do not
+substitute a branch, a newer commit, or a commit from a fork, and use the same commit everywhere in
+one project. Where a package README shows a placeholder commit, use this commit.
 
 On pnpm 9, a plain `pnpm install --frozen-lockfile` runs dependency install scripts on your machine
 (pnpm 10 and later skip them unless allowed). The JS guides add `--ignore-scripts`, which every

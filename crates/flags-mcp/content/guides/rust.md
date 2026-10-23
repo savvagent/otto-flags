@@ -10,27 +10,21 @@ drives auto-rollback by default. Rust 1.70 or later.
 ## Install
 
 The crate is not installable by name yet. Depend on it from git, pinned to a full commit SHA of
-`savvagent/otto-flags`. The crate lives in `packages/rust-server`; Cargo finds it by its name.
-Find the current tip of `main` with:
-
-```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`. In `Cargo.toml`:
+`savvagent/otto-flags`. The crate lives in `packages/rust-server`; Cargo finds it by its name. Pin
+to `{{SDK_REF}}`, a commit on `main` of `savvagent/otto-flags` that the maintainers have reviewed.
+Use it exactly: do not substitute a branch, a newer commit, or a commit from a fork, and use the
+same commit everywhere in one project. In `Cargo.toml`:
 
 ```toml
 [dependencies]
-otto-flags = { git = "https://github.com/savvagent/otto-flags", rev = "<commit>" }
+otto-flags = { git = "https://github.com/savvagent/otto-flags", rev = "{{SDK_REF}}" }
 tokio = { version = "1", features = ["full"] }
 ```
 
 or from the command line:
 
 ```bash
-cargo add otto-flags --git https://github.com/savvagent/otto-flags --rev <commit>
+cargo add otto-flags --git https://github.com/savvagent/otto-flags --rev {{SDK_REF}}
 ```
 
 Pin a `rev`, not a branch, so a build is reproducible. `Cargo.lock` then records the same commit.

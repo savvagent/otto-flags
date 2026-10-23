@@ -7,7 +7,7 @@ The server is at https://otto-flags.savvagent.com. Agents manage flags at `/mcp`
 ## Start here
 
 - Connect to https://otto-flags.savvagent.com/mcp, call `whoami` to see the organization and your scopes, then call `sdk_guide(language, app?)`. It starts with an integrate-end-to-end recipe (check access, pick the app, have a person store the server key, create the flag, wire the SDK, verify, turn it on, what is billed), then gives install, initialization and usage steps for that language, filled in with the app's id, name, environments and public client key. Without `app` it uses the organization's only app, or lists the apps to choose from.
-- Every SDK install is pinned to a commit of savvagent/otto-flags. Find one with `git ls-remote https://github.com/savvagent/otto-flags main` and use that SHA where a guide says `<commit>`. Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork.
+- Every SDK install is pinned to commit 4c5afb7f5efabfbf32dad22e6252aa6f26e59a66 of savvagent/otto-flags, a commit on `main` that the maintainers have reviewed; `sdk_guide` pins its installs to the same commit. Use it exactly: do not substitute a branch, a newer commit, or a commit from a fork.
 - [AGENTS.md](https://github.com/savvagent/otto-flags/blob/main/AGENTS.md): how an agent finds the right SDK in this repository.
 - [SDK developer guide](https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md): the REST wire contract every SDK implements.
 
@@ -64,7 +64,7 @@ Each language below is a `sdk_guide` name. The link is the package README.
 Install from source, pinned to a commit:
 
 ```bash
-pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server"
+pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@4c5afb7f5efabfbf32dad22e6252aa6f26e59a66#subdirectory=packages/python-server"
 ```
 
 ```python
