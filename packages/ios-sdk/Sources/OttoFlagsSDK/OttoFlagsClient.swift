@@ -107,6 +107,10 @@ public class OttoFlagsClient {
     /// not enough (savvagent/otto-flags#127). In memory only, bounded per flag.
     private var flagCache: [String: [String: CacheEntry]] = [:]
     private static let maxContextsPerFlag = 10_000
+    /// Bumped by every invalidation (guarded by `queue`), so an evaluate that was in flight when
+    /// its flag was invalidated does not store its stale result afterwards.
+    private var cacheEpoch = 0
+    private var cacheGenerations: [String: Int] = [:]
     private var configOverrides: [String: ConfigOverrideEntry] = [:]
     private var variationOverrides: [String: VariationOverrideEntry] = [:]
     private let session: URLSession
@@ -234,6 +238,9 @@ public class OttoFlagsClient {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: evaluateBody)
 
+        // Read before the request: an invalidation while it is in flight drops this result.
+        let generation = queue.sync { (cacheEpoch, cacheGenerations[flagKey, default: 0]) }
+
         let (data, response) = try await session.fetchData(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
@@ -253,6 +260,7 @@ public class OttoFlagsClient {
         if let contextKey {
             let entry = CacheEntry(value: enabled, configuration: configuration, variation: variation)
             queue.sync {
+                guard generation == (cacheEpoch, cacheGenerations[flagKey, default: 0]) else { return }
                 // Mutate in place: copying the inner dictionary out and back would copy up to
                 // maxContextsPerFlag entries on every miss.
                 if (flagCache[flagKey]?.count ?? 0) >= Self.maxContextsPerFlag
@@ -393,7 +401,7 @@ public class OttoFlagsClient {
         queue.sync {
             self.configOverrides[flagKey] = ConfigOverrideEntry(config: config, merge: merge, timestamp: Date())
             // Clear cache to force re-evaluation with override
-            self.flagCache.removeValue(forKey: flagKey)
+            self.invalidateCacheLocked(flagKey)
         }
     }
 
@@ -403,7 +411,7 @@ public class OttoFlagsClient {
         queue.sync {
             self.configOverrides.removeValue(forKey: flagKey)
             // Clear cache to get fresh API values
-            self.flagCache.removeValue(forKey: flagKey)
+            self.invalidateCacheLocked(flagKey)
         }
     }
 
@@ -416,7 +424,7 @@ public class OttoFlagsClient {
         queue.sync {
             self.variationOverrides[flagKey] = VariationOverrideEntry(variation: variation, timestamp: Date())
             // Clear cache to force re-evaluation with override
-            self.flagCache.removeValue(forKey: flagKey)
+            self.invalidateCacheLocked(flagKey)
         }
     }
 
@@ -426,7 +434,7 @@ public class OttoFlagsClient {
         queue.sync {
             self.variationOverrides.removeValue(forKey: flagKey)
             // Clear cache to get fresh API values
-            self.flagCache.removeValue(forKey: flagKey)
+            self.invalidateCacheLocked(flagKey)
         }
     }
 
@@ -476,11 +484,24 @@ public class OttoFlagsClient {
         queue.sync {
             self.configOverrides.removeAll()
             self.variationOverrides.removeAll()
-            self.flagCache.removeAll()
+            self.invalidateCacheLocked(nil)
         }
     }
 
     // MARK: - Private Methods
+
+    /// Drop a flag's cached results (every flag's when `flagKey` is nil) and bump its
+    /// generation. Call on `queue`.
+    private func invalidateCacheLocked(_ flagKey: String?) {
+        if let flagKey {
+            cacheGenerations[flagKey, default: 0] += 1
+            flagCache.removeValue(forKey: flagKey)
+        } else {
+            cacheEpoch += 1
+            cacheGenerations.removeAll()
+            flagCache.removeAll()
+        }
+    }
 
     private func startPolling() {
         guard config.pollingInterval > 0 else { return }
@@ -517,12 +538,10 @@ public class OttoFlagsClient {
                 return
             }
 
-            for flag in flags {
-                if let key = flag["key"] as? String {
-                    queue.async { [weak self] in
-                        self?.flagCache.removeValue(forKey: key)
-                    }
-                }
+            // Synchronously, so the generation is bumped before this poll returns.
+            let keys = flags.compactMap { $0["key"] as? String }
+            queue.sync {
+                for key in keys { invalidateCacheLocked(key) }
             }
         } catch {
             // Silently fail for polling

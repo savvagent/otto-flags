@@ -700,6 +700,36 @@ describe('FlagClient', () => {
       expect((client as any).cache.cache.size).toBe(0);
       client.close();
     });
+
+    it('an invalidation during the request drops its result (#137)', async () => {
+      const client = makeClient();
+      let n = 0;
+      fetchMock.mockImplementation(async () => {
+        n++;
+        const enabled = n === 1;
+        if (n === 1) client.invalidateCache('checkout'); // the kill switch flips mid-request
+        return { ok: true, json: async () => ({ key: 'checkout', enabled }) };
+      });
+      const first = await client.evaluate('checkout', { user_id: 'a' });
+      const second = await client.evaluate('checkout', { user_id: 'a' });
+      expect(first.value).toBe(true);
+      expect(second.reason).toBe('evaluated');
+      expect(second.value).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      client.close();
+    });
+
+    it('an invalidation of another flag does not drop the write (#137)', async () => {
+      const client = makeClient();
+      fetchMock.mockImplementation(async () => {
+        client.invalidateCache('other');
+        return { ok: true, json: async () => ({ key: 'checkout', enabled: true }) };
+      });
+      await client.evaluate('checkout', { user_id: 'a' });
+      const second = await client.evaluate('checkout', { user_id: 'a' });
+      expect(second.reason).toBe('cached');
+      client.close();
+    });
   });
 
   describe('result metadata (#124)', () => {

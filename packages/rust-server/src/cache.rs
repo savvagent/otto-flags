@@ -30,8 +30,24 @@ pub(crate) struct CacheEntry {
 #[derive(Clone)]
 pub(crate) struct Cache {
     entries: Arc<RwLock<HashMap<String, HashMap<String, CacheEntry>>>>,
+    /// Bumped by every invalidation, so a write from a request that started before it can be
+    /// dropped. Lock order: `entries` first, so a check-then-store and a bump-then-remove cannot
+    /// interleave.
+    generations: Arc<RwLock<Generations>>,
     ttl: Duration,
     max_contexts_per_flag: usize,
+}
+
+#[derive(Default)]
+struct Generations {
+    epoch: u64,
+    flags: HashMap<String, u64>,
+}
+
+impl Generations {
+    fn of(&self, flag_key: &str) -> (u64, u64) {
+        (self.epoch, self.flags.get(flag_key).copied().unwrap_or(0))
+    }
 }
 
 /// The cache key for a context: its JSON with every object's keys sorted, so two contexts that
@@ -66,6 +82,7 @@ impl Cache {
     fn with_max_contexts_per_flag(ttl: Duration, max_contexts_per_flag: usize) -> Self {
         Self {
             entries: Arc::new(RwLock::new(HashMap::new())),
+            generations: Arc::new(RwLock::new(Generations::default())),
             ttl,
             max_contexts_per_flag,
         }
@@ -83,7 +100,51 @@ impl Cache {
         Some(entry.clone())
     }
 
-    /// Cache the result for this flag and context.
+    /// The flag's invalidation generation. Read it before sending the evaluate request and pass
+    /// it to `set`, which drops the write if the flag was invalidated since (#137).
+    pub fn generation(&self, flag_key: &str) -> (u64, u64) {
+        self.generations
+            .read()
+            .map(|g| g.of(flag_key))
+            .unwrap_or_default()
+    }
+
+    /// Cache the result for this flag and context, unless the flag was invalidated after
+    /// `generation` was read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_at(
+        &self,
+        generation: (u64, u64),
+        flag_key: &str,
+        context_key: String,
+        value: bool,
+        configuration: Option<serde_json::Value>,
+        variation: Option<String>,
+        metadata: Option<Metadata>,
+    ) {
+        if let Ok(mut entries) = self.entries.write() {
+            let current = self
+                .generations
+                .read()
+                .map(|g| g.of(flag_key))
+                .unwrap_or_default();
+            if current != generation {
+                return;
+            }
+            self.store(
+                &mut entries,
+                flag_key,
+                context_key,
+                value,
+                configuration,
+                variation,
+                metadata,
+            );
+        }
+    }
+
+    /// Cache the result for this flag and context, whatever the flag's generation.
+    #[cfg(test)]
     pub fn set(
         &self,
         flag_key: &str,
@@ -94,6 +155,30 @@ impl Cache {
         metadata: Option<Metadata>,
     ) {
         if let Ok(mut entries) = self.entries.write() {
+            self.store(
+                &mut entries,
+                flag_key,
+                context_key,
+                value,
+                configuration,
+                variation,
+                metadata,
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn store(
+        &self,
+        entries: &mut HashMap<String, HashMap<String, CacheEntry>>,
+        flag_key: &str,
+        context_key: String,
+        value: bool,
+        configuration: Option<serde_json::Value>,
+        variation: Option<String>,
+        metadata: Option<Metadata>,
+    ) {
+        {
             let contexts = entries.entry(flag_key.to_string()).or_default();
             if contexts.len() >= self.max_contexts_per_flag && !contexts.contains_key(&context_key)
             {
@@ -119,6 +204,15 @@ impl Cache {
     /// Invalidate one flag, for every context, or with `None` every flag
     pub fn invalidate(&self, flag_key: Option<&str>) {
         if let Ok(mut entries) = self.entries.write() {
+            if let Ok(mut generations) = self.generations.write() {
+                match flag_key {
+                    Some(k) => *generations.flags.entry(k.to_string()).or_insert(0) += 1,
+                    None => {
+                        generations.epoch += 1;
+                        generations.flags.clear();
+                    }
+                }
+            }
             if let Some(k) = flag_key {
                 entries.remove(k);
             } else {

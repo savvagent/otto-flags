@@ -201,6 +201,38 @@ describe('FlagClient', () => {
       expect(evalCalls()).toHaveLength(1);
     });
 
+    test('an invalidation during the request drops its result (#137)', async () => {
+      const client = makeClient();
+      let n = 0;
+      fetchMock.mockImplementation(async () => {
+        n++;
+        const enabled = n === 1;
+        // The kill switch flips mid-request (a stream message invalidates the flag).
+        if (n === 1) (client as any).cache.invalidate('checkout');
+        return { ok: true, status: 200, json: async () => ({ key: 'checkout', enabled }) };
+      });
+      const first = await client.evaluate('checkout', { user_id: 'a' });
+      const second = await client.evaluate('checkout', { user_id: 'a' });
+      expect(first.value).toBe(true);
+      expect(second.reason).toBe('evaluated');
+      expect(second.value).toBe(false);
+      expect(evalCalls()).toHaveLength(2);
+    });
+
+    test('clearCache during the request drops its result (#137)', async () => {
+      const client = makeClient();
+      let n = 0;
+      fetchMock.mockImplementation(async () => {
+        n++;
+        if (n === 1) client.clearCache();
+        return { ok: true, status: 200, json: async () => ({ key: 'checkout', enabled: n === 1 }) };
+      });
+      await client.evaluate('checkout', { user_id: 'a' });
+      const second = await client.evaluate('checkout', { user_id: 'a' });
+      expect(second.reason).toBe('evaluated');
+      expect(second.value).toBe(false);
+    });
+
     test('clearCache makes every context re-request', async () => {
       const client = makeClient();
       await client.evaluate('checkout', { user_id: 'a' });

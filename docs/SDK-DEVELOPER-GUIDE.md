@@ -531,6 +531,11 @@ The [list](#list-all-flags-for-local-overrides) response's `enabled` is the flag
 environment, not any context's result (a flag at a 10 % rollout lists as `enabled: true`), so it
 must not fill the evaluation cache.
 
+Keep a generation counter per flag that every invalidation (stream message, poll, override
+setter, manual invalidate) bumps. Read it before sending an evaluate request and drop the cache
+write if it changed while the request was in flight: that result predates the invalidation, and
+caching it would undo a kill switch for that context (#137).
+
 ### Offline Support
 
 For mobile/desktop apps:

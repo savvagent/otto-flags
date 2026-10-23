@@ -33,7 +33,28 @@ class FlagCache:
         self._cache: dict[str, dict[str, CacheEntry]] = {}
         self._ttl = ttl
         self._max_contexts_per_flag = MAX_CONTEXTS_PER_FLAG
+        # Bumped by every invalidation so a write from a request that started
+        # before it can be dropped (see generation()).
+        self._epoch = 0
+        self._generations: dict[str, int] = {}
         self._lock = threading.RLock()
+
+    def _generation(self, key: str) -> tuple[int, int]:
+        return (self._epoch, self._generations.get(key, 0))
+
+    def _bump(self, key: str | None) -> None:
+        if key:
+            self._generations[key] = self._generations.get(key, 0) + 1
+        else:
+            self._epoch += 1
+            self._generations.clear()
+
+    def generation(self, key: str) -> tuple[int, int]:
+        """
+        Read the flag's invalidation generation. Pass it to set() so a result
+        fetched before an invalidation is not cached after it.
+        """
+        return self._generation(key)
 
     def get(self, key: str, *, context_key: str = "") -> bool | None:
         """
@@ -88,6 +109,7 @@ class FlagCache:
         version: int | None = None,
         scope: str | None = None,
         context_key: str = "",
+        generation: tuple[int, int] | None = None,
     ) -> None:
         """
         Set a flag value in cache.
@@ -101,8 +123,12 @@ class FlagCache:
             version: Optional flag version that produced the value.
             scope: Optional flag scope (``"application"`` or ``"enterprise"``).
             context_key: Canonical key of the evaluation context.
+            generation: The value of generation(key) read before the request
+                started; the write is dropped if the flag was invalidated since.
         """
         with self._lock:
+            if generation is not None and generation != self._generation(key):
+                return
             contexts = self._cache.setdefault(key, {})
             if len(contexts) >= self._max_contexts_per_flag and context_key not in contexts:
                 # At the bound: drop expired entries, and if still more than
@@ -130,6 +156,7 @@ class FlagCache:
             key: The flag key to invalidate. If None, invalidates all flags.
         """
         with self._lock:
+            self._bump(key)
             if key:
                 self._cache.pop(key, None)
             else:
@@ -184,7 +211,28 @@ class AsyncFlagCache:
         self._cache: dict[str, dict[str, CacheEntry]] = {}
         self._ttl = ttl
         self._max_contexts_per_flag = MAX_CONTEXTS_PER_FLAG
+        # Bumped by every invalidation so a write from a request that started
+        # before it can be dropped (see generation()).
+        self._epoch = 0
+        self._generations: dict[str, int] = {}
         self._lock = asyncio.Lock()
+
+    def _generation(self, key: str) -> tuple[int, int]:
+        return (self._epoch, self._generations.get(key, 0))
+
+    def _bump(self, key: str | None) -> None:
+        if key:
+            self._generations[key] = self._generations.get(key, 0) + 1
+        else:
+            self._epoch += 1
+            self._generations.clear()
+
+    def generation(self, key: str) -> tuple[int, int]:
+        """
+        Read the flag's invalidation generation. Pass it to set() so a result
+        fetched before an invalidation is not cached after it.
+        """
+        return self._generation(key)
 
     async def get(self, key: str, *, context_key: str = "") -> bool | None:
         """
@@ -239,6 +287,7 @@ class AsyncFlagCache:
         version: int | None = None,
         scope: str | None = None,
         context_key: str = "",
+        generation: tuple[int, int] | None = None,
     ) -> None:
         """
         Set a flag value in cache.
@@ -252,8 +301,12 @@ class AsyncFlagCache:
             version: Optional flag version that produced the value.
             scope: Optional flag scope (``"application"`` or ``"enterprise"``).
             context_key: Canonical key of the evaluation context.
+            generation: The value of generation(key) read before the request
+                started; the write is dropped if the flag was invalidated since.
         """
         async with self._lock:
+            if generation is not None and generation != self._generation(key):
+                return
             contexts = self._cache.setdefault(key, {})
             if len(contexts) >= self._max_contexts_per_flag and context_key not in contexts:
                 # At the bound: drop expired entries, and if still more than
@@ -281,10 +334,15 @@ class AsyncFlagCache:
             key: The flag key to invalidate. If None, invalidates all flags.
         """
         async with self._lock:
+            self._bump(key)
             if key:
                 self._cache.pop(key, None)
             else:
                 self._cache.clear()
+
+    def mark_invalidated(self, key: str | None = None) -> None:
+        """Bump the generation synchronously (for callbacks that cannot await)."""
+        self._bump(key)
 
     async def clear(self) -> None:
         """Clear all cached values."""
