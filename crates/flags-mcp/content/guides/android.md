@@ -81,7 +81,8 @@ which also reads the server's flag-change stream on a background coroutine and d
 flag's cached results within about a round trip. It is off by default because a held connection
 costs battery and radio wake-ups. The stream never delays or fails a lookup; polling remains the
 fallback while it is down. It runs while the client is open, so call `close()` when the app goes to
-the background if you do not want the connection held.
+the background if you do not want the connection held. `close()` also stops polling, so drop the
+closed client and create a new one when the app returns.
 
 **Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
 configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
@@ -149,10 +150,17 @@ class CheckoutViewModel(private val client: OttoFlagsClient) : ViewModel() {
 - Lookups return a `Result`, so a network or server failure arrives as `onFailure`; use
   `getOrDefault`, or `getVariation`, which falls back to the default you pass.
 - Results are cached in memory per flag and per user context, so one user's result is never served
-  to another. The cache has no expiry and this SDK does not refresh it from the server, so a flag
-  changed afterwards (including a kill switch or rollback) reaches a running app only after it
-  restarts or the user context changes. `client.flagUpdates` is a `StateFlow` of the latest value of
-  each flag the app has evaluated.
+  to another. The cache has no expiry; the SDK polls the flag list every `pollingInterval` and
+  drops the cached results of the flags it lists, so a flag changed afterwards (including a kill
+  switch or rollback) is typically returned by the next lookup after the poll, within about one
+  polling interval, or within about a round trip with `enableRealtime` on (see Real-time updates).
+  That holds while the device is online and the app is running. A failed poll is not retried until
+  the next one. An archived or deleted flag drops out of the list, so its cached result is kept
+  until restart: turn a flag off with `set_flag_environment` rather than archiving it when you
+  need a kill switch.
+  `client.flagUpdates` is a `StateFlow` of the latest value of each flag the app has evaluated; it
+  updates only when a lookup fetches from the server, so a poll or stream event does not publish
+  into it: evaluate the flag again to pick up a change.
 - Flag evaluations are not counted by this SDK and `track(eventName, userContext, properties)` posts
   to an endpoint the server does not serve, so `flag_health` and auto-rollback get no data from it.
 - Create flags before code references them: an unknown flag key is answered with 404, which the SDK reports as a failed lookup.
