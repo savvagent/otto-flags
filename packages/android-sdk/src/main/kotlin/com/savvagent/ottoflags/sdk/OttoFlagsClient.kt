@@ -127,6 +127,8 @@ class OttoFlagsClient internal constructor(
             if (config.enableLogging) {
                 addInterceptor(okhttp3.logging.HttpLoggingInterceptor().apply {
                     level = okhttp3.logging.HttpLoggingInterceptor.Level.BODY
+                    // The bearer key must not reach logcat.
+                    redactHeader("Authorization")
                 })
             }
         }

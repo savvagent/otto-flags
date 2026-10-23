@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
@@ -15,6 +16,8 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -267,6 +270,7 @@ class OttoFlagsClientRealtimeTest {
         assertEquals("/prefix/api/flags/stream", request.path)
         assertEquals("Bearer sdk_test-key", request.getHeader("Authorization"))
         assertEquals("text/event-stream", request.getHeader("Accept"))
+        assertEquals("identity", request.getHeader("Accept-Encoding"))
         assertNull(request.requestUrl?.query)
     }
 
@@ -375,6 +379,101 @@ class OttoFlagsClientRealtimeTest {
             scope.cancel()
         }
         assertEquals(listOf("boom", "overflow", "after"), seen.toList())
+    }
+
+    @Test
+    fun testCloseCancelsTheOpenConnection() {
+        // A raw socket server that answers the stream request with headers and then holds the
+        // body, so only a cancelled call can end the connection before the read timeout.
+        ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1")).use { raw ->
+            val accepted = java.util.concurrent.CountDownLatch(1)
+            val closedByClient = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val serverThread = Thread {
+                try {
+                    raw.accept().use { socket ->
+                        val input = socket.getInputStream()
+                        // Read the request head.
+                        val head = StringBuilder()
+                        while (!head.endsWith("\r\n\r\n")) {
+                            val b = input.read()
+                            if (b < 0) return@Thread
+                            head.append(b.toChar())
+                        }
+                        socket.getOutputStream().apply {
+                            write(
+                                ("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" +
+                                    "Transfer-Encoding: chunked\r\n\r\n").toByteArray()
+                            )
+                            flush()
+                        }
+                        accepted.countDown()
+                        socket.soTimeout = 5_000
+                        val started = System.nanoTime()
+                        try {
+                            val r = input.read()
+                            closedByClient.set(
+                                if (r == -1) "eof after ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} ms"
+                                else "unexpected byte $r"
+                            )
+                        } catch (e: SocketTimeoutException) {
+                            closedByClient.set(null)
+                        } catch (e: java.io.IOException) {
+                            // A reset is also the client dropping the connection.
+                            closedByClient.set("reset after ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} ms")
+                        }
+                    }
+                } catch (e: java.io.IOException) {
+                    // test teardown
+                }
+            }.apply { isDaemon = true; start() }
+
+            val client = client(apiUrl = "http://127.0.0.1:${raw.localPort}")
+            assertTrue("the stream connected", accepted.await(5, TimeUnit.SECONDS))
+            // Let the client settle into the blocked body read.
+            Thread.sleep(100)
+
+            val closeStarted = System.nanoTime()
+            client.close()
+            serverThread.join(1_000)
+            val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStarted)
+
+            assertNotNull("the client socket stayed open after close() (${elapsed} ms)", closedByClient.get())
+            assertTrue("closed after $elapsed ms", elapsed < 1_500)
+        }
+    }
+
+    @Test
+    fun testTheStreamClientRunsNoInterceptorsOfTheBaseClient() {
+        val applicationSeen = AtomicInteger()
+        val networkSeen = AtomicInteger()
+        val base = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain -> applicationSeen.incrementAndGet(); chain.proceed(chain.request()) })
+            .addNetworkInterceptor(Interceptor { chain -> networkSeen.incrementAndGet(); chain.proceed(chain.request()) })
+            .build()
+        streamFallback = MockResponse().setResponseCode(503)
+
+        // Control: the base client does run its interceptors.
+        base.newCall(okhttp3.Request.Builder().url(server.url("/control")).build()).execute().close()
+        assertEquals(1, applicationSeen.get())
+        assertEquals(1, networkSeen.get())
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            RealtimeStream(
+                url = RealtimeStream.streamUrl(apiUrl())!!,
+                sdkKey = "sdk_test-key",
+                baseClient = base,
+                invalidate = {},
+                logError = { _, _ -> },
+                timings = timings,
+            ).start(scope)
+            waitFor("stream retries") { streamRequests.size >= 2 }
+        } finally {
+            scope.cancel()
+        }
+
+        assertEquals(1, applicationSeen.get())
+        assertEquals(1, networkSeen.get())
     }
 
     // --- pure functions ---
