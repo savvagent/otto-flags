@@ -11,7 +11,7 @@ import org.junit.Assert.*
  * Flag keys are interpolated into the request URL, so a key outside the server's rule
  * must be rejected before any request (and the SDK key) leaves the device (#107).
  *
- * Logging is off on purpose: android.util.Log is a stub in local unit tests.
+ * Logging is off on purpose: nothing here needs the log output.
  */
 class OttoFlagsClientFlagKeyTest {
 
@@ -67,9 +67,8 @@ class OttoFlagsClientFlagKeyTest {
         assertFalse(OttoFlagsClient.isValidFlagKey("\u0661"))
     }
 
-    // On a plain JVM this cannot tell the fix from no fix: without the guard, the request
-    // body hits the org.json stub and getVariation falls back to the default anyway.
-    // keyRuleBoundaries and the evaluate test carry the regression check.
+    // Without the guard a request would reach the mock server, so the request count is what
+    // tells the fix from no fix here.
     @Test
     fun getVariationReturnsDefaultForInvalidKeysWithoutARequest() = runTest {
         val context = UserContext(userId = "user-123")
@@ -90,8 +89,7 @@ class OttoFlagsClientFlagKeyTest {
         assertFalse(message, message.contains('\u0000'))
     }
 
-    // Checked on the URL builder directly: a network round trip would build its body
-    // with org.json, which is a stub in local JVM unit tests.
+    // Checked on the URL builder directly: the path is all this test is about.
     @Test
     fun validKeyUsesTheDocumentedEvaluatePath() {
         assertEquals(
