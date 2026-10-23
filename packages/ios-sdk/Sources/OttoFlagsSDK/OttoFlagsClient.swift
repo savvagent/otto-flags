@@ -13,6 +13,17 @@ public struct OttoFlagsConfig {
     /// (savvagent/otto-flags#125); kept so existing callers still compile.
     let enableWebSocket: Bool
     let timeout: TimeInterval
+    /// Whether the client holds open the server's flag-change stream (`GET /api/flags/stream`),
+    /// which drops a cached evaluation as soon as its flag changes, so a kill switch reaches the
+    /// app in about a round trip instead of at the next poll.
+    ///
+    /// Off by default: a held connection costs battery, radio wake-ups and a server connection
+    /// per install, and polling already bounds staleness to `pollingInterval`. Turn it on when
+    /// flag changes must land fast. Polling keeps running either way, as the fallback while the
+    /// stream is down and to repair any event it missed. The stream has no lifecycle
+    /// integration: call `OttoFlagsClient.close()` when the app moves to the background (and
+    /// create a new client on return) so it does not hold a connection there.
+    let enableRealtime: Bool
 
     public init(
         apiUrl: String = "https://otto-flags.savvagent.com",
@@ -20,7 +31,8 @@ public struct OttoFlagsConfig {
         environment: String = "production",
         pollingInterval: TimeInterval = 60,
         enableWebSocket: Bool = true,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        enableRealtime: Bool = false
     ) {
         self.apiUrl = apiUrl
         self.sdkKey = sdkKey
@@ -28,6 +40,7 @@ public struct OttoFlagsConfig {
         self.pollingInterval = pollingInterval
         self.enableWebSocket = enableWebSocket
         self.timeout = timeout
+        self.enableRealtime = enableRealtime
     }
 }
 
@@ -115,6 +128,9 @@ public class OttoFlagsClient {
     private var variationOverrides: [String: VariationOverrideEntry] = [:]
     private let session: URLSession
     private let queue = DispatchQueue(label: "com.savvagent.ottoflags.sdk", qos: .utility)
+    /// The flag-change stream when `config.enableRealtime` (guarded by `queue`); `close()`
+    /// stops it and clears this.
+    private var stream: RealtimeStream?
 
     private func configOverride(for flagKey: String) -> ConfigOverrideEntry? {
         queue.sync { configOverrides[flagKey] }
@@ -131,11 +147,47 @@ public class OttoFlagsClient {
     }
 
     /// Initialize the client with a caller-supplied URLSession (tests inject a mock protocol here)
-    internal init(config: OttoFlagsConfig, session: URLSession) {
+    internal convenience init(config: OttoFlagsConfig, session: URLSession) {
+        self.init(
+            config: config,
+            session: session,
+            realtimeTimings: .standard,
+            streamSessionFactory: RealtimeStream.defaultSessionFactory
+        )
+    }
+
+    /// Initialize the client with the stream's timings and session factory too (tests pass
+    /// millisecond timings and a factory that adds a stub protocol).
+    internal init(
+        config: OttoFlagsConfig,
+        session: URLSession,
+        realtimeTimings: RealtimeTimings,
+        streamSessionFactory: @escaping RealtimeStream.SessionFactory
+    ) {
         self.config = config
         self.session = session
 
         startPolling()
+
+        // An apiUrl that is not an http(s) URL starts no stream; lookups fail on their own.
+        if config.enableRealtime, let url = RealtimeStream.streamURL(apiUrl: config.apiUrl) {
+            let stream = RealtimeStream(
+                url: url,
+                sdkKey: config.sdkKey,
+                timings: realtimeTimings,
+                sessionFactory: streamSessionFactory,
+                invalidate: { [weak self] flagKey in
+                    self?.invalidateFromStream(flagKey)
+                }
+            )
+            queue.sync { self.stream = stream }
+            stream.start()
+        }
+    }
+
+    deinit {
+        // Not through `queue`: the last reference can be dropped on it (the polling closure).
+        stream?.stop()
     }
 
     /// Whether `key` is a flag key the SDK will put in a URL.
@@ -146,7 +198,7 @@ public class OttoFlagsClient {
     /// endpoint, and `.` and `..` cannot be carried in a URL path at all because clients
     /// normalize them away (savvagent/otto-flags#107). Checked on UTF-8 bytes, so
     /// Unicode-wide character classes cannot slip through. Whole-string match, no trimming.
-    private static func isValidFlagKey(_ key: String) -> Bool {
+    static func isValidFlagKey(_ key: String) -> Bool {
         let bytes = key.utf8
         guard (1...128).contains(bytes.count) else { return false }
         if key == "." || key == ".." { return false }
@@ -387,8 +439,18 @@ public class OttoFlagsClient {
         // Implementation for flushing pending events
     }
 
-    /// Close the client and cleanup resources
+    /// Close the client and cleanup resources.
+    ///
+    /// Stops the flag-change stream (`enableRealtime`): its connection is cancelled and it does
+    /// not reconnect. Idempotent. Lookups keep working afterwards. Polling is not stopped: it runs
+    /// until the client is released, so drop your reference to a closed client.
     public func close() {
+        let stream: RealtimeStream? = queue.sync {
+            let current = self.stream
+            self.stream = nil
+            return current
+        }
+        stream?.stop()
     }
 
     /// Set a configuration override for a flag
@@ -489,6 +551,17 @@ public class OttoFlagsClient {
     }
 
     // MARK: - Private Methods
+
+    /// Whether any evaluation of `flagKey` is cached (for tests).
+    func isCached(flagKey: String) -> Bool {
+        queue.sync { !(flagCache[flagKey]?.isEmpty ?? true) }
+    }
+
+    /// The stream's invalidation: the same generation bump the poll does, so an evaluation in
+    /// flight when the event arrived is not cached either. Called on the stream's delegate queue.
+    private func invalidateFromStream(_ flagKey: String?) {
+        queue.sync { invalidateCacheLocked(flagKey) }
+    }
 
     /// Drop a flag's cached results (every flag's when `flagKey` is nil) and bump its
     /// generation. Call on `queue`.
