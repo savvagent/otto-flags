@@ -35,6 +35,12 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions {
+        // The android.jar on the local-unit-test classpath is a stub whose methods throw
+        // "not mocked". The client calls android.util.Log, so return defaults instead (#113).
+        unitTests.isReturnDefaultValues = true
+    }
+
     publishing {
         singleVariant("release") {
             withSourcesJar()
@@ -62,6 +68,9 @@ dependencies {
 
     // Testing
     testImplementation("junit:junit:4.13.2")
+    // The client builds and parses bodies with org.json, which android.jar only stubs on the
+    // plain JVM. This is the real implementation, so local unit tests can run them (#113).
+    testImplementation("org.json:json:20231013")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
     testImplementation("io.mockk:mockk:1.13.8")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
