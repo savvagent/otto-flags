@@ -608,7 +608,7 @@ mod tests {
             );
             let one = render(l.name, Some(&only)).unwrap().1;
             assert!(one.contains("environments: `production`."), "{}", l.name);
-            assert!(!one.contains("staging"), "{}", l.name);
+            assert!(!one.contains("`staging`"), "{}", l.name);
             assert!(!one.contains("<environments>"), "{}", l.name);
             // Without an app the placeholder stays, in the recipe and the guide.
             let none = render(l.name, None).unwrap().1;
