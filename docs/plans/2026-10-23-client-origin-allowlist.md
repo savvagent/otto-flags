@@ -8,5 +8,5 @@ Spec: `docs/specs/2026-10-23-client-origin-allowlist-design.md`.
 - [x] MCP `update_app`: optional `environments` and `allowedOrigins`; tool descriptions; `llms.txt` (both copies).
 - [x] Tests: normalization and matching units; db (default, set, idempotent, refused input, clear); e2e (allowed, other origin, no `Origin`, server key, clear, admin only, bad input, environments keep origins).
 - [x] Docs: `CLAUDE.md` client-keys invariant and security focus, `docs/deploy/fly.md`, `docs/SDK-DEVELOPER-GUIDE.md`.
-- [ ] Gates: test, clippy, fmt, migrations-append-only, `podman build`.
-- [ ] Final commit: spec `**Status:**` becomes `IMPLEMENTED (#<PR>)`; tick these boxes.
+- [x] Gates: test, clippy, fmt, migrations-append-only, `podman build`.
+- [x] Final commit: spec `**Status:**` becomes `IMPLEMENTED (#<PR>)`; tick these boxes.

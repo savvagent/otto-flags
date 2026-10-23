@@ -1,6 +1,6 @@
 # Let an app limit its public client key to its own websites
 
-**Status:** IN PROGRESS
+**Status:** IMPLEMENTED (#188)
 **Ticket:** savvagent/otto-flags#143 (PR 2 of 2; PR 1, #187, added the hourly ceiling)
 
 ## Brief
