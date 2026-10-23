@@ -718,12 +718,7 @@ mod tests {
     #[test]
     fn agents_md_points_agents_at_the_guide() {
         let text = std::fs::read_to_string(repo("AGENTS.md")).expect("AGENTS.md exists");
-        for needle in [
-            "llms.txt",
-            "sdk_guide",
-            "docs/SDK-DEVELOPER-GUIDE.md",
-            "<commit>",
-        ] {
+        for needle in ["llms.txt", "sdk_guide", "docs/SDK-DEVELOPER-GUIDE.md"] {
             assert!(text.contains(needle), "AGENTS.md should mention {needle}");
         }
         let lower = text.to_lowercase();
@@ -731,6 +726,25 @@ mod tests {
             assert!(!lower.contains(w), "AGENTS.md mentions {w:?}");
         }
         assert!(!lower.contains("srv_"), "AGENTS.md mentions srv_");
+    }
+
+    #[test]
+    fn agents_md_and_llms_txt_pin_the_sdk_ref() {
+        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
+        for (what, text) in [
+            ("AGENTS.md", agents.as_str()),
+            ("llms.txt", crate::LLMS_TXT),
+        ] {
+            assert!(
+                text.contains(SDK_REF),
+                "{what} must carry SDK_REF {SDK_REF}; bump it with the constant"
+            );
+            assert!(!text.contains("<commit>"), "{what}: <commit> left");
+            let text = flat(text);
+            for gone in ["review and approve the SHA", "git ls-remote"] {
+                assert!(!text.contains(gone), "{what}: still says {gone:?}");
+            }
+        }
     }
 
     /// (language, manifest path from the repo root, identifier the manifest must declare,
@@ -1029,7 +1043,7 @@ mod tests {
                 problems.push(format!("pnpm/yarn add without a local path: {line}"));
             }
             if has_cmd(&line, "go get") && !line.contains("@{{SDK_REF}}") {
-                problems.push(format!("go get without @{{SDK_REF}}: {line}"));
+                problems.push(format!("go get without the SDK ref: {line}"));
             }
             if has_cmd(&line, "cargo add") && !(line.contains("--git") && line.contains("--rev")) {
                 problems.push(format!("cargo add without --git and --rev: {line}"));
