@@ -347,6 +347,68 @@ mod tests {
         }
     }
 
+    /// The sentence #156 requires wherever an agent is told to pick a commit SHA, so a person
+    /// checks what gets pinned instead of whatever `main` happens to be.
+    const REVIEW_SHA: &str = "Ask a person to review and approve the SHA before you pin it, \
+        or use the SHA of a commit they have already checked. It must be a commit on `main` of \
+        `savvagent/otto-flags`, not one from a fork.";
+
+    /// Markdown wraps lines, so compare on single-spaced text.
+    fn flat(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn every_guide_tells_the_agent_to_have_the_sha_reviewed() {
+        for l in LANGUAGES {
+            assert!(
+                flat(l.md).contains(REVIEW_SHA),
+                "{}: no review-the-SHA sentence",
+                l.name
+            );
+        }
+    }
+
+    #[test]
+    fn agents_md_and_llms_txt_tell_the_agent_to_have_the_sha_reviewed() {
+        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
+        assert!(flat(&agents).contains(REVIEW_SHA), "AGENTS.md");
+        assert!(flat(crate::LLMS_TXT).contains(REVIEW_SHA), "llms.txt");
+    }
+
+    /// The JS guides build from a fresh clone with pnpm, whose install runs dependency install
+    /// scripts on versions before 10. They say so and skip the scripts, which each package builds
+    /// without (checked per package when this was added, #156). Every line that runs
+    /// `pnpm install` must carry the flag, so a second, bare one cannot slip in.
+    #[test]
+    fn js_guides_skip_dependency_install_scripts_and_say_why() {
+        let mut js = 0;
+        for l in LANGUAGES {
+            let installs: Vec<&str> =
+                l.md.lines()
+                    .filter(|line| line.trim_start().starts_with("pnpm install"))
+                    .collect();
+            if installs.is_empty() {
+                continue;
+            }
+            js += 1;
+            for line in installs {
+                assert!(
+                    line.contains("--ignore-scripts"),
+                    "{}: {line:?} runs dependency install scripts",
+                    l.name
+                );
+            }
+            assert!(
+                flat(l.md).contains("runs the install scripts of this repository's dependencies"),
+                "{}: does not say what an install runs",
+                l.name
+            );
+        }
+        // The eleven pnpm-built guides; raise this when a guide joins them.
+        assert_eq!(js, 11, "the set of pnpm-built guides changed");
+    }
+
     /// Words that would claim or imply a package is available from a registry.
     // Not "publish": Gradle's `publishToMavenLocal` task name is a legitimate local-install command.
     const FORBIDDEN: &[&str] = &[

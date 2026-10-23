@@ -7,7 +7,7 @@ The server is at https://otto-flags.savvagent.com. Agents manage flags at `/mcp`
 ## Start here
 
 - Connect to https://otto-flags.savvagent.com/mcp, call `whoami` to see the organization and your scopes, then call `sdk_guide(language, app?)`. It returns install, initialization and usage steps for that language, filled in with the app's id, name and public client key when `app` is given.
-- Every SDK install is pinned to a commit of savvagent/otto-flags. Find one with `git ls-remote https://github.com/savvagent/otto-flags main` and use that SHA where a guide says `<commit>`.
+- Every SDK install is pinned to a commit of savvagent/otto-flags. Find one with `git ls-remote https://github.com/savvagent/otto-flags main` and use that SHA where a guide says `<commit>`. Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork.
 - [AGENTS.md](https://github.com/savvagent/otto-flags/blob/main/AGENTS.md): how an agent finds the right SDK in this repository.
 - [SDK developer guide](https://github.com/savvagent/otto-flags/blob/main/docs/SDK-DEVELOPER-GUIDE.md): the REST wire contract every SDK implements.
 
