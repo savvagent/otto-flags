@@ -9,22 +9,16 @@ or later and Kotlin 1.9 or later. The client names no application id: the key id
 ## Install
 
 The artifact is not installable by name yet. Build it from source at a full commit SHA of
-`savvagent/otto-flags` into your local Maven repository (`~/.m2`). Find the current tip of `main`
-with:
-
-```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`. You need `git`, a JDK 17, the Android SDK and Gradle 8 or
-later; the repository has no Gradle wrapper, so use your own `gradle`:
+`savvagent/otto-flags` into your local Maven repository (`~/.m2`). Pin to `{{SDK_REF}}`, a commit on
+`main` of `savvagent/otto-flags` that the maintainers have reviewed. Use it exactly: do not
+substitute a branch, a newer commit, or a commit from a fork, and use the same commit everywhere in
+one project. You need `git`, a JDK 17, the Android SDK and Gradle 8 or later; the repository has no
+Gradle wrapper, so use your own `gradle`:
 
 ```bash
 git clone https://github.com/savvagent/otto-flags
 cd otto-flags
-git checkout <commit>
+git checkout {{SDK_REF}}
 cd packages/android-sdk
 gradle publishToMavenLocal
 ```
@@ -49,7 +43,7 @@ dependencies {
 ```
 
 Every machine that builds your app (CI included) needs the same install step at the same commit.
-The version number is not unique per commit, so keep `<commit>` recorded in your build
+The version number is not unique per commit, so keep `{{SDK_REF}}` recorded in your build
 documentation.
 
 ## Initialize

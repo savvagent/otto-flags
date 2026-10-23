@@ -9,26 +9,20 @@ the import name is `otto_flags`. Python 3.9 or later.
 
 ## Install
 
-Install from source, pinned to a full commit SHA of `savvagent/otto-flags`. Find the current tip
-of `main` with:
+Install from source, pinned to a full commit SHA of `savvagent/otto-flags`. Pin to `{{SDK_REF}}`, a
+commit on `main` of `savvagent/otto-flags` that the maintainers have reviewed. Use it exactly: do
+not substitute a branch, a newer commit, or a commit from a fork, and use the same commit everywhere
+in one project.
 
 ```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`:
-
-```bash
-pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server"
+pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@{{SDK_REF}}#subdirectory=packages/python-server"
 ```
 
 or as a dependency in `pyproject.toml`:
 
 ```toml
 dependencies = [
-    "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server",
+    "otto-flags @ git+https://github.com/savvagent/otto-flags@{{SDK_REF}}#subdirectory=packages/python-server",
 ]
 ```
 

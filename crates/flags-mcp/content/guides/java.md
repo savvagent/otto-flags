@@ -9,21 +9,15 @@ Java 11 or later.
 ## Install
 
 The artifact is not installable by name yet. Build it from source at a full commit SHA of
-`savvagent/otto-flags` into your local Maven repository (`~/.m2`). Find the current tip of `main`
-with:
-
-```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`. You need `git`, a JDK and Maven:
+`savvagent/otto-flags` into your local Maven repository (`~/.m2`). Pin to `{{SDK_REF}}`, a commit on
+`main` of `savvagent/otto-flags` that the maintainers have reviewed. Use it exactly: do not
+substitute a branch, a newer commit, or a commit from a fork, and use the same commit everywhere in
+one project. You need `git`, a JDK and Maven:
 
 ```bash
 git clone https://github.com/savvagent/otto-flags
 cd otto-flags
-git checkout <commit>
+git checkout {{SDK_REF}}
 cd packages/java-server
 mvn -B install -DskipTests -Dmaven.javadoc.skip=true
 ```
@@ -53,7 +47,7 @@ dependencies {
 ```
 
 Every machine that builds your project (CI included) needs the same install step at the same
-commit. The version number is not unique per commit, so keep `<commit>` recorded in your build
+commit. The version number is not unique per commit, so keep `{{SDK_REF}}` recorded in your build
 documentation.
 
 ## Initialize

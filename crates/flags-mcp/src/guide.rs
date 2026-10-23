@@ -423,7 +423,8 @@ mod tests {
     #[test]
     fn every_guide_has_the_commit_pin_and_the_standard_sections() {
         for l in LANGUAGES {
-            assert!(l.md.contains("<commit>"), "{}: no commit pin", l.name);
+            assert!(l.md.contains("{{SDK_REF}}"), "{}: no pinned ref", l.name);
+            assert!(!l.md.contains("<commit>"), "{}: still has <commit>", l.name);
             for h in ["## Install", "## Initialize", "## Evaluate a flag"] {
                 assert!(
                     l.md.lines().any(|line| line.trim_end() == h),
@@ -434,33 +435,44 @@ mod tests {
         }
     }
 
-    /// The sentence #156 requires wherever an agent is told to pick a commit SHA, so a person
-    /// checks what gets pinned instead of whatever `main` happens to be.
-    const REVIEW_SHA: &str = "Ask a person to review and approve the SHA before you pin it, \
-        or use the SHA of a commit they have already checked. It must be a commit on `main` of \
-        `savvagent/otto-flags`, not one from a fork.";
-
     /// Markdown wraps lines, so compare on single-spaced text.
     fn flat(text: &str) -> String {
         text.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
+    /// #184: the guide supplies the ref, so nothing may still ask a person to approve a SHA or tell
+    /// the agent to go and find one.
     #[test]
-    fn every_guide_tells_the_agent_to_have_the_sha_reviewed() {
+    fn no_guide_asks_a_person_to_approve_a_sha_or_to_find_one() {
         for l in LANGUAGES {
+            let text = flat(l.md);
+            for gone in [
+                "review and approve the SHA",
+                "the approved SHA",
+                "git ls-remote",
+                "Find the current tip",
+            ] {
+                assert!(!text.contains(gone), "{}: still says {gone:?}", l.name);
+            }
             assert!(
-                flat(l.md).contains(REVIEW_SHA),
-                "{}: no review-the-SHA sentence",
+                text.contains("not a fork") || text.contains("from a fork"),
+                "{}: lost the not-a-fork rule",
                 l.name
             );
         }
     }
 
     #[test]
-    fn agents_md_and_llms_txt_tell_the_agent_to_have_the_sha_reviewed() {
-        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
-        assert!(flat(&agents).contains(REVIEW_SHA), "AGENTS.md");
-        assert!(flat(crate::LLMS_TXT).contains(REVIEW_SHA), "llms.txt");
+    fn every_rendering_pins_the_sdk_ref() {
+        let app = sample_app();
+        for l in LANGUAGES {
+            for app in [None, Some(&app)] {
+                let text = render(l.name, app).unwrap().1;
+                assert!(text.contains(SDK_REF), "{}: ref not in rendering", l.name);
+                assert!(!text.contains("<commit>"), "{}: <commit> left", l.name);
+                assert!(!text.contains("{{SDK_REF}}"), "{}: unfilled", l.name);
+            }
+        }
     }
 
     /// The JS guides build from a fresh clone with pnpm, whose install runs dependency install
@@ -728,7 +740,7 @@ mod tests {
         "python",
         "packages/python-server/pyproject.toml",
         "name = \"otto-flags\"",
-        "otto-flags @ git+https://github.com/savvagent/otto-flags@<commit>#subdirectory=packages/python-server",
+        "otto-flags @ git+https://github.com/savvagent/otto-flags@{{SDK_REF}}#subdirectory=packages/python-server",
     ),
     (
         "typescript",
@@ -800,13 +812,13 @@ mod tests {
         "go",
         "packages/go-server/go.mod",
         "module github.com/savvagent/otto-flags/packages/go-server",
-        "github.com/savvagent/otto-flags/packages/go-server@<commit>",
+        "github.com/savvagent/otto-flags/packages/go-server@{{SDK_REF}}",
     ),
     (
         "rust",
         "packages/rust-server/Cargo.toml",
         "name = \"otto-flags\"",
-        "otto-flags = { git = \"https://github.com/savvagent/otto-flags\", rev = \"<commit>\" }",
+        "otto-flags = { git = \"https://github.com/savvagent/otto-flags\", rev = \"{{SDK_REF}}\" }",
     ),
     (
         "java",
@@ -1016,8 +1028,8 @@ mod tests {
             {
                 problems.push(format!("pnpm/yarn add without a local path: {line}"));
             }
-            if has_cmd(&line, "go get") && !line.contains("@<commit>") {
-                problems.push(format!("go get without @<commit>: {line}"));
+            if has_cmd(&line, "go get") && !line.contains("@{{SDK_REF}}") {
+                problems.push(format!("go get without @{{SDK_REF}}: {line}"));
             }
             if has_cmd(&line, "cargo add") && !(line.contains("--git") && line.contains("--rev")) {
                 problems.push(format!("cargo add without --git and --rev: {line}"));
@@ -1025,7 +1037,7 @@ mod tests {
             // A Cargo.toml dependency line for the crate (`otto-flags = ...`).
             let dep = line.trim_start();
             if dep.starts_with("otto-flags =")
-                && !(dep.contains("git = ") && dep.contains("rev = \"<commit>\""))
+                && !(dep.contains("git = ") && dep.contains("rev = \"{{SDK_REF}}\""))
             {
                 problems.push(format!("otto-flags dependency without git and rev: {line}"));
             }
@@ -1054,7 +1066,7 @@ mod tests {
         assert!(
             logical_lines(guide("go"))
                 .iter()
-                .any(|c| has_cmd(c, "go get") && c.contains("@<commit>")),
+                .any(|c| has_cmd(c, "go get") && c.contains("@{{SDK_REF}}")),
             "go guide has no go get line"
         );
         assert!(
@@ -1085,12 +1097,12 @@ mod tests {
             assert!(!install_line_problems(bad).is_empty(), "{bad:?} passed");
         }
         for good in [
-            "pip install \"otto-flags @ git+https://x/y@<commit>\"",
+            "pip install \"otto-flags @ git+https://x/y@{{SDK_REF}}\"",
             "npm install \\\n  /p/otto-flags-sdk-*.tgz",
             "pnpm add ./otto-flags-sdk-1.tgz",
-            "go get github.com/savvagent/otto-flags/packages/go-server@<commit>",
-            "cargo add otto-flags --git https://x/y --rev <commit>",
-            "otto-flags = { git = \"https://x/y\", rev = \"<commit>\" }",
+            "go get github.com/savvagent/otto-flags/packages/go-server@{{SDK_REF}}",
+            "cargo add otto-flags --git https://x/y --rev {{SDK_REF}}",
+            "otto-flags = { git = \"https://x/y\", rev = \"{{SDK_REF}}\" }",
         ] {
             assert!(install_line_problems(good).is_empty(), "{good:?} failed");
         }

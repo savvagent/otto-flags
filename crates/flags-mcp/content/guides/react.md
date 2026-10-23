@@ -11,17 +11,11 @@ browser.
 ## Install
 
 These packages are not installable by name yet. Install from source, pinned to a full commit SHA of
-`savvagent/otto-flags`. Find the current tip of `main` with:
-
-```bash
-git ls-remote https://github.com/savvagent/otto-flags main
-```
-
-Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
-already checked. It must be a commit on `main` of `savvagent/otto-flags`, not one from a fork. Use
-the approved SHA in place of `<commit>`. Build and pack each package in dependency order
-(`@otto-flags/sdk`, `@otto-flags/react`), because a package's tarball names the others it depends on
-and they cannot be resolved by name. You need `git`, Node.js and `pnpm`.
+`savvagent/otto-flags`. Pin to `{{SDK_REF}}`, a commit on `main` of `savvagent/otto-flags` that the
+maintainers have reviewed. Use it exactly: do not substitute a branch, a newer commit, or a commit
+from a fork, and use the same commit everywhere in one project. Build and pack each package in
+dependency order (`@otto-flags/sdk`, `@otto-flags/react`), because a package's tarball names the
+others it depends on and they cannot be resolved by name. You need `git`, Node.js and `pnpm`.
 
 On pnpm 9, `pnpm install` runs the install scripts of this repository's dependencies on your
 machine; pnpm 10 and later skip them unless allowed. The lockfile fixes which versions you get, not
@@ -31,7 +25,7 @@ what their scripts do. None of these packages needs them to build, so skip them 
 ```bash
 git clone https://github.com/savvagent/otto-flags
 cd otto-flags
-git checkout <commit>
+git checkout {{SDK_REF}}
 pnpm install --frozen-lockfile --ignore-scripts
 mkdir -p ../otto-flags-tarballs
 pnpm --filter @otto-flags/sdk build
