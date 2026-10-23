@@ -80,7 +80,8 @@ client.close();
 `FlagClient` is `AutoCloseable`, so `try (FlagClient client = new FlagClient(config)) { ... }`
 works too. Other builder methods, all optional: `baseUrl` (default
 `https://otto-flags.savvagent.com`), `cacheTtl` (milliseconds, default 60000), `timeout`
-(milliseconds, default 5000) and `defaults` (flag key to the value served when evaluation fails).
+(milliseconds, default 5000), `enableRealtime` (default on, see below) and `defaults` (flag key to
+the value served when evaluation fails).
 
 ## Evaluate a flag
 
@@ -150,9 +151,13 @@ public class CheckoutService {
   `onError`. An invalid flag key (1 to 128 ASCII letters, digits, `-`, `_` and `.`) is refused the
   same way without a request. Building the config with a missing or malformed key throws
   `IllegalArgumentException`, so a misconfigured deploy fails at start-up.
-- `enableRealtime` and `enableTelemetry` are builder options, but this SDK does not act on them: it
-  opens no real-time connection and reports no evaluation counts or errors. A change made with
-  `set_flag_environment` or `rollback_flag` reaches the app when the cached result expires, and
-  `flag_health` and auto-rollback get no data from this SDK.
+- `enableTelemetry` is a builder option, but this SDK does not act on it: it reports no evaluation
+  counts or errors, so `flag_health` and auto-rollback get no data from it.
+- Real-time updates are on by default (`enableRealtime(false)` turns them off). The client reads the
+  server's flag-change stream on a daemon thread and drops a changed flag's cached results, so a
+  change made with `set_flag_environment` or `rollback_flag` reaches the app within about a round
+  trip. The stream never delays or fails a lookup; while it is down, a change reaches the app when
+  the cached result expires. It reconnects with backoff and drops the whole cache on every
+  connection. `close()` stops it, and `onError` may be called from its thread.
 - Create flags before code references them: an unknown flag key evaluates to its default.
 - The wire contract the SDK speaks is `docs/SDK-DEVELOPER-GUIDE.md` in the repository.

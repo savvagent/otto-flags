@@ -46,12 +46,26 @@ public class FlagClient implements AutoCloseable {
     private final java.util.HashMap<String, Long> generations = new java.util.HashMap<>();
     private final ConcurrentHashMap<String, ConfigOverrideEntry> configOverrides;
     private final ConcurrentHashMap<String, VariationOverrideEntry> variationOverrides;
+    /** The flag-change stream, or null when real-time updates are off or could not start. */
+    private final RealtimeStream realtime;
 
+    /**
+     * Creates a client. When {@link FlagClientConfig#isEnableRealtime()} is true (the default),
+     * this also opens the flag-change stream on a background thread; call {@link #close()} to
+     * stop it.
+     *
+     * @param config the client's configuration
+     */
     public FlagClient(FlagClientConfig config) {
         this(config, MAX_CONTEXTS_PER_FLAG);
     }
 
     FlagClient(FlagClientConfig config, int maxContextsPerFlag) {
+        this(config, maxContextsPerFlag, RealtimeStream.Options.defaults());
+    }
+
+    FlagClient(FlagClientConfig config, int maxContextsPerFlag,
+            RealtimeStream.Options realtimeOptions) {
         this.config = config;
         this.maxContextsPerFlag = maxContextsPerFlag;
         this.gson = new Gson();
@@ -64,6 +78,19 @@ public class FlagClient implements AutoCloseable {
                 .readTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .writeTimeout(config.getTimeout(), TimeUnit.MILLISECONDS)
                 .build();
+
+        RealtimeStream stream = null;
+        if (config.isEnableRealtime()) {
+            try {
+                stream = RealtimeStream.start(config, httpClient, this::invalidateCache,
+                        realtimeOptions);
+            } catch (RuntimeException e) {
+                // Never thrown into the host: lookups work without the stream, bounded by the TTL.
+                logger.warn("Otto Flags stream did not start; real-time updates are off: {}",
+                        e.toString());
+            }
+        }
+        this.realtime = stream;
 
         logger.info("Otto Flags FlagClient initialized");
     }
@@ -231,7 +258,7 @@ public class FlagClient implements AutoCloseable {
      * @param key the flag key, possibly null
      * @return true if the key is safe to use as a path segment
      */
-    private static boolean isValidFlagKey(String key) {
+    static boolean isValidFlagKey(String key) {
         if (key == null || key.isEmpty() || key.length() > 128) {
             return false;
         }
@@ -382,6 +409,11 @@ public class FlagClient implements AutoCloseable {
         synchronized (generationLock) {
             return new long[] {epoch, generations.getOrDefault(flagKey, 0L)};
         }
+    }
+
+    /** The flag-change stream, or null when none is running (for tests). */
+    RealtimeStream realtimeStream() {
+        return realtime;
     }
 
     /** Number of contexts currently cached for a flag (for tests). */
@@ -586,8 +618,15 @@ public class FlagClient implements AutoCloseable {
         return override;
     }
 
+    /**
+     * Stops the flag-change stream, clears the cache, and releases the HTTP client's threads and
+     * connections. Idempotent.
+     */
     @Override
     public void close() {
+        if (realtime != null) {
+            realtime.close();
+        }
         invalidateCache(null);
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();

@@ -68,7 +68,7 @@ client.close();
 FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
     .applicationId("your-app-id")
     .baseUrl("https://otto-flags.savvagent.com") // optional
-    .enableRealtime(true) // default: true
+    .enableRealtime(true) // default: true; opens the update stream
     .cacheTtl(60000L) // default: 60 seconds; results are cached per flag and per context
     .enableTelemetry(true) // default: true
     .timeout(5000) // request timeout in ms, default: 5000
@@ -83,6 +83,17 @@ FlagClientConfig config = FlagClientConfig.builder("sdk_your_api_key_here")
 
 FlagClient client = new FlagClient(config);
 ```
+
+### Real-time updates
+
+Real-time updates are on by default. The client reads the server's flag-change stream on a daemon
+thread and drops a changed flag's cached results as soon as the change arrives, so a kill switch
+does not wait for `cacheTtl`. The stream never delays or fails a lookup; while it is down,
+`cacheTtl` bounds how stale a result can be. It reconnects with exponential backoff (about 1 second
+up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every connection,
+since changes may have been missed. Turn it off with `.enableRealtime(false)`. Call `close()` to stop
+it. `onError` is called once per failed connection attempt, possibly from the stream thread, so it
+must be safe for concurrent use.
 
 ## Usage Examples
 
