@@ -149,9 +149,10 @@ class CheckoutViewModel(private val client: OttoFlagsClient) : ViewModel() {
 - Lookups return a `Result`, so a network or server failure arrives as `onFailure`; use
   `getOrDefault`, or `getVariation`, which falls back to the default you pass.
 - Results are cached in memory per flag and per user context, so one user's result is never served
-  to another. The cache has no expiry and this SDK does not refresh it from the server, so a flag
-  changed afterwards (including a kill switch or rollback) reaches a running app only after it
-  restarts or the user context changes. `client.flagUpdates` is a `StateFlow` of the latest value of
+  to another. The cache has no expiry; the SDK polls the flag list every `pollingInterval` and
+  drops the cached results of the flags it lists, so a flag changed afterwards (including a kill
+  switch or rollback) reaches a running app within about one polling interval, or within about a
+  round trip with `enableRealtime` on (see Real-time updates). `client.flagUpdates` is a `StateFlow` of the latest value of
   each flag the app has evaluated.
 - Flag evaluations are not counted by this SDK and `track(eventName, userContext, properties)` posts
   to an endpoint the server does not serve, so `flag_health` and auto-rollback get no data from it.
