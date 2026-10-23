@@ -73,7 +73,7 @@ config := ottoflags.Config{
     APIKey:          "sdk_your_api_key_here",
     ApplicationID:   "your-app-id",
     BaseURL:         "https://otto-flags.savvagent.com", // optional
-    EnableRealtime:  true,                         // default: true
+    EnableRealtime:  true,                         // default: false; true opens the update stream
     CacheTTL:        60 * time.Second,            // default: 60 seconds
     EnableTelemetry: true,                         // default: true
     Timeout:         5 * time.Second,             // default: 5 seconds
@@ -94,6 +94,17 @@ defer client.Close()
 ```
 
 Evaluations are cached per flag and per evaluation context for `CacheTTL`, so two users never share a cached result. At most 10,000 contexts are cached per flag.
+
+### Real-time updates
+
+With `EnableRealtime: true` the client reads the server's flag-change stream in a background
+goroutine and drops a changed flag's cached results as soon as the change arrives, so a kill switch
+does not wait for `CacheTTL`. The default is off (a Go `bool` cannot default to true), so set it
+for services that need fast changes. The stream never delays or fails a lookup; while it is down,
+`CacheTTL` bounds how stale a result can be. It reconnects with exponential backoff (about 1 second
+up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every connection,
+since changes may have been missed. Call `Close` to stop it. `OnError` is called once per failed
+connection attempt, possibly from the stream goroutine, so it must be safe for concurrent use.
 
 ## Usage Examples
 

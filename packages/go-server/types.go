@@ -13,7 +13,12 @@ type Config struct {
 	// BaseURL is the Otto Flags API base URL (default: https://otto-flags.savvagent.com)
 	BaseURL string
 
-	// EnableRealtime enables real-time flag updates via SSE (default: true)
+	// EnableRealtime opens the flag-change stream (GET /api/flags/stream, server-sent
+	// events) in a background goroutine. Each change drops that flag's cached evaluations, so
+	// a change, a kill switch above all, reaches this client in about a round trip instead of
+	// after CacheTTL. Default: off, because a bool's zero value cannot mean on; set it to true
+	// to open the stream, and call Close to stop it. While the stream is down, CacheTTL
+	// bounds how stale a cached result can be.
 	EnableRealtime bool
 
 	// CacheTTL is the cache time-to-live duration (default: 60 seconds)
@@ -25,7 +30,9 @@ type Config struct {
 	// Defaults provides default flag values when evaluation fails
 	Defaults map[string]bool
 
-	// OnError is a custom error handler
+	// OnError is a custom error handler. With EnableRealtime it can also be called from the
+	// stream goroutine, at the same time as calls from lookups, so it must be safe for concurrent
+	// use, and it must not call Close.
 	OnError func(error)
 
 	// Timeout is the HTTP request timeout (default: 5 seconds)
