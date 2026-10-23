@@ -338,6 +338,13 @@ Evaluations are billed on the meter `otto-flags/evaluations`. MCP tools are free
   `evaluations`: client-served, server-served and clipped this month, with the busiest apps, so
   an org can see a spike it did not cause and rotate the app's client key (`rotate_app_keys`).
   The ceiling is a pricing decision: set it above the busiest legitimate app's hour.
+- **Allowed origins (#143).** An app may list the browser origins its client key may be used from
+  (`update_app` `allowedOrigins`; migration 0011, empty by default = unrestricted). A client-key
+  request to the evaluate routes or `GET /api/sdk/flags` that carries an `Origin` outside a
+  non-empty list is answered `403 origin_not_allowed` and not counted. Requests with no `Origin`
+  (native apps, `curl`) and server keys are not checked, so it deters use from other sites and
+  proves nothing about the caller. The flag-change stream and telemetry routes are not checked.
+  CORS preflight still answers any origin: it carries no key.
 - **Blocked orgs** keep evaluating. Their hours ship unbilled.
 - **Idle suspend.** The app scales to zero, so hours close when a machine is awake. An hour
   closed after the platform's month cutoff (2 h into the next month) is billed in the month it

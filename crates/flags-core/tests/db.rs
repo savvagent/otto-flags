@@ -7734,3 +7734,61 @@ async fn the_database_rejects_an_app_name_validate_name_would_reject(pool: PgPoo
     assert_eq!(sqlstate(&err), "23514", "{err}");
     assert!(err.to_string().contains("flag_apps_name_check"), "{err}");
 }
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_app_starts_unrestricted_and_its_origins_are_set_idempotently(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let actor = UserId::new();
+    let mut tx = db.begin(org).await.unwrap();
+    let (app, _) = tx.create_app("web", &[], actor).await.unwrap();
+    assert!(app.allowed_origins.is_empty());
+    let before = app_audits(&mut tx, app.id).await;
+
+    let origins = vec![
+        "https://B.example".to_string(),
+        "https://a.example".to_string(),
+    ];
+    let set = tx
+        .set_app_allowed_origins(&app, &origins, actor)
+        .await
+        .unwrap();
+    assert_eq!(
+        set.allowed_origins,
+        ["https://b.example", "https://a.example"]
+    );
+    assert_eq!(tx.get_app(app.id).await.unwrap().unwrap(), set);
+    assert_eq!(app_audits(&mut tx, app.id).await, before + 1);
+
+    // The same list again changes nothing and is not audited.
+    let again = tx
+        .set_app_allowed_origins(&set, &origins, actor)
+        .await
+        .unwrap();
+    assert_eq!(again, set);
+    assert_eq!(app_audits(&mut tx, app.id).await, before + 1);
+
+    // A bad entry or too many is refused and leaves the list alone.
+    assert!(tx
+        .set_app_allowed_origins(&set, &["https://x.example/p".to_string()], actor)
+        .await
+        .is_err());
+    let many: Vec<String> = (0..21).map(|i| format!("https://a{i}.example")).collect();
+    assert!(tx
+        .set_app_allowed_origins(&set, &many, actor)
+        .await
+        .is_err());
+
+    let cleared = tx.set_app_allowed_origins(&set, &[], actor).await.unwrap();
+    assert!(cleared.allowed_origins.is_empty());
+    tx.commit().await.unwrap();
+}
+
+/// Audit entries for one app, read inside the open transaction.
+async fn app_audits(tx: &mut otto_tenant::Tx<'_>, app: flags_core::ids::FlagAppId) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE target_id = $1")
+        .bind(app.to_string())
+        .fetch_one(tx.conn())
+        .await
+        .unwrap()
+}

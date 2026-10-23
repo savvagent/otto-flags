@@ -2,12 +2,13 @@
 
 use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::Json;
-use flags_core::apps::AppsExt;
+use flags_core::apps::{origin_allowed, AppsExt, FlagApp};
 use flags_core::eval::{self, Context};
 use flags_core::flags::{FlagStatus, FlagsExt, SdkFlag};
 use flags_core::keys::{self, KeyKind, KeyOwner};
 use flags_core::platform_events::begin_live;
 use http::request::Parts;
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -53,6 +54,31 @@ impl FromRequestParts<AppState> for Sdk {
     }
 }
 
+/// Refuse a client key used from a browser origin the app does not allow.
+///
+/// Only a request that carries an `Origin` header is checked (browsers always
+/// send one on a cross-origin call; native apps and servers send none), only
+/// with a client key, and only when the app lists origins. A deterrent against
+/// casual use of the public key from another site, not authentication: a
+/// script can send any `Origin`, or none (#143).
+fn check_origin(sdk: &Sdk, headers: &HeaderMap, app: &FlagApp) -> ApiResult<()> {
+    if sdk.0.kind != KeyKind::Client || app.allowed_origins.is_empty() {
+        return Ok(());
+    }
+    let Some(origin) = headers.get(http::header::ORIGIN) else {
+        return Ok(());
+    };
+    // A header that is not text matches nothing.
+    if origin
+        .to_str()
+        .is_ok_and(|o| origin_allowed(&app.allowed_origins, o))
+    {
+        Ok(())
+    } else {
+        Err(ApiError::origin_not_allowed())
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct EvaluateBody {
     #[serde(default)]
@@ -79,6 +105,7 @@ pub async fn evaluate(
     State(state): State<AppState>,
     sdk: Sdk,
     Path(key): Path<String>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> ApiResult<Json<EvaluateResponse>> {
     // An empty body is an evaluation with no context, not a malformed request:
@@ -101,15 +128,17 @@ pub async fn evaluate(
 
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
     let flag = tx.find_flag(sdk.0.app_id, &key).await?;
-    // One primary-key read in the transaction already open: whether this is an
-    // environment the app has. The caller names the environment, and a public
-    // client key can name any, so only an app's own environments are counted
-    // (#143). An unknown one is answered exactly as before.
-    let billed_environment = tx
-        .get_app(sdk.0.app_id)
-        .await?
-        .is_some_and(|app| app.environments.contains(&environment));
+    // One primary-key read in the transaction already open: the app's
+    // environments and allowed origins. The caller names the environment, and
+    // a public client key can name any, so only an app's own environments are
+    // counted (#143). An unknown one is answered exactly as before. A client
+    // key from an origin the app does not allow is refused, and not counted.
+    let app = tx.get_app(sdk.0.app_id).await?;
     tx.commit().await?;
+    if let Some(app) = &app {
+        check_origin(&sdk, &headers, app)?;
+    }
+    let billed_environment = app.is_some_and(|app| app.environments.contains(&environment));
     let flag = flag
         .filter(|f| f.status == FlagStatus::Active)
         .ok_or_else(|| ApiError::flag_not_found(&key))?;
@@ -154,6 +183,7 @@ pub struct FlagList {
 pub async fn list_flags(
     State(state): State<AppState>,
     sdk: Sdk,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<FlagList>> {
     let environment = q.environment.unwrap_or_else(|| DEFAULT_ENVIRONMENT.into());
@@ -162,6 +192,7 @@ pub async fn list_flags(
         .get_app(sdk.0.app_id)
         .await?
         .ok_or_else(ApiError::unauthorized)?;
+    check_origin(&sdk, &headers, &app)?;
     let flags = tx.list_flags(&app, false).await?;
     tx.commit().await?;
     let flags: Vec<SdkFlag> = flags

@@ -3065,3 +3065,215 @@ async fn evaluating_never_asks_the_platform_about_a_blocked_org(pool: PgPool) {
     // Counted in memory only.
     assert_eq!(s.evaluations.take().len(), 1);
 }
+
+/// [`sdk`] with an `Origin` header (or none), as a browser sends one.
+async fn sdk_from(
+    app: &Router,
+    method: &str,
+    path: &str,
+    key: &str,
+    origin: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut req = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("host", "flags.example.com")
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json");
+    if let Some(origin) = origin {
+        req = req.header("origin", origin);
+    }
+    let body = if method == "POST" {
+        Body::from("{}")
+    } else {
+        Body::empty()
+    };
+    send(app, req.body(body).unwrap()).await
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_client_key_is_held_to_the_apps_allowed_origins(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (t, _, key, client_key) = org_with_flag(&s, &platform, org, "checkout").await;
+    let evaluate = "/api/evaluate/checkout";
+
+    // No list: unrestricted, as every app is today.
+    let (status, _) = sdk_from(
+        &s.app,
+        "POST",
+        evaluate,
+        &client_key,
+        Some("https://any.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let app = tool(
+        &s.app,
+        &t,
+        "update_app",
+        json!({"app": "web", "allowedOrigins": ["https://App.Example.com", "https://*.example.org"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        app["app"]["allowedOrigins"],
+        json!(["https://app.example.com", "https://*.example.org"]),
+        "{app}"
+    );
+    let listed = tool(&s.app, &t, "list_apps", json!({})).await.unwrap();
+    assert_eq!(
+        listed["apps"][0]["allowedOrigins"],
+        app["app"]["allowedOrigins"]
+    );
+
+    let _ = s.evaluations.take();
+    for ok in ["https://app.example.com", "https://a.example.org"] {
+        let (status, r) = sdk_from(&s.app, "POST", evaluate, &client_key, Some(ok)).await;
+        assert_eq!(status, StatusCode::OK, "{ok}: {r}");
+    }
+    assert_eq!(
+        s.evaluations.take().values().next().unwrap().served_client,
+        2
+    );
+
+    // Another site: refused, not counted, and the body does not echo the list.
+    for bad in ["https://evil.example", "https://example.org", "null"] {
+        let (status, r) = sdk_from(&s.app, "POST", evaluate, &client_key, Some(bad)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{bad}: {r}");
+        assert_eq!(r["error"], "origin_not_allowed");
+        assert!(!r.to_string().contains("app.example.com"), "{r}");
+    }
+    let (status, _) = sdk_from(
+        &s.app,
+        "GET",
+        "/api/sdk/flags",
+        &client_key,
+        Some("https://evil.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = sdk_from(
+        &s.app,
+        "POST",
+        "/api/flags/checkout/evaluate",
+        &client_key,
+        Some("https://evil.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(s.evaluations.take().is_empty());
+
+    // No Origin header (a native app, curl) and the server key are not checked.
+    let (status, _) = sdk_from(&s.app, "POST", evaluate, &client_key, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = sdk_from(&s.app, "POST", evaluate, &key, Some("https://evil.example")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = sdk_from(
+        &s.app,
+        "GET",
+        "/api/sdk/flags",
+        &key,
+        Some("https://evil.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = sdk_from(
+        &s.app,
+        "GET",
+        "/api/sdk/flags",
+        &client_key,
+        Some("https://app.example.com"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Clearing the list lifts the restriction; doing it again changes nothing.
+    for _ in 0..2 {
+        let cleared = tool(
+            &s.app,
+            &t,
+            "update_app",
+            json!({"app": "web", "allowedOrigins": []}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared["app"]["allowedOrigins"], json!([]));
+    }
+    let (status, _) = sdk_from(
+        &s.app,
+        "POST",
+        evaluate,
+        &client_key,
+        Some("https://evil.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn only_an_admin_sets_origins_and_the_input_is_checked(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (t, _, _, _) = org_with_flag(&s, &platform, org, "checkout").await;
+    let member = token(
+        &platform,
+        org,
+        Uuid::new_v4(),
+        Role::Member,
+        &["flags:read", "flags:write", "apps:admin"],
+    );
+
+    let err = tool(
+        &s.app,
+        &member,
+        "update_app",
+        json!({"app": "web", "allowedOrigins": ["https://a.example"]}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err["data"]["code"], "forbidden", "{err}");
+
+    for bad in [
+        json!(["https://a.example/path"]),
+        json!(["a.example"]),
+        json!(["*"]),
+    ] {
+        let err = tool(
+            &s.app,
+            &t,
+            "update_app",
+            json!({"app": "web", "allowedOrigins": bad}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
+    }
+    let err = tool(&s.app, &t, "update_app", json!({"app": "web"}))
+        .await
+        .unwrap_err();
+    assert_eq!(err["data"]["code"], "invalid_argument", "{err}");
+
+    // Environments alone still work, and keep the origins.
+    tool(
+        &s.app,
+        &t,
+        "update_app",
+        json!({"app": "web", "allowedOrigins": ["https://a.example"]}),
+    )
+    .await
+    .unwrap();
+    let r = tool(
+        &s.app,
+        &t,
+        "update_app",
+        json!({"app": "web", "environments": ["production"]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r["app"]["environments"], json!(["production"]));
+    assert_eq!(r["app"]["allowedOrigins"], json!(["https://a.example"]));
+}

@@ -572,10 +572,24 @@ For mobile/desktop apps:
 |------|---------|------------|
 | `200` | Success | Use response |
 | `401` | Invalid/missing SDK key | Check configuration |
+| `403` | A client key used from a browser origin the app does not allow (`origin_not_allowed`) | Return default value; add the origin to the app's allowed origins |
 | `404` | Flag not found | Return default value |
 | `429` | Rate limited | Back off and retry |
 | `500` | Server error | Return cached/default value |
 | `503` | Temporarily unavailable or busy (with `Retry-After`) | Return cached/default value; retry after the delay |
+
+### Allowed origins (client keys)
+
+An app can list the browser origins its public client key (`sdk_`) may be used from (`update_app`,
+`allowedOrigins`: `https://app.example.com`, or `https://*.example.com` for subdomains). The list is
+empty by default, which allows every origin. When it is not empty, `POST /api/evaluate/{key}`,
+`POST /api/flags/{key}/evaluate` and `GET /api/sdk/flags` answer `403 origin_not_allowed` to a client
+key whose request carries an `Origin` header that is not on the list, and an evaluation refused this
+way is not counted. Browsers always send `Origin` on a cross-origin call, so a browser SDK needs no
+change beyond the list naming its page's origin. A request with no `Origin` header (a native mobile
+app, a server, `curl`) is not checked, and a server key (`srv_`) never is. This keeps other websites
+from using a public key; it is not authentication, because a script can send any `Origin` or none.
+The flag-change stream and the telemetry routes are not checked.
 
 ### Default Values
 
