@@ -144,4 +144,35 @@ final class ContextCacheTests: XCTestCase {
         XCTAssertEqual(afterClear.reason, "evaluated")
         XCTAssertEqual(requests(), 6)
     }
+
+    /// Overrides are changed, read and applied by evaluations from many tasks at once. Before
+    /// savvagent/otto-flags#138 the dictionaries were unsynchronized, so this could crash.
+    func testConcurrentOverrideChangesAndEvaluations() async {
+        let flag = "concurrent"
+        let context = UserContext(userId: "u")
+        let client = self.client!
+
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..<60 {
+                group.addTask {
+                    switch i % 6 {
+                    case 0: client.setConfigOverride(flagKey: flag, config: ["v": i])
+                    case 1: client.setVariationOverride(flagKey: flag, variation: "var\(i)")
+                    case 2: client.clearConfigOverride(flagKey: flag)
+                    case 3:
+                        _ = client.hasConfigOverride(flagKey: flag)
+                        _ = client.getVariationOverrides()
+                        _ = client.getConfigOverrides()
+                    case 4: client.clearVariationOverride(flagKey: flag)
+                    default: _ = try? await client.evaluate(flagKey: flag, context: context)
+                    }
+                }
+                group.addTask { _ = try? await client.evaluate(flagKey: flag, context: context) }
+            }
+        }
+
+        client.clearAllOverrides()
+        XCTAssertFalse(client.hasConfigOverride(flagKey: flag))
+        XCTAssertFalse(client.hasVariationOverride(flagKey: flag))
+    }
 }

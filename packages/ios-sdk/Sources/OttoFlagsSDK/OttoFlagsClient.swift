@@ -108,6 +108,14 @@ public class OttoFlagsClient {
     private let session: URLSession
     private let queue = DispatchQueue(label: "com.savvagent.ottoflags.sdk", qos: .utility)
 
+    private func configOverride(for flagKey: String) -> ConfigOverrideEntry? {
+        queue.sync { configOverrides[flagKey] }
+    }
+
+    private func variationOverride(for flagKey: String) -> VariationOverrideEntry? {
+        queue.sync { variationOverrides[flagKey] }
+    }
+
     /// Initialize the Otto Flags client
     /// - Parameter config: Configuration for the SDK
     public convenience init(config: OttoFlagsConfig) {
@@ -191,7 +199,7 @@ public class OttoFlagsClient {
             var variation = cached.variation
 
             // Apply overrides
-            if let configOverride = configOverrides[flagKey] {
+            if let configOverride = configOverride(for: flagKey) {
                 configuration = if configOverride.merge, let baseConfig = configuration {
                     mergeConfigurations(base: baseConfig, override: configOverride.config)
                 } else {
@@ -199,7 +207,7 @@ public class OttoFlagsClient {
                 }
             }
 
-            if let variationOverride = variationOverrides[flagKey] {
+            if let variationOverride = variationOverride(for: flagKey) {
                 variation = variationOverride.variation
             }
 
@@ -256,7 +264,7 @@ public class OttoFlagsClient {
         }
 
         // Apply overrides to evaluated result
-        if let configOverride = configOverrides[flagKey] {
+        if let configOverride = configOverride(for: flagKey) {
             configuration = if configOverride.merge, let baseConfig = configuration {
                 mergeConfigurations(base: baseConfig, override: configOverride.config)
             } else {
@@ -264,7 +272,7 @@ public class OttoFlagsClient {
             }
         }
 
-        if let variationOverride = variationOverrides[flagKey] {
+        if let variationOverride = variationOverride(for: flagKey) {
             variation = variationOverride.variation
         }
 
@@ -445,36 +453,40 @@ public class OttoFlagsClient {
     /// - Parameter flagKey: The key of the feature flag
     /// - Returns: Boolean indicating if override exists
     public func hasConfigOverride(flagKey: String) -> Bool {
-        return configOverrides[flagKey] != nil
+        return queue.sync { configOverrides[flagKey] != nil }
     }
 
     /// Check if a flag has a variation override
     /// - Parameter flagKey: The key of the feature flag
     /// - Returns: Boolean indicating if override exists
     public func hasVariationOverride(flagKey: String) -> Bool {
-        return variationOverrides[flagKey] != nil
+        return queue.sync { variationOverrides[flagKey] != nil }
     }
 
     /// Get all configuration overrides (for debugging/inspection)
     /// - Returns: Dictionary mapping flag keys to override details
     public func getConfigOverrides() -> [String: [String: Any]] {
-        return configOverrides.mapValues { entry in
-            [
-                "config": entry.config,
-                "merge": entry.merge,
-                "timestamp": entry.timestamp
-            ] as [String: Any]
+        return queue.sync {
+            configOverrides.mapValues { entry in
+                [
+                    "config": entry.config,
+                    "merge": entry.merge,
+                    "timestamp": entry.timestamp
+                ] as [String: Any]
+            }
         }
     }
 
     /// Get all variation overrides (for debugging/inspection)
     /// - Returns: Dictionary mapping flag keys to override details
     public func getVariationOverrides() -> [String: [String: Any]] {
-        return variationOverrides.mapValues { entry in
-            [
-                "variation": entry.variation,
-                "timestamp": entry.timestamp
-            ] as [String: Any]
+        return queue.sync {
+            variationOverrides.mapValues { entry in
+                [
+                    "variation": entry.variation,
+                    "timestamp": entry.timestamp
+                ] as [String: Any]
+            }
         }
     }
 
