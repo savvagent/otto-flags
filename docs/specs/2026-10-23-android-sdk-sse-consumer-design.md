@@ -25,7 +25,7 @@ Applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md` to
   on.)
 - Polling stays on whatever the stream does: it is the fallback while the stream is down, and it
   repairs any missed event.
-- No new dependency: a small hand-written reader over the existing `okhttp` (a byte-level `SseParser` over `BufferedSource` chunks with its own 4 MiB cap)`), not `okhttp-sse`.
+- No new dependency: a small hand-written reader over the existing `okhttp` (a byte-level `SseParser` over `BufferedSource` chunks with its own 4 MiB cap), not `okhttp-sse`.
 - No lifecycle integration: the stream runs while the client is open. Apps should call `close()`
   when backgrounding, or build the client with `enableRealtime` only for foreground use. Documented.
 - Gates: no Gradle wrapper in the repo, so `packages/android-sdk` has no gate in CLAUDE.md. The

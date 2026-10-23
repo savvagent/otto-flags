@@ -70,7 +70,8 @@ val client = OttoFlagsClient(config, applicationContext)
 Other `OttoFlagsConfig` parameters, all optional: `apiUrl` (default
 `https://otto-flags.savvagent.com`), `pollingInterval` (milliseconds, default 60000),
 `enableRealtime` (default `false`, see below), `enableWebSocket` (ignored), `timeout`
-(milliseconds, default 30000) and `enableLogging` (default `false`). Call `client.close()` when the app no longer needs the client.
+(milliseconds, default 30000) and `enableLogging` (default `false`). Call `client.close()` when the
+app no longer needs the client.
 
 ## Real-time updates
 
