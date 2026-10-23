@@ -18,6 +18,9 @@ use crate::ids::FlagAppId;
 use crate::keys::{KeyKind, NewKey};
 
 const MAX_ENVIRONMENTS: usize = 20;
+/// The most origins one app may allow (also a CHECK in migration 0011).
+pub const MAX_ALLOWED_ORIGINS: usize = 20;
+const MAX_ORIGIN_LEN: usize = 253;
 
 #[derive(Debug, Clone, PartialEq, Serialize, FromRow, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +29,10 @@ pub struct FlagApp {
     pub org_id: OrgId,
     pub name: String,
     pub environments: Vec<String>,
+    /// Browser origins the public client key may be used from. Empty means
+    /// unrestricted. A deterrent against use from other sites, not
+    /// authentication: see [`origin_allowed`].
+    pub allowed_origins: Vec<String>,
     /// The public client-side key (`sdk_…`). Safe to embed in a web page.
     pub client_key: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -51,7 +58,7 @@ pub enum Rotate {
     Both,
 }
 
-const COLS: &str = "id, org_id, name, environments, client_key, created_at";
+const COLS: &str = "id, org_id, name, environments, allowed_origins, client_key, created_at";
 
 /// Normalize and validate an environment list: trimmed, deduplicated, order
 /// kept, at least one.
@@ -73,6 +80,109 @@ pub fn normalize_environments(envs: &[String]) -> Result<Vec<String>> {
         )));
     }
     Ok(out)
+}
+
+/// Normalize and validate an origin allowlist: each entry `http(s)://host[:port]`
+/// (lowercased, no path, query, userinfo or trailing slash), or
+/// `http(s)://*.host[:port]` for every subdomain of `host` (not `host` itself).
+/// Trimmed, deduplicated, order kept. Empty is valid and means unrestricted.
+pub fn normalize_origins(origins: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for o in origins {
+        let o = o.trim().to_ascii_lowercase();
+        parse_origin(&o, true).ok_or_else(|| {
+            Error::Invalid(format!(
+                "allowed origin {o:?} is not an origin: use https://host[:port] (or \
+                 https://*.host[:port] for subdomains), with no path, query or trailing slash"
+            ))
+        })?;
+        if !out.contains(&o) {
+            out.push(o);
+        }
+    }
+    if out.len() > MAX_ALLOWED_ORIGINS {
+        return Err(Error::Invalid(format!(
+            "an app may allow at most {MAX_ALLOWED_ORIGINS} origins"
+        )));
+    }
+    Ok(out)
+}
+
+/// `(scheme, host, port)` of a lowercase origin, or `None` if it is not
+/// `http(s)://host[:port]`. With `pattern`, a leading `*.` label is accepted
+/// and kept in the host.
+fn parse_origin(o: &str, pattern: bool) -> Option<(&str, &str, Option<&str>)> {
+    if o.len() > MAX_ORIGIN_LEN {
+        return None;
+    }
+    let (scheme, rest) = o.split_once("://")?;
+    if scheme != "http" && scheme != "https" {
+        return None;
+    }
+    let (host, port) = match rest.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (rest, None),
+    };
+    if let Some(p) = port {
+        let ok = !p.is_empty()
+            && p.len() <= 5
+            && p.bytes().all(|b| b.is_ascii_digit())
+            && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n));
+        if !ok {
+            return None;
+        }
+    }
+    let name = match host.strip_prefix("*.") {
+        Some(rest) if pattern => rest,
+        _ => host,
+    };
+    let labels_ok = !name.is_empty()
+        && name.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        });
+    labels_ok.then_some((scheme, host, port))
+}
+
+/// Whether a request's `Origin` header value is allowed by `allowed`.
+///
+/// An empty list allows everything. Otherwise the origin must equal an entry
+/// (case-insensitive), or match a `https://*.host` entry: same scheme and
+/// port, and a host with at least one more label in front of `host`. The
+/// literal origin `null` (sandboxed frames, `file://`) matches nothing.
+///
+/// This is a deterrent against casual use of a public key from another site.
+/// Only browsers set `Origin` honestly; a script can send any value or none,
+/// so it is not authentication.
+pub fn origin_allowed(allowed: &[String], origin: &str) -> bool {
+    if allowed.is_empty() {
+        return true;
+    }
+    let origin = origin.trim().to_ascii_lowercase();
+    let Some((scheme, host, port)) = parse_origin(&origin, false) else {
+        return false;
+    };
+    allowed.iter().any(|entry| {
+        if *entry == origin {
+            return true;
+        }
+        let Some((es, eh, ep)) = parse_origin(entry, true) else {
+            return false;
+        };
+        match eh.strip_prefix("*.") {
+            Some(suffix) => {
+                es == scheme
+                    && ep == port
+                    && host.len() > suffix.len() + 1
+                    && host.ends_with(suffix)
+                    && host.as_bytes()[host.len() - suffix.len() - 1] == b'.'
+            }
+            None => false,
+        }
+    })
 }
 
 async fn insert_key(tx: &mut Tx<'_>, app: FlagAppId, key: &NewKey) -> Result<()> {
@@ -116,6 +226,15 @@ pub trait AppsExt {
         &mut self,
         app: &FlagApp,
         environments: &[String],
+        actor: UserId,
+    ) -> impl std::future::Future<Output = Result<FlagApp>> + Send;
+
+    /// Replace the origin allowlist. Empty clears it (unrestricted). Setting
+    /// the list it already has changes nothing and writes no audit entry.
+    fn set_app_allowed_origins(
+        &mut self,
+        app: &FlagApp,
+        origins: &[String],
         actor: UserId,
     ) -> impl std::future::Future<Output = Result<FlagApp>> + Send;
 
@@ -261,6 +380,38 @@ impl AppsExt for Tx<'_> {
         Ok(updated)
     }
 
+    async fn set_app_allowed_origins(
+        &mut self,
+        app: &FlagApp,
+        origins: &[String],
+        actor: UserId,
+    ) -> Result<FlagApp> {
+        let origins = normalize_origins(origins)?;
+        if origins == app.allowed_origins {
+            return Ok(app.clone());
+        }
+        let org = self.org();
+        let updated: FlagApp = sqlx::query_as(&format!(
+            "UPDATE flag_apps SET allowed_origins = $3 WHERE org_id = $1 AND id = $2 \
+             RETURNING {COLS}"
+        ))
+        .bind(org)
+        .bind(app.id)
+        .bind(&origins)
+        .fetch_one(self.conn())
+        .await?;
+        self.audit(
+            Entry::new(action::APP_UPDATED)
+                .actor(actor)
+                .target("flag_app", app.id.to_string())
+                .detail(serde_json::json!({
+                    "allowed_origins": {"from": app.allowed_origins, "to": updated.allowed_origins}
+                })),
+        )
+        .await?;
+        Ok(updated)
+    }
+
     async fn rotate_keys(
         &mut self,
         app: &FlagApp,
@@ -314,5 +465,115 @@ impl AppsExt for Tx<'_> {
         )
         .await?;
         Ok((current, issued))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn origins_are_trimmed_lowercased_and_deduplicated() {
+        let got = normalize_origins(&v(&[
+            " HTTPS://App.Example.com ",
+            "https://app.example.com",
+            "http://localhost:3000",
+            "https://*.example.org",
+        ]))
+        .unwrap();
+        assert_eq!(
+            got,
+            v(&[
+                "https://app.example.com",
+                "http://localhost:3000",
+                "https://*.example.org"
+            ])
+        );
+        assert!(normalize_origins(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn malformed_origins_are_refused() {
+        for bad in [
+            "",
+            "example.com",
+            "ftp://example.com",
+            "https://",
+            "https://example.com/",
+            "https://example.com/path",
+            "https://example.com?x=1",
+            "https://user@example.com",
+            "https://exa mple.com",
+            "https://example.com:",
+            "https://example.com:0",
+            "https://example.com:99999",
+            "https://example.com:80a",
+            "https://*",
+            "https://*.",
+            "https://a.*.example.com",
+            "https://*example.com",
+            "https://-bad.example.com",
+            "https://exa_mple.com",
+            "null",
+            "*",
+        ] {
+            assert!(
+                normalize_origins(&v(&[bad])).is_err(),
+                "{bad:?} should be refused"
+            );
+        }
+        let long = format!("https://{}.com", "a".repeat(260));
+        assert!(normalize_origins(&[long]).is_err());
+    }
+
+    #[test]
+    fn at_most_twenty_origins() {
+        let ok: Vec<String> = (0..MAX_ALLOWED_ORIGINS)
+            .map(|i| format!("https://a{i}.example.com"))
+            .collect();
+        assert_eq!(normalize_origins(&ok).unwrap().len(), MAX_ALLOWED_ORIGINS);
+        let mut too_many = ok;
+        too_many.push("https://over.example.com".into());
+        assert!(normalize_origins(&too_many).is_err());
+    }
+
+    #[test]
+    fn an_empty_list_allows_everything() {
+        assert!(origin_allowed(&[], "https://anywhere.example"));
+        assert!(origin_allowed(&[], "null"));
+    }
+
+    #[test]
+    fn an_exact_origin_matches_scheme_host_and_port() {
+        let list = v(&["https://app.example.com", "http://localhost:3000"]);
+        assert!(origin_allowed(&list, "https://app.example.com"));
+        assert!(origin_allowed(&list, "HTTPS://APP.example.com"));
+        assert!(origin_allowed(&list, "http://localhost:3000"));
+        assert!(!origin_allowed(&list, "http://app.example.com"));
+        assert!(!origin_allowed(&list, "https://app.example.com:8443"));
+        assert!(!origin_allowed(&list, "http://localhost:3001"));
+        assert!(!origin_allowed(&list, "https://evil.example.com"));
+        assert!(!origin_allowed(&list, "https://app.example.com.evil.com"));
+        assert!(!origin_allowed(&list, "null"));
+        assert!(!origin_allowed(&list, "garbage"));
+    }
+
+    #[test]
+    fn a_wildcard_matches_subdomains_only() {
+        let list = v(&["https://*.example.com"]);
+        assert!(origin_allowed(&list, "https://app.example.com"));
+        assert!(origin_allowed(&list, "https://a.b.example.com"));
+        assert!(!origin_allowed(&list, "https://example.com"));
+        assert!(!origin_allowed(&list, "https://evilexample.com"));
+        assert!(!origin_allowed(&list, "https://app.example.com.evil.com"));
+        assert!(!origin_allowed(&list, "http://app.example.com"));
+        assert!(!origin_allowed(&list, "https://app.example.com:8443"));
+        let with_port = v(&["https://*.example.com:8443"]);
+        assert!(origin_allowed(&with_port, "https://app.example.com:8443"));
+        assert!(!origin_allowed(&with_port, "https://app.example.com"));
     }
 }
