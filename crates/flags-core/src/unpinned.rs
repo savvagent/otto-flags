@@ -18,6 +18,8 @@
 //! `tests/db.rs`' `no_raw_pool_queries_outside_the_allowed_sites` refuses a new
 //! raw pool query anywhere else.
 
+use std::time::Duration;
+
 use otto_tenant::Db;
 use sqlx::pool::PoolConnection;
 use sqlx::{Connection, PgConnection, Postgres, Transaction};
@@ -64,12 +66,39 @@ pub(crate) async fn begin_as_tenant_role(
     db: &Db,
     maintenance: bool,
 ) -> sqlx::Result<Transaction<'static, Postgres>> {
-    enter(db.pool().begin().await?, db, maintenance).await
+    enter(db.pool().begin().await?, db, maintenance, None).await
+}
+
+/// Server-side timeouts for one transaction (#130), set by its probe and,
+/// like everything the probe sets, transaction-local. Only the key lookup
+/// passes them ([`Held::begin`]); every other transaction runs with the
+/// server's defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Timeouts {
+    /// `lock_timeout`: how long a statement waits for a lock.
+    pub lock: Duration,
+    /// `statement_timeout`: how long a statement runs.
+    pub statement: Duration,
+    /// `idle_in_transaction_session_timeout`: how long the backend waits for
+    /// the client's next statement before ending the session, so a backend
+    /// whose client gave up does not linger holding its locks.
+    pub idle: Duration,
+}
+
+/// A setting's value in whole milliseconds, as Postgres reads it, rounded up,
+/// at most `i32::MAX` ms, and never below 1 ms: Postgres reads `0` as "no timeout", so a bound under a
+/// millisecond must not round down to switching the timeout off.
+fn millis(d: Duration) -> String {
+    // Postgres takes at most `i32::MAX` ms; a longer bound is "as long as it
+    // allows" rather than an error that would fail every lookup.
+    let ms = d.as_nanos().div_ceil(1_000_000).clamp(1, i32::MAX as u128);
+    format!("{ms}ms")
 }
 
 /// A pool connection held across one unpinned transaction, for the key
 /// lookup ([`crate::keys::resolve_hash`]), which must await the connection's
-/// return to the pool itself so its permit covers the whole checkout (#120).
+/// return to the pool (or close it) itself so its permit covers the whole
+/// checkout (#120, #130).
 ///
 /// Opaque on purpose: the raw connection never leaves this module, so the
 /// only thing a holder can run on it is [`Held::begin`]'s probed transaction,
@@ -83,21 +112,48 @@ impl Held {
     }
 
     /// [`begin`] on the held connection: the same probe, role switch, search
-    /// path, and refusal, with no maintenance marker.
+    /// path, and refusal, with no maintenance marker, and with `timeouts`
+    /// set by the probe when given (#130).
     pub(crate) async fn begin<'c>(
         &'c mut self,
         db: &Db,
+        timeouts: Option<Timeouts>,
     ) -> sqlx::Result<Transaction<'c, Postgres>> {
         let conn: &'c mut PgConnection = &mut self.0;
-        enter(conn.begin().await?, db, false).await
+        enter(conn.begin().await?, db, false, timeouts).await
     }
 
     /// Return the connection to the pool, and wait until it is back: the
     /// rollback of any transaction left open and sqlx's release ping run
     /// inside this call, not in the task sqlx spawns when a `PoolConnection`
     /// is dropped. A connection that fails the ping is closed instead.
-    pub(crate) async fn release(mut self) {
-        self.0.return_to_pool().await;
+    ///
+    /// Waits at most `within` (#130): a half-open connection never answers
+    /// the ping, and the kernel can take many minutes to notice. True if
+    /// sqlx's return finished in time, whether it pooled the connection or
+    /// closed it; false if it was cut short. Cutting it short never leaves
+    /// the connection checked out once this returns: `return_to_pool` takes
+    /// the connection out of the `PoolConnection` before it returns its
+    /// future, and the future owns it, so dropping the future drops the
+    /// connection, closing its socket, and its pool slot, decrementing the
+    /// pool's size (sqlx-core 0.8.6 `pool/connection.rs`: `return_to_pool`,
+    /// `Floating`, `DecrementSizeGuard`'s `Drop`). The emptied
+    /// `PoolConnection` then drops with nothing to return.
+    pub(crate) async fn release(mut self, within: Duration) -> bool {
+        tokio::time::timeout(within, self.0.return_to_pool())
+            .await
+            .is_ok()
+    }
+
+    /// Close the connection instead of returning it (#130), for one that
+    /// missed a deadline and may be mid-protocol. Detaching it frees its pool
+    /// slot at once, so a replacement may open, and dropping it closes its
+    /// socket, both before this returns (sqlx-core 0.8.6
+    /// `pool/connection.rs`: `PoolConnection::detach`, `Floating::detach`).
+    /// A backend left mid-transaction ends itself when it sees the socket
+    /// close, or at its `idle_in_transaction_session_timeout`.
+    pub(crate) fn discard(self) {
+        drop(self.0.detach());
     }
 }
 
@@ -107,12 +163,30 @@ pub(crate) fn max_connections(db: &Db) -> u32 {
     db.pool().options().get_max_connections()
 }
 
+/// The probe's columns, in order: `assumable`, `pool_exempt`,
+/// `tenant_exempt`, then what each `set_config` returned (the marker, the
+/// role, the search path, and the three timeouts), read only to be
+/// discarded.
+type ProbeRow = (
+    bool,
+    bool,
+    bool,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
 /// Run the role probe in the freshly opened `tx` and switch it into the
-/// tenant role, or refuse it; see [`begin_as_tenant_role`].
+/// tenant role, or refuse it; see [`begin_as_tenant_role`]. `timeouts`, when
+/// given, are set by the same statement ([`Timeouts`]).
 async fn enter<'c>(
     mut tx: Transaction<'c, Postgres>,
     db: &Db,
     maintenance: bool,
+    timeouts: Option<Timeouts>,
 ) -> sqlx::Result<Transaction<'c, Postgres>> {
     // One round trip for the probes, the marker, the role switch, and the
     // search path (these run on every SDK key lookup). The probes are a
@@ -126,14 +200,15 @@ async fn enter<'c>(
     // search path is set unconditionally, in a column of its own: the pool's
     // own role, kept when the tenant role cannot be assumed, has the same
     // `"$user"`-first default path.
-    let (assumable, pool_exempt, tenant_exempt, _, _, _): (
-        bool,
-        bool,
-        bool,
-        Option<String>,
-        Option<String>,
-        String,
-    ) = sqlx::query_as(
+    //
+    // The timeouts (#130) are set the same way, each in a CASE column of its
+    // own, and only when given: every other caller binds NULL and runs
+    // unchanged, with one statement text for all of them. They are set here
+    // because they take effect from the next statement, the key lookup; set
+    // in the lookup itself they would be too late, since its lock on
+    // `app_keys` is taken while the statement is bound, before its select
+    // list runs, and its statement timer is armed when it starts.
+    let (assumable, pool_exempt, tenant_exempt, ..): ProbeRow = sqlx::query_as(
         "WITH probe AS MATERIALIZED ( \
            SELECT EXISTS ( \
                     SELECT 1 FROM pg_catalog.pg_roles r \
@@ -150,12 +225,21 @@ async fn enter<'c>(
          SELECT assumable, pool_exempt, tenant_exempt, \
                 CASE WHEN $2 THEN set_config('app.maintenance', 'on', true) END, \
                 CASE WHEN assumable THEN set_config('role', $1::text, true) END, \
-                set_config('search_path', $3::text, true) \
+                set_config('search_path', $3::text, true), \
+                CASE WHEN $4::text IS NOT NULL \
+                  THEN set_config('lock_timeout', $4::text, true) END, \
+                CASE WHEN $5::text IS NOT NULL \
+                  THEN set_config('statement_timeout', $5::text, true) END, \
+                CASE WHEN $6::text IS NOT NULL \
+                  THEN set_config('idle_in_transaction_session_timeout', $6::text, true) END \
          FROM probe",
     )
     .bind(db.tenant_role())
     .bind(maintenance)
     .bind(SEARCH_PATH)
+    .bind(timeouts.map(|t| millis(t.lock)))
+    .bind(timeouts.map(|t| millis(t.statement)))
+    .bind(timeouts.map(|t| millis(t.idle)))
     .fetch_one(&mut *tx)
     .await?;
     let runs_exempt = if assumable {
@@ -218,7 +302,7 @@ pub(crate) mod tests {
     async fn a_held_connection_begins_as_the_tenant_role_without_the_marker(pool: PgPool) {
         let db = Db::from_pool(pool);
         let mut conn = Held::acquire(&db).await.unwrap();
-        let mut tx = conn.begin(&db).await.unwrap();
+        let mut tx = conn.begin(&db, Some(LOOKUP_TIMEOUTS)).await.unwrap();
         assert_eq!(
             role_and_marker(&mut tx).await,
             (db.tenant_role().to_string(), String::new())
@@ -228,6 +312,81 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(path, SEARCH_PATH);
+    }
+
+    /// Timeouts distinct from each other and from any default, so a mix-up
+    /// between the three shows.
+    const LOOKUP_TIMEOUTS: Timeouts = Timeouts {
+        lock: Duration::from_millis(250),
+        statement: Duration::from_millis(750),
+        idle: Duration::from_millis(1500),
+    };
+
+    /// `lock_timeout`, `statement_timeout`, and
+    /// `idle_in_transaction_session_timeout` inside `tx`.
+    async fn timeouts(tx: &mut Transaction<'_, Postgres>) -> (String, String, String) {
+        sqlx::query_as(
+            "SELECT current_setting('lock_timeout'), current_setting('statement_timeout'), \
+                    current_setting('idle_in_transaction_session_timeout')",
+        )
+        .fetch_one(&mut **tx)
+        .await
+        .unwrap()
+    }
+
+    /// A bound under a millisecond rounds up rather than down to `0`, which
+    /// Postgres reads as "no timeout".
+    #[test]
+    fn a_sub_millisecond_bound_never_switches_the_timeout_off() {
+        assert_eq!(millis(Duration::ZERO), "1ms");
+        assert_eq!(millis(Duration::from_micros(1)), "1ms");
+        assert_eq!(millis(Duration::from_micros(1500)), "2ms");
+        assert_eq!(millis(Duration::from_millis(500)), "500ms");
+        assert_eq!(millis(Duration::MAX), format!("{}ms", i32::MAX));
+    }
+
+    fn unset() -> (String, String, String) {
+        ("0".into(), "0".into(), "0".into())
+    }
+
+    /// A held transaction begun with timeouts runs under them, and they end
+    /// with it: the next transaction on the same connection is back to the
+    /// defaults (#130).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn a_held_connection_sets_the_lookup_timeouts(pool: PgPool) {
+        // One connection, so the plain `begin` below reuses the held one.
+        let one = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with(pool.connect_options().as_ref().clone())
+            .await
+            .unwrap();
+        let db = Db::from_pool(one);
+        let mut conn = Held::acquire(&db).await.unwrap();
+        let mut tx = conn.begin(&db, Some(LOOKUP_TIMEOUTS)).await.unwrap();
+        assert_eq!(
+            timeouts(&mut tx).await,
+            ("250ms".into(), "750ms".into(), "1500ms".into())
+        );
+        tx.commit().await.unwrap();
+        assert!(conn.release(Duration::from_secs(5)).await);
+        let mut tx = begin(&db).await.unwrap();
+        assert_eq!(timeouts(&mut tx).await, unset());
+        tx.rollback().await.unwrap();
+        db.pool().close().await;
+    }
+
+    /// Every other unpinned and maintenance transaction leaves the timeouts
+    /// alone (#130).
+    #[sqlx::test(migrator = "crate::MIGRATOR")]
+    async fn begin_leaves_the_timeouts_alone(pool: PgPool) {
+        let db = Db::from_pool(pool);
+        let mut tx = begin(&db).await.unwrap();
+        assert_eq!(timeouts(&mut tx).await, unset());
+        let mut tx = begin_as_tenant_role(&db, true).await.unwrap();
+        assert_eq!(timeouts(&mut tx).await, unset());
+        let mut conn = Held::acquire(&db).await.unwrap();
+        let mut tx = conn.begin(&db, None).await.unwrap();
+        assert_eq!(timeouts(&mut tx).await, unset());
     }
 
     /// Every unpinned transaction resolves names in `public` only (#97).
