@@ -58,9 +58,11 @@
 - **Bump cadence: a separate, small PR after any merge that changes SDK code or a guide's claims
   about SDK behavior**, not the same PR (the correction above). The constant's doc comment says so.
   Staleness costs consumers only the newer SDK behavior; it never points them at unreviewed code.
-- **No CI ancestry check.** CI checks out one commit shallowly, so `git merge-base --is-ancestor`
-  cannot run there, and a workflow change would add a required check to a ruleset that has none.
-  Tests instead enforce shape (40 lowercase hex) and agreement (every copy equals the constant).
+- **No CI ancestry check.** The `migrations-append-only` job already fetches full history, so
+  `git merge-base --is-ancestor` could run there, but the ticket allows a documented step, a check
+  adds a workflow change to a docs-and-content PR, and the failure it would catch (a well-formed SHA
+  that is not on `main`) shows up at once in the recipe's verify step. Tests instead enforce shape
+  (40 lowercase hex) and agreement (every copy equals the constant).
 - **No attribution, no registry language** in any new text (existing hygiene tests enforce the
   second).
 - Run Profile values read from `CLAUDE.md`, none assumed.
