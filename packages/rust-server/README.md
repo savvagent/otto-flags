@@ -324,7 +324,7 @@ background and drops a changed flag's cached results as soon as the change arriv
 does not wait for `cache_ttl`. The stream connects when the client is created inside a Tokio
 runtime, otherwise on the first `evaluate`; it never delays or fails a lookup. While it is down,
 `cache_ttl` bounds how stale a result can be, as without it. It reconnects with exponential backoff
-(1 second up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every
+(about 1 second up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every
 connection, since changes may have been missed. Clones of a client share one stream. Turn it off
 with `with_realtime(false)`.
 
