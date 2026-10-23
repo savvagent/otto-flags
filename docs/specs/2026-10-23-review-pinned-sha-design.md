@@ -1,6 +1,6 @@
 # Tell agents to review the pinned SHA in the SDK guides and note install-script behavior
 
-**Status:** IMPLEMENTED (#PR)
+**Status:** IMPLEMENTED (#176)
 **Ticket:** savvagent/otto-flags#156 (follow-up to #153)
 
 ## Brief
@@ -34,10 +34,16 @@ the install routes.
 
 - One sentence, identical in all 17 guides, `AGENTS.md` and `llms.txt`, so a test can assert it
   verbatim (after whitespace normalisation, since Markdown is hard-wrapped).
+- The sentence also says the SHA must be a commit on `main` of `savvagent/otto-flags`, because a
+  host serves any commit in a fork network by SHA, so a SHA from elsewhere can name a fork's code.
+  The old "(or another one you have checked)" is gone: "you" is the agent, and it read as
+  permission to skip the person.
 - `--ignore-scripts` verification: on a fresh clone, `pnpm install --frozen-lockfile
   --ignore-scripts`, then `pnpm --filter <pkg> build` and `pack` succeeded for all eleven packages
   the guides name (`sdk`, `react`, `vue`, `svelte`, `solid`, `angular`, `astro`, `nextjs`, `remix`,
-  `sveltekit`, `node-server`) with pnpm 10.21. So the flag is suggested in every JS guide.
+  `sveltekit`, `node-server`) with pnpm 10.21 (which skips dependency scripts anyway, so that run
+  shows none is needed; none of these packages has a `preinstall`, `install`, `postinstall` or
+  `prepare` script of its own either). So the flag is suggested in every JS guide.
 - The JS guides keep one install command; the install-scripts paragraph goes right before the
   code block that contains it.
 - The sentence is advice to the agent, not a mechanism: nothing enforces that a person approves.
