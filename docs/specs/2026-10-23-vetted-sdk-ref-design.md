@@ -88,7 +88,7 @@ In: `crates/flags-mcp/src/guide.rs` (constant, placeholder, tests), the 17 files
 `llms.txt`, `AGENTS.md`, the `sdk_guide` tool description in `crates/flags-mcp/src/tools/guide.rs`
 if it needs a word changed.
 
-Out: publishing, tags, a CI workflow, the key handoff, SDK code, `packages/*/README.md`.
+Out: publishing, tags, a CI workflow, the key handoff, SDK code, `packages/*/README.md` (`packages/python-server/README.md` still says `<commit>`; a known leftover).
 
 ## Architecture
 
@@ -134,8 +134,8 @@ None. No secret, scope, config key or registration. The change redeploys server 
 
 All in `crates/flags-mcp/src/guide.rs` unit tests, run with the `test` gate. New tests:
 `sdk_ref_is_a_full_lowercase_sha`, `every_rendering_pins_the_sdk_ref` (all languages, with and
-without an app), `no_guide_asks_a_person_to_approve_a_sha`, and
-`agents_md_and_llms_txt_pin_the_sdk_ref`. Replaced: the two `REVIEW_SHA` tests. Updated:
+without an app), `no_guide_asks_a_person_to_approve_a_sha_or_to_find_one`, and
+`agents_md_and_llms_txt_pin_the_sdk_ref`; the server's e2e test of the rendered python guide asserts the ref instead of `<commit>`. Replaced: the two `REVIEW_SHA` tests. Updated:
 `every_guide_has_the_commit_pin_and_the_standard_sections` and the install-line checks
 (`<commit>` becomes `{{SDK_REF}}` in raw guide text). The server's `/llms.txt` test compares the
 served body to `LLMS_TXT`, so it follows the file.

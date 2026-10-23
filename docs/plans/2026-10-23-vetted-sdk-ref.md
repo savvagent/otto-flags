@@ -78,29 +78,15 @@ their agreement test. Each task ends with every gate that applies passing.
             "SDK_REF must be lowercase hex: {SDK_REF}"
         );
     }
-
-    #[test]
-    fn the_sdk_ref_placeholder_is_filled_whatever_the_app() {
-        let app = sample_app();
-        for l in LANGUAGES {
-            for app in [None, Some(&app)] {
-                let text = render(l.name, app).unwrap().1;
-                assert!(!text.contains("{{SDK_REF}}"), "{}: unfilled", l.name);
-            }
-        }
-        // Proves the replacement itself, independent of what the guides contain: the
-        // placeholder sits in the recipe/guide join only through `render`.
-        let injected = "pin {{SDK_REF}}".replace("{{SDK_REF}}", SDK_REF);
-        assert!(injected.ends_with(SDK_REF));
-    }
 ```
 
-(The second test's `injected` assertion is a smoke check of the substitution call shape; Task 2's
-`every_rendering_pins_the_sdk_ref` is the end-to-end proof.)
+(The substitution itself is proven end to end by Task 2's `every_rendering_pins_the_sdk_ref`; until
+then `render`'s new `.replace` has no placeholder to act on, and the existing
+`placeholders_are_filled_from_the_app_or_left_as_angle_brackets` guards against a stray `{{`.)
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide::tests::sdk_ref`
+Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide::tests::sdk_ref_is_a_full_lowercase_sha`
 Expected: FAIL to compile (`SDK_REF` not found).
 
 - [ ] **Step 3: Implement**
@@ -159,6 +145,7 @@ Fixes #184"
 **Files:**
 - Modify: all 17 files in `crates/flags-mcp/content/guides/` (android, angular, astro, go, ios, java, nextjs, node, python, react, remix, rust, solid, svelte, sveltekit, typescript, vue)
 - Modify: `crates/flags-mcp/src/guide.rs` (tests)
+- Modify: `crates/flags-server/tests/e2e.rs` (line ~1704, `sdk_guide_renders_a_guide_and_personalizes_it_with_the_apps_public_key`)
 
 **Interfaces:** consumes `SDK_REF` and the placeholder from Task 1.
 
@@ -219,7 +206,14 @@ elsewhere). Add:
 In `install_line_problems`, the install-route tests and the `MANIFESTS` table, replace every
 `<commit>` with `{{SDK_REF}}` (lines near 690, 708, 780, 786, 996-1005, 1034, 1065-1070 of the
 current file; use `grep -n '<commit>' crates/flags-mcp/src/guide.rs` and change them all, including
-the `agents_md_points_agents_at_the_guide` needle list which is handled in Task 3, so leave that one).
+all of them except the `"<commit>"` needle in `agents_md_points_agents_at_the_guide`, which Task 3 removes). After this step `grep -n '<commit>' crates/flags-mcp/src/guide.rs` must list only that needle.
+
+In `crates/flags-server/tests/e2e.rs`, replace the assertion `assert!(text.contains("<commit>"), "{text}");` (python guide, near line 1704) with:
+
+```rust
+    assert!(text.contains(flags_mcp::guide::SDK_REF), "{text}");
+    assert!(!text.contains("<commit>"), "{text}");
+```
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -254,12 +248,14 @@ pip install "otto-flags @ git+https://github.com/savvagent/otto-flags@{{SDK_REF}
 Worked example (node.md, which continues the sentence): the paragraph becomes the pin paragraph
 above, then a new sentence `Build and pack each package in dependency order (\`@otto-flags/sdk\`, \`@otto-flags/node-server\`), because ...` unchanged from the existing text.
 
+Placement differs by guide: in `android.md` and `java.md` the `Find the current tip of `main`` sentence sits mid-line after the Maven-local/Gradle sentence and wraps onto the next line; in `rust.md` keep the full stop of the sentence before it. The rule's result is the same in every guide.
+
 Leave the pnpm install-scripts paragraph and every `--ignore-scripts` line unchanged. Keep
 Markdown hard-wrapped near 100 columns like the surrounding text.
 
 - [ ] **Step 4: Run to verify they pass**
 
-Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide`
+Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`, then `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all -- --check`.
 Expected: PASS (none skipped), including `js_guides_skip_dependency_install_scripts_and_say_why`,
 `no_guide_mentions_a_registry`, `every_rendering_pins_the_sdk_ref`. Also run
 `grep -rn '<commit>' crates/flags-mcp/content/guides` (expect no output) and read the rendered Install
@@ -268,7 +264,7 @@ section of three guides (`python`, `node`, `go`) to confirm they read naturally.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/flags-mcp/src/guide.rs crates/flags-mcp/content/guides
+git add crates/flags-mcp/src/guide.rs crates/flags-mcp/content/guides crates/flags-server/tests/e2e.rs
 git commit -m "feat(mcp): pin every sdk guide to the maintainer-chosen ref
 
 An agent no longer picks a SHA and asks the developer to approve it; the guide
