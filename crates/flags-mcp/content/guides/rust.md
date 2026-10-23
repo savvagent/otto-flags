@@ -55,8 +55,9 @@ neither of the two key prefixes fails there, so a misconfigured deploy stops at 
 
 Other `Config` builders, all optional: `with_base_url` (default `https://otto-flags.savvagent.com`,
 use `https`), `with_cache_ttl` (default 60 seconds), `with_timeout` (default 5 seconds),
-`with_failure_cooldown` (default 5 seconds), `with_telemetry` (default on) and `with_default` (flag
-key to the value served when evaluation fails).
+`with_failure_cooldown` (default 5 seconds), `with_telemetry` (default on), `with_realtime`
+(default on, see below) and `with_default` (flag key to the value served when evaluation
+fails).
 
 ## Evaluate a flag
 
@@ -96,6 +97,17 @@ if let Err(e) = charge(&order).await {
 Call `client.flush().await` before the process exits, or the last few seconds of telemetry are
 lost. `invalidate_cache(Some("flag-key"))` drops a flag's cached results; `invalidate_cache(None)`
 drops them all.
+
+## Real-time updates
+
+Real-time updates are on by default. The client reads the server's flag-change stream in the
+background and drops a changed flag's cached results as soon as the change arrives, so a kill switch
+does not wait for `cache_ttl`. The stream connects when the client is created inside a Tokio
+runtime, otherwise on the first `evaluate`; it never delays or fails a lookup. While it is down,
+`cache_ttl` bounds how stale a result can be, as without it. It reconnects with exponential backoff
+(about 1 second up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every
+connection, since changes may have been missed. Clones of a client share one stream. Turn it off
+with `with_realtime(false)`.
 
 ## Frameworks
 

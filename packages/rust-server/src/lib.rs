@@ -5,6 +5,8 @@
 //! ## Features
 //!
 //! - 🚀 **Fast Evaluation**: Thread-safe in-memory caching with configurable TTL
+//! - 📡 **Real-time updates**: a flag change reaches the cache over the server's event stream
+//!   (`Config::with_realtime`, on by default) instead of waiting for the TTL
 //! - 📊 **Telemetry**: Evaluation counts and reported errors, batched (`FlagClient::track_error`,
 //!   `FlagClient::flush`)
 //! - 🤖 **AI Error Detection**: Correlate errors with flag changes
@@ -49,6 +51,7 @@
 mod backoff;
 mod cache;
 mod client;
+mod realtime;
 mod telemetry;
 mod types;
 

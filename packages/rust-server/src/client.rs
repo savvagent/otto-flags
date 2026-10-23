@@ -1,5 +1,6 @@
 use crate::backoff::{parse_retry_after, Backoff, Scope};
 use crate::cache::{context_key, Cache};
+use crate::realtime::{stream_url, Realtime, StreamTarget, IDLE_TIMEOUT};
 use crate::telemetry::Telemetry;
 use crate::types::{
     Config, ConfigOverrideEntry, ConfigOverrideOptions, Context, ErrorReport, EvaluationResult,
@@ -136,6 +137,8 @@ pub struct FlagClient {
     cache: Cache,
     backoff: Backoff,
     telemetry: Telemetry,
+    realtime: Realtime,
+    stream: Option<StreamTarget>,
     config_overrides: Arc<RwLock<HashMap<String, ConfigOverrideEntry>>>,
     variation_overrides: Arc<RwLock<HashMap<String, VariationOverrideEntry>>>,
 }
@@ -176,6 +179,37 @@ impl FlagClient {
             config.enable_telemetry,
         );
 
+        // The stream is one long-lived response: it gets a connect timeout but no total one.
+        let stream = if config.enable_realtime {
+            let http = HttpClient::builder()
+                .connect_timeout(config.timeout)
+                // A redirect is a refused attempt, not a reason to send the key elsewhere.
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(OttoFlagsError::RequestFailed)?;
+            match stream_url(&config.base_url) {
+                Some(url) => Some(StreamTarget {
+                    cache: cache.clone(),
+                    http,
+                    url,
+                    api_key: config.api_key.clone(),
+                    header_timeout: IDLE_TIMEOUT,
+                }),
+                None => {
+                    tracing::warn!(
+                        "Otto Flags: base_url is not a valid URL; real-time updates are off"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let realtime = Realtime::new();
+        if let Some(target) = &stream {
+            realtime.ensure_started(target);
+        }
+
         tracing::info!("Otto Flags FlagClient initialized");
 
         Ok(Self {
@@ -184,6 +218,8 @@ impl FlagClient {
             cache,
             backoff,
             telemetry,
+            realtime,
+            stream,
             config_overrides: Arc::new(RwLock::new(HashMap::new())),
             variation_overrides: Arc::new(RwLock::new(HashMap::new())),
         })
@@ -222,6 +258,12 @@ impl FlagClient {
                 flag_key.len()
             );
             return self.get_default_result(flag_key);
+        }
+
+        // Starts the stream task on the first lookup inside a runtime (a client built outside
+        // one has none yet); afterwards this is one atomic load.
+        if let Some(target) = &self.stream {
+            self.realtime.ensure_started(target);
         }
 
         // Prepare context: the cache key and the request body use the same one.

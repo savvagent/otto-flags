@@ -9,6 +9,7 @@ Official Rust Server SDK for Otto Flags - AI-powered feature flags with automati
 - 🤖 **AI Error Detection**: Correlate errors with flag changes
 - 📦 **Type Safe**: Full Rust type safety with comprehensive documentation
 - 🌐 **Server-Optimized**: Built specifically for Rust server environments
+- 📡 **Real-time updates**: a flag change drops its cached results over the server's event stream
 - ⚡ **High Performance**: Async/await with Tokio runtime
 - 🔒 **Memory Safe**: Zero-cost abstractions with Rust's ownership system
 
@@ -308,12 +309,24 @@ let config = Config::new("srv_key")  // or "sdk_key"
     .with_timeout(Duration::from_secs(5))
     .with_failure_cooldown(Duration::from_secs(5)) // the default
     .with_telemetry(true)             // the default
+    .with_realtime(true)              // the default; false opens no stream
     .with_default("flag", false);
 ```
 
 Results are cached for `cache_ttl` per flag key and evaluation context: a different context
 (another user, other attributes) is evaluated by the server, and `invalidate_cache(Some(key))`
 drops a flag's cached results for every context.
+
+#### Real-time updates
+
+Real-time updates are on by default. The client reads the server's flag-change stream in the
+background and drops a changed flag's cached results as soon as the change arrives, so a kill switch
+does not wait for `cache_ttl`. The stream connects when the client is created inside a Tokio
+runtime, otherwise on the first `evaluate`; it never delays or fails a lookup. While it is down,
+`cache_ttl` bounds how stale a result can be, as without it. It reconnects with exponential backoff
+(about 1 second up to 30 seconds, 5 minutes if the key is rejected) and drops the whole cache on every
+connection, since changes may have been missed. Clones of a client share one stream. Turn it off
+with `with_realtime(false)`.
 
 #### Context
 
