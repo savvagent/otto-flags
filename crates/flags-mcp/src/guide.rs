@@ -1,7 +1,7 @@
 //! Per-language guides for consuming the otto-flags SDKs, rendered for the `sdk_guide` tool.
 //!
 //! Content is Markdown under `content/guides/`, compiled in. Static: nothing here reads a
-//! database or the network. Install routes are commit-pinned source routes (`<commit>`); no
+//! database or the network. Install routes are commit-pinned source routes (`{{SDK_REF}}`); no
 //! guide may mention a registry or publication, which `tests::no_guide_mentions_a_registry`
 //! enforces.
 //!
@@ -10,7 +10,7 @@
 //! carries a key step that differs by SDK: a server-key SDK stops for the person to store the
 //! key, a client-key SDK has nothing to hand off (see [`Lang::server_key`]).
 //!
-//! A guide or the recipe may carry four placeholders, filled from the app the caller names or,
+//! A guide or the recipe may carry five placeholders, filled from the app the caller names or,
 //! without one, left as angle-bracket placeholders a human fills in:
 //!
 //! | Placeholder        | From an app          | Without one      |
@@ -19,6 +19,7 @@
 //! | `{{APP_ID}}`       | `FlagApp.id`         | `<app-id>`       |
 //! | `{{CLIENT_KEY}}`   | `FlagApp.client_key` | `<client-key>`   |
 //! | `{{ENVIRONMENTS}}` | `FlagApp.environments`, each in backticks | `<environments>` |
+//! | `{{SDK_REF}}`      | [`SDK_REF`]          | [`SDK_REF`]      |
 //!
 //! Only the public client key is ever substituted. A server key is shown once by `create_app`
 //! or `rotate_app_keys` and is never stored in clear, so no guide can contain one; guides name
@@ -206,6 +207,16 @@ fn environments_text(app: Option<&FlagApp>) -> String {
     }
 }
 
+/// The commit of `savvagent/otto-flags` every SDK install in the guides, `AGENTS.md` and
+/// `llms.txt` is pinned to, so a consuming developer does not have to review a SHA an agent
+/// picked: the maintainers choose it here, once.
+///
+/// It must be a full 40-character lowercase commit SHA already on `main`. A PR cannot name its own
+/// squash-merge commit, so bump it in a separate small PR after a merge that changes SDK code or a
+/// guide's claims about SDK behavior. Bumping means changing this constant and the literal copies
+/// in `AGENTS.md` and both `llms.txt` files; the tests fail until all agree.
+pub const SDK_REF: &str = "4c5afb7f5efabfbf32dad22e6252aa6f26e59a66";
+
 /// Renders the guide for `language`, filled from `app` when given, below the integration recipe.
 ///
 /// The app's name and environments are checked again here, whatever wrote them: they land in
@@ -249,7 +260,8 @@ pub fn render(language: &str, app: Option<&FlagApp>) -> Result<(&'static str, St
         .replace("{{APP_NAME}}", &name)
         .replace("{{APP_ID}}", &id)
         .replace("{{CLIENT_KEY}}", &key)
-        .replace("{{ENVIRONMENTS}}", &environments_text(app));
+        .replace("{{ENVIRONMENTS}}", &environments_text(app))
+        .replace("{{SDK_REF}}", SDK_REF);
     Ok((lang.name, text))
 }
 
@@ -395,6 +407,17 @@ mod tests {
                 assert!(!text.contains("srv_"), "{}", l.name);
             }
         }
+    }
+
+    #[test]
+    fn sdk_ref_is_a_full_lowercase_sha() {
+        assert_eq!(SDK_REF.len(), 40, "SDK_REF must be a full 40-character SHA");
+        assert!(
+            SDK_REF
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "SDK_REF must be lowercase hex: {SDK_REF}"
+        );
     }
 
     #[test]
