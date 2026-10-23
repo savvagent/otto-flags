@@ -81,6 +81,10 @@ start-up, not per request. Other `FlagClientConfig` fields, all optional: `baseU
 `timeout` (request timeout in milliseconds, default 5000), `defaults` (flag key to the value served
 when evaluation fails) and `onError` (receives SDK errors).
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Pass a context describing who the evaluation is for. Percentage rollouts bucket on `user_id` (or

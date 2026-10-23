@@ -73,6 +73,10 @@ Other `OttoFlagsConfig` parameters, all optional: `apiUrl` (default
 `enableWebSocket` (default `true`), `timeout` (milliseconds, default 30000) and `enableLogging`
 (default `false`). Call `client.close()` when the app no longer needs the client.
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Describe the user with a `UserContext`. Percentage rollouts bucket on `userId`, so pass a stable

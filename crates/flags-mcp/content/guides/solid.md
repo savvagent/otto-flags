@@ -82,6 +82,10 @@ default 60000), `enableTelemetry` (default `true`), `defaults` and `onError`. `d
 applies to every evaluation: `applicationId`, `environment`, `organizationId`, `userId`,
 `anonymousId`, `sessionId`, `language` and `attributes`.
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 ```tsx

@@ -82,6 +82,10 @@ applies to every evaluation: `applicationId`, `environment`, `organizationId`, `
 `anonymousId`, `sessionId`, `language` and `attributes`. Without the plugin, call
 `provideOttoFlags(config, defaultContext)` in a root component's `setup`.
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 ```vue

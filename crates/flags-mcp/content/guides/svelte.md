@@ -82,6 +82,10 @@ Repeat calls are ignored.
 (default `true`), `defaults` and `onError`. `defaultContext` applies to every evaluation:
 `environment`, `userId`, `organizationId`, `anonymousId`, `sessionId`, `language` and `attributes`.
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 ```svelte

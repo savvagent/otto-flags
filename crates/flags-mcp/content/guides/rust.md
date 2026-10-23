@@ -63,6 +63,10 @@ fails), `with_default_env` (the same default, read once from an environment vari
 `NEW_CHECKOUT=true`, for a service moving off env-var flags) and `with_default_fn` (the same, from
 a closure that returns `Option<bool>`).
 
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Pass an optional `Context` describing who the evaluation is for. Percentage rollouts bucket on the
