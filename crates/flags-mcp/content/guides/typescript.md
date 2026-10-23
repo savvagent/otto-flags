@@ -80,6 +80,10 @@ default logs to the console), `defaultLanguage`, `disableLanguageDetection`, `re
 (default 3), `retryDelay` (milliseconds, default 1000) and `retryBackoff` (`"linear"` or
 `"exponential"`, the default).
 
+**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
+context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
+its own configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Pass a context describing who the evaluation is for. Percentage rollouts bucket on `user_id` (or

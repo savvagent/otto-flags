@@ -64,6 +64,10 @@ Other `OttoFlagsConfig` parameters, all optional: `apiUrl` (default
 (default `true`) and `timeout` (seconds, default 30). Call `client.close()` when the app no longer
 needs the client.
 
+**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
+context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
+its own configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Describe the user with a `UserContext`. Percentage rollouts bucket on `userId`, so pass a stable

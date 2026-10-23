@@ -365,6 +365,18 @@ Both payloads take an optional `environment` per event (or `context.environment`
 evaluation counts toward `production`; an error is stored without one, which auto-rollback counts
 toward `production` and `flag_health` counts in every environment.
 
+#### What is billed
+
+Billing counts evaluations per app and hour, at the larger of two numbers: the evaluations the
+server answered (successful responses from `POST /api/flags/{key}/evaluate`, for either key kind)
+and the evaluation events accepted from telemetry sent with the **server** key. A server SDK's
+telemetry includes the evaluations it answered from its cache or locally, so with telemetry on
+(the default) a flag on a hot path counts even when it is served from the cache; with telemetry off
+only the server-answered ones count. Reports sent with the public client key are never billed, and
+`GET /api/sdk/flags`, the SSE stream and the MCP `evaluate_flag` tool are not counted. The free
+allowance is set on the platform and is not recorded in this repository: the `usage` MCP tool shows
+this month's meters, the budget and any block. A blocked organization's evaluations keep serving.
+
 #### Track Evaluations
 
 **Endpoint:** `POST /api/telemetry/evaluations`

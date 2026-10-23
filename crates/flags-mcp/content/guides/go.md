@@ -58,6 +58,10 @@ Other `Config` fields, all optional: `BaseURL` (default `https://otto-flags.savv
 below), and `Defaults` (flag key to the value served when evaluation fails). `OnError`
 defaults to printing to standard output, so set it.
 
+**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
+context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
+its own configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Pass a `*ottoflags.Context` describing who the evaluation is for. Percentage rollouts bucket on

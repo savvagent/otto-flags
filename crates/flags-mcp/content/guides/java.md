@@ -84,6 +84,10 @@ works too. Other builder methods, all optional: `baseUrl` (default
 (milliseconds, default 5000), `enableRealtime` (default on, see below) and `defaults` (flag key to
 the value served when evaluation fails).
 
+**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
+context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
+its own configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 Pass a `FlagContext` describing who the evaluation is for. Percentage rollouts bucket on the user id

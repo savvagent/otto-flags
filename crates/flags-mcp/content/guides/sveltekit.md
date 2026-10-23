@@ -99,6 +99,10 @@ The config takes the core client's fields: `baseUrl` (default `https://otto-flag
 `environment` (default `"production"`), `enableRealtime` (default `true`), `cacheTtl` (milliseconds,
 default 60000), `enableTelemetry` (default `true`), `defaults` and `onError`.
 
+**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
+context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
+its own configuration instead of hardcoding it.
+
 ## Evaluate a flag
 
 In a load function (server side):

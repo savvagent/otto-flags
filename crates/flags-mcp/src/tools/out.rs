@@ -201,10 +201,23 @@ pub struct SdkGuideOut {
     pub language: String,
     /// The guide, in Markdown.
     pub guide: String,
-    /// The app the guide was filled in from, when one was named.
+    /// The app the guide was filled in from: the one named, or the organization's only app.
     pub app: Option<GuideApp>,
+    /// True when no app was named and `app` is the organization's only app.
+    pub app_defaulted: bool,
+    /// When no app was named and the organization has several, those apps (up to 50): call
+    /// `sdk_guide` again with one of them as `app`. Empty otherwise.
+    pub choose_from: Vec<GuideAppRef>,
     /// Every language with a guide.
     pub supported: Vec<String>,
+}
+
+/// An app to choose from, when `sdk_guide` was called without one.
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideAppRef {
+    pub name: String,
+    pub id: FlagAppId,
 }
 
 /// The app a guide was filled in from. Only its public client key: a server

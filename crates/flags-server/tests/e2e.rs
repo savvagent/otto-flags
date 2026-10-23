@@ -1692,16 +1692,21 @@ async fn sdk_guide_renders_a_guide_and_personalizes_it_with_the_apps_public_key(
         &["flags:read"],
     );
 
-    // No app: placeholders stay, and nothing names a server key.
+    // No app named, and the organization has exactly one: it is used, and the result says so.
+    // Nothing names a server key.
     let plain = tool(&s.app, &reader, "sdk_guide", json!({"language": "python"}))
         .await
         .unwrap();
     assert_eq!(plain["language"], "python", "{plain}");
     let text = plain["guide"].as_str().unwrap();
+    assert!(text.starts_with("# Integrate end to end"), "{text}");
     assert!(text.contains("otto_flags"), "{text}");
     assert!(text.contains("<commit>"), "{text}");
     assert!(!plain.to_string().contains("srv_"), "{plain}");
-    assert!(plain["app"].is_null(), "{plain}");
+    assert_eq!(plain["app"]["name"], "web", "{plain}");
+    assert_eq!(plain["appDefaulted"], true, "{plain}");
+    assert_eq!(plain["chooseFrom"], json!([]), "{plain}");
+    assert!(text.contains("`production`, `staging`"), "{text}");
     let supported: Vec<&str> = plain["supported"]
         .as_array()
         .unwrap()
@@ -1723,6 +1728,7 @@ async fn sdk_guide_renders_a_guide_and_personalizes_it_with_the_apps_public_key(
     .unwrap();
     assert_eq!(named["language"], "python", "{named}");
     assert_eq!(named["app"]["name"], "web", "{named}");
+    assert_eq!(named["appDefaulted"], false, "{named}");
     assert_eq!(named["app"]["id"], app_id.as_str(), "{named}");
     assert_eq!(named["app"]["clientKey"], client_key.as_str(), "{named}");
     let text = named["guide"].as_str().unwrap();
@@ -1778,6 +1784,81 @@ async fn sdk_guide_renders_a_guide_and_personalizes_it_with_the_apps_public_key(
     .await
     .unwrap();
     assert_eq!(rows, vec![("sdk_guide".to_string(), false, 2)]);
+}
+
+/// With no `app`, `sdk_guide` uses the organization's only app, lists its apps when it has
+/// several so the agent can choose and call again, and leaves placeholders when it has none.
+/// Every result starts with the integration recipe, and the app's environments fill the guide.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn sdk_guide_without_an_app_defaults_to_the_only_app_or_lists_the_choices(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool.clone(), &url).await;
+
+    // No apps: the placeholders stay and nothing is offered.
+    let empty_org = Uuid::new_v4();
+    let owner = token(
+        &platform,
+        empty_org,
+        Uuid::new_v4(),
+        Role::Owner,
+        flags_core::scopes::KNOWN,
+    );
+    let none = tool(&s.app, &owner, "sdk_guide", json!({"language": "go"}))
+        .await
+        .unwrap();
+    assert!(none["app"].is_null(), "{none}");
+    assert_eq!(none["appDefaulted"], false, "{none}");
+    assert_eq!(none["chooseFrom"], json!([]), "{none}");
+    let text = none["guide"].as_str().unwrap();
+    assert!(text.starts_with("# Integrate end to end"), "{text}");
+    assert!(
+        text.contains("<app-id>") && text.contains("<environments>"),
+        "{text}"
+    );
+    assert!(text.contains("Hand off the server key"), "{text}");
+
+    // Several apps: none is guessed, and each is offered by name and id, in name order.
+    let web = tool(&s.app, &owner, "create_app", json!({"name": "web"}))
+        .await
+        .unwrap();
+    let api = tool(
+        &s.app,
+        &owner,
+        "create_app",
+        json!({"name": "api", "environments": ["production", "staging", "dev"]}),
+    )
+    .await
+    .unwrap();
+    let many = tool(&s.app, &owner, "sdk_guide", json!({"language": "react"}))
+        .await
+        .unwrap();
+    assert!(many["app"].is_null(), "{many}");
+    assert_eq!(many["appDefaulted"], false, "{many}");
+    let offered = many["chooseFrom"].as_array().unwrap();
+    assert_eq!(offered.len(), 2, "{many}");
+    assert_eq!(offered[0]["name"], "api", "{many}");
+    assert_eq!(offered[0]["id"], api["app"]["id"], "{many}");
+    assert_eq!(offered[1]["name"], "web", "{many}");
+    assert_eq!(offered[1]["id"], web["app"]["id"], "{many}");
+    let text = many["guide"].as_str().unwrap();
+    assert!(text.contains("<environments>"), "{text}");
+    assert!(text.contains("needs no handoff"), "{text}");
+    assert!(!many.to_string().contains("srv_"), "{many}");
+
+    // Choosing one fills the guide with its own environments.
+    let chosen = tool(
+        &s.app,
+        &owner,
+        "sdk_guide",
+        json!({"language": "react", "app": "api"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(chosen["app"]["name"], "api", "{chosen}");
+    assert_eq!(chosen["chooseFrom"], json!([]), "{chosen}");
+    let text = chosen["guide"].as_str().unwrap();
+    assert!(text.contains("`production`, `staging`, `dev`"), "{text}");
+    assert!(!text.contains("<environments>"), "{text}");
 }
 
 /// Every tool is free: setting a policy records a row with `billable = false`
