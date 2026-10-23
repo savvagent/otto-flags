@@ -1,5 +1,3 @@
-// Nothing outside the tests uses the module until the client starts it.
-#![cfg_attr(not(test), allow(dead_code))]
 //! The flag-change stream, `GET /api/flags/stream` (`docs/SDK-DEVELOPER-GUIDE.md`, Real-time Updates),
 //! which invalidates cached evaluations so a flag change, a kill switch above all, reaches the
 //! client in about a round trip instead of after the cache TTL (#167).
@@ -186,26 +184,45 @@ fn changed_flag_key(data: &str) -> Option<String> {
 }
 
 /// Apply one event to the cache. `heartbeat` and events this SDK does not know are ignored.
-fn handle(cache: &Cache, event: &SseEvent) {
+/// What an event does to the cache.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Invalidation {
+    All,
+    Flag(String),
+}
+
+/// `None` for an event that changes nothing: a heartbeat, an unknown event, or a `flag.*` event
+/// without a usable flag key.
+pub(crate) fn invalidation_for(event: &SseEvent) -> Option<Invalidation> {
     match event.event.as_str() {
-        "connected" => cache.invalidate(None),
-        "flag.created" | "flag.updated" | "flag.deleted" => match changed_flag_key(&event.data) {
-            Some(key) => cache.invalidate(Some(&key)),
-            None => tracing::debug!(
-                "Otto Flags stream: {} event without a valid flag key skipped: {:?}",
-                event.event,
-                event
-                    .data
-                    .chars()
-                    .take(LOGGED_DATA_CHARS)
-                    .collect::<String>()
-            ),
-        },
-        _ => {}
+        "connected" => Some(Invalidation::All),
+        "flag.created" | "flag.updated" | "flag.deleted" => {
+            let key = changed_flag_key(&event.data);
+            if key.is_none() {
+                tracing::debug!(
+                    "Otto Flags stream: {} event without a valid flag key skipped: {:?}",
+                    event.event,
+                    event
+                        .data
+                        .chars()
+                        .take(LOGGED_DATA_CHARS)
+                        .collect::<String>()
+                );
+            }
+            key.map(Invalidation::Flag)
+        }
+        _ => None,
     }
 }
 
-/// What the stream task needs to connect, cloned into it when it starts.
+fn handle(cache: &Cache, event: &SseEvent) {
+    match invalidation_for(event) {
+        Some(Invalidation::All) => cache.invalidate(None),
+        Some(Invalidation::Flag(key)) => cache.invalidate(Some(&key)),
+        None => {}
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct StreamTarget {
     /// The cache the events invalidate.
@@ -592,6 +609,19 @@ mod tests {
         }
         assert!(cached(&cache, "a"));
         assert_eq!(cache.generation("a"), before);
+    }
+
+    #[test]
+    fn invalidation_for_maps_events_to_cache_actions() {
+        let of = |name, data| invalidation_for(&event(name, data));
+        assert_eq!(of("connected", "{}"), Some(Invalidation::All));
+        assert_eq!(
+            of("flag.created", r#"{"key":"f"}"#),
+            Some(Invalidation::Flag("f".to_string()))
+        );
+        assert_eq!(of("flag.updated", r#"{"key":"a/b"}"#), None);
+        assert_eq!(of("flag.updated", "not json"), None);
+        assert_eq!(of("heartbeat", "{}"), None);
     }
 
     fn target(url: &str) -> StreamTarget {

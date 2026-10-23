@@ -99,6 +99,12 @@ impl Config {
         self
     }
 
+    /// Turn real-time flag updates (the flag-change stream) on or off; on by default
+    pub fn with_realtime(mut self, enabled: bool) -> Self {
+        self.enable_realtime = enabled;
+        self
+    }
+
     /// Add a default flag value
     pub fn with_default(mut self, key: impl Into<String>, value: bool) -> Self {
         self.defaults.insert(key.into(), value);

@@ -18,6 +18,8 @@ const MAX: usize = 1024 * 1024;
 fn client(base_url: String, cooldown: Duration, flags: &[&str]) -> FlagClient {
     let mut config = Config::new(KEY)
         .with_base_url(base_url)
+        // The stream would add requests this file counts.
+        .with_realtime(false)
         .with_failure_cooldown(cooldown);
     for flag in flags {
         config = config.with_default(*flag, true);
