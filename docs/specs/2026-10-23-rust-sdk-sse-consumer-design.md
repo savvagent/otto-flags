@@ -1,7 +1,7 @@
 # Rust SDK: consume the flag-change stream
 
-**Status:** DRAFT
-**Ticket:** savvagent/otto-flags#167 (first of five per-SDK PRs; this one is Rust only)
+**Status:** APPROVED
+**Ticket:** savvagent/otto-flags#167 (first of five per-SDK PRs, as the ticket directs; this one is Rust only)
 
 ## Brief
 
@@ -27,7 +27,7 @@
 ## Premise corrections
 
 - The ticket says "one PR per SDK". This PR is the Rust SDK only. Go, Java, Swift and Kotlin
-  cannot be compiled on this machine (no toolchain; the section forbids installing one), so their
+  cannot be compiled on this machine (no `go`, `mvn` or `swift` here; the section forbids installing one), so their
   consumers would ship unverified. They stay open on #167.
 - `Config::enable_realtime` exists and defaults to `true`, but has no builder method, so a host
   cannot turn it off without struct-update syntax. This PR adds `Config::with_realtime(bool)`
@@ -77,14 +77,15 @@ Out: Go, Java, iOS, Android SDKs; server stream endpoint and event format; WebSo
   config.timeout` and no total timeout (the evaluate client's total timeout would kill the stream).
   Read with `chunk()` under an idle timeout of 90 s (three heartbeats). Feed bytes to `SseParser`;
   on each event: `flag.*` with a valid key (`client::is_valid_flag_key`) invalidates that key;
-  `connected` on a reconnect invalidates everything; `heartbeat` and unknown events are ignored.
+  `connected` invalidates everything (a result cached before the first connect, or events missed while down, last until the TTL otherwise); `heartbeat` and unknown events are ignored.
 - `SseParser`: `feed(&[u8]) -> Result<Vec<SseEvent>, TooLarge>`; handles `\n`, `\r\n`, comments,
   multi-line `data`, a leading space after the colon. A pending event over 4 MiB is an error that
-  ends the connection (flags carry up to 20 variations with configurations and the list is
-  unbounded, so the cap is generous but finite).
+  ends the connection (one event carries one flag with up to 20 variations and their configurations;
+  the cap is generous but finite).
 - Backoff: `reconnect_delay(attempt, unit)` = `min(1 s * 2^attempt, 30 s)` scaled into
-  `[50%, 100%]` by `unit` (a random value in `[0,1)`). The attempt counter resets once a
-  connection reaches `connected`. HTTP 401, 403 and 404 use a 5 min cap (the key is rejected or the
+  `[50%, 100%]` by `unit` (a random value in `[0,1)`). The attempt counter resets only when a
+  connection stayed up at least 30 s, so a server that accepts and drops at once is not retried
+  at the base delay forever. Stream failures never feed the evaluate `Backoff`/`failure_cooldown`. HTTP 401, 403 and 404 use a 5 min cap (the key is rejected or the
   endpoint absent; retrying fast changes nothing); 429 and 503 honour `Retry-After` (capped at
   60 s, never shortening the backoff).
 - `client.rs`: `FlagClient` gains `realtime: Realtime`; `new` and `evaluate` call
@@ -126,7 +127,8 @@ deploys with the server on merge (`ci-auto`). The Rust crate is unpublished; no 
 - Malformed event JSON or an invalid key: skipped, logged at `debug` with a bounded prefix.
 - Lagged server subscriber skips events (documented in `stream.rs`): covered by the TTL, which
   stays in force the whole time.
-- `base_url` invalid: the task logs once at `warn` and ends; lookups are unaffected.
+- `base_url` invalid: `new` parses the stream URL once; if it fails, it logs one `warn` and no
+  stream is ever started (`evaluate` already falls back per lookup). Lookups are unaffected.
 
 ## Testing approach
 
@@ -134,13 +136,16 @@ Gates: `cd packages/rust-server && cargo fmt --check`, `cargo clippy --locked --
 warnings`, `cargo test --locked`; for the `crates/` guide text, the workspace gates and the
 container build. Unit tests beside the code (`realtime.rs`): parser framing cases, the backoff
 function, key filtering. Integration tests in `tests/realtime_test.rs` against `wiremock`:
-(1) an update event invalidates a cached evaluation, (2) a dropped stream is reconnected,
+(1) an update event invalidates a cached evaluation, (2) a dropped stream is reconnected and the cache is cleared by the new `connected`,
 (3) while the stream is down lookups are served by the server and the TTL still expires,
 (4) `with_realtime(false)` makes no stream request, (5) a lookup returns promptly while the stream
 response is delayed, (6) a request carries the bearer header and `Accept`.
 
 ## Risks & open questions
 
+- Cost: an open stream keeps a suspended Fly machine awake, and each deploy drops every stream
+  (every client then clears its cache). The JS, Node and Python consumers already do this; the
+  default-on Rust consumer adds to it.
 - Timing-based integration tests: delays and polling windows are generous (seconds) to avoid
   flakes; the reconnect test waits for the first backoff (0.5 to 1 s).
 - Go, Java, iOS and Android remain: #167 stays open.
