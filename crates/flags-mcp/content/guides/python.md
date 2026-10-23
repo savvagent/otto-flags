@@ -82,9 +82,9 @@ default 60), `enable_realtime` (default `True`), `enable_telemetry` (default `Tr
 (seconds, default 5.0), `defaults` (flag key to the value served when evaluation fails), and
 `on_error` (a callable that receives SDK errors).
 
-**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
-context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
-its own configuration instead of hardcoding it.
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
 
 ## Evaluate a flag
 

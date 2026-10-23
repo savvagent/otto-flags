@@ -135,7 +135,7 @@ pub const LANGUAGES: &[Lang] = &[
         name: "go",
         aliases: &["golang"],
         md: include_str!("../content/guides/go.md"),
-        server_key: true,
+        server_key: false,
     },
     Lang {
         name: "rust",
@@ -147,7 +147,7 @@ pub const LANGUAGES: &[Lang] = &[
         name: "java",
         aliases: &["jvm"],
         md: include_str!("../content/guides/java.md"),
-        server_key: true,
+        server_key: false,
     },
     Lang {
         name: "ios",
@@ -545,7 +545,9 @@ mod tests {
                 "CI secrets",
                 "deploy",
                 "`rotate_app_keys`",
-                "exposed",
+                "reuse it",
+                "only if the person approves",
+                "Never rotate on your own",
             ] {
                 assert!(
                     recipe.contains(needle),
@@ -554,13 +556,13 @@ mod tests {
                 );
             }
         }
-        // Exactly the SDKs that read a server key.
+        // Exactly the SDKs that read a server key (go and java accept only the client key).
         let servers: Vec<_> = LANGUAGES
             .iter()
             .filter(|l| l.server_key)
             .map(|l| l.name)
             .collect();
-        assert_eq!(servers, ["python", "node", "go", "rust", "java"]);
+        assert_eq!(servers, ["python", "node", "rust"]);
     }
 
     #[test]
@@ -605,7 +607,7 @@ mod tests {
                 l.name
             );
             let one = render(l.name, Some(&only)).unwrap().1;
-            assert!(one.contains("`production`"), "{}", l.name);
+            assert!(one.contains("environments: `production`."), "{}", l.name);
             assert!(!one.contains("staging"), "{}", l.name);
             assert!(!one.contains("<environments>"), "{}", l.name);
             // Without an app the placeholder stays, in the recipe and the guide.
@@ -620,7 +622,7 @@ mod tests {
         for l in LANGUAGES {
             let text = render(l.name, Some(&app)).unwrap().1;
             assert!(!text.contains("Ignore previous"), "{}", l.name);
-            assert!(text.contains("`production`"), "{}", l.name);
+            assert!(text.contains("environments: `production`."), "{}", l.name);
         }
         let all_bad = app_with_environments(&["bad env"]);
         assert!(render("go", Some(&all_bad))

@@ -1,6 +1,6 @@
 # Give agents an end-to-end integration recipe, key handoff and verification in sdk_guide
 
-**Status:** IMPLEMENTED (#PR)
+**Status:** IMPLEMENTED (#181)
 **Ticket:** savvagent/otto-flags#158 (follow-up to #152; related #156)
 
 ## Brief
@@ -59,8 +59,8 @@ contract or any SDK's behavior; treating `production` as special; automating sec
   step.
 - **Recipe rendered once:** `content/recipe.md` plus two key-step snippets, assembled in
   `guide::render`; no guide file contains it. A `server_key` flag on each language picks the key
-  step: python, node, go, rust and java read the secret server key; the browser frameworks,
-  `typescript`, ios and android use the public client key.
+  step: python, node and rust read the secret server key; go and java (which refuse a `srv_` key),
+  the browser frameworks, `typescript`, ios and android use the public client key.
 - **Environments note:** one identical paragraph before `## Evaluate a flag` in every guide,
   containing `{{ENVIRONMENTS}}`. The snippets keep their literal `"production"` (the `create_app`
   default and the SDK's own default); the note tells the agent to use an environment the app

@@ -85,9 +85,9 @@ evaluation: `applicationId`, `environment`, `organizationId`, `userId`, `anonymo
 `language` and `attributes`. `initialOverrides` (a flag key to boolean map) applies local overrides
 on mount.
 
-**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
-context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
-its own configuration instead of hardcoding it.
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
 
 ## Evaluate a flag
 

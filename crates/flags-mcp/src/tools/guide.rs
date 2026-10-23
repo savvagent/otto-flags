@@ -84,6 +84,9 @@ impl Flags {
                     _ => {
                         choose_from = apps
                             .into_iter()
+                            .filter(|a| {
+                                flags_core::eval::validate_name("app name", &a.name).is_ok()
+                            })
                             .take(MAX_CHOICES)
                             .map(|a| out::GuideAppRef {
                                 name: a.name,

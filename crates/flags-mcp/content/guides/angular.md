@@ -104,9 +104,9 @@ applies to every evaluation: `applicationId`, `environment`, `organizationId`, `
 `anonymousId`, `sessionId`, `language` and `attributes`. To configure at run time instead, inject
 `OttoFlagsService` and call `initialize({ config, defaultContext })` once.
 
-**Environment.** The `environment` this app evaluates in, set in the configuration above or on a
-context, must be one of the app's environments: {{ENVIRONMENTS}}. A deployed service should read it from
-its own configuration instead of hardcoding it.
+**Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
+configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
+build's or deployment's configuration instead of hardcoding it.
 
 ## Evaluate a flag
 
