@@ -127,6 +127,9 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		return c.getDefaultResult(flagKey, err), err
 	}
 
+	// Read before the request: an invalidation while it is in flight drops this result.
+	generation := c.cache.Generation(flagKey)
+
 	endpoint := fmt.Sprintf("%s/api/flags/%s/evaluate", c.config.BaseURL, url.PathEscape(flagKey))
 	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
@@ -195,7 +198,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 	scope := metadataString(response.Scope)
 
 	// Cache the result (including configuration, variation, version and scope)
-	c.cache.Set(flagKey, ctxKey, enabled, response.Configuration, response.Variation, version, scope)
+	c.cache.SetAt(generation, flagKey, ctxKey, enabled, response.Configuration, response.Variation, version, scope)
 
 	// Apply overrides to evaluated result
 	finalConfiguration := response.Configuration

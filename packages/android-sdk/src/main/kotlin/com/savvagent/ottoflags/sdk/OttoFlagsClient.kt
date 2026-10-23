@@ -114,6 +114,11 @@ class OttoFlagsClient(
     // flag key -> (context key -> entry): a result is only reused for the context that
     // produced it. In memory only; bounded per flag by MAX_CONTEXTS_PER_FLAG.
     private val flagCache = ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>>()
+    // Bumped (under cacheLock) by every invalidation, so an evaluate that was in flight when its
+    // flag was invalidated drops its stale result instead of caching it (#137).
+    private val cacheLock = Any()
+    private var cacheEpoch = 0L
+    private val cacheGenerations = HashMap<String, Long>()
     private val configOverrides = ConcurrentHashMap<String, ConfigOverrideEntry>()
     private val variationOverrides = ConcurrentHashMap<String, VariationOverrideEntry>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -171,6 +176,9 @@ class OttoFlagsClient(
                     )
                 }
 
+                // Read before the request: an invalidation while it is in flight drops this result.
+                val generation = cacheGeneration(flagKey)
+
                 // Fetch from API
                 val url = evaluateUrl(flagKey)
 
@@ -212,14 +220,18 @@ class OttoFlagsClient(
                 var variation = jsonResponse.opt("variation") as? String
 
                 // Update cache
-                val perFlag = flagCache.getOrPut(flagKey) { ConcurrentHashMap() }
-                synchronized(perFlag) {
-                    if (perFlag.size >= MAX_CONTEXTS_PER_FLAG && !perFlag.containsKey(ctxKey)) {
-                        perFlag.clear()
+                synchronized(cacheLock) {
+                    if (generation == cacheGeneration(flagKey)) {
+                        val perFlag = flagCache.getOrPut(flagKey) { ConcurrentHashMap() }
+                        synchronized(perFlag) {
+                            if (perFlag.size >= MAX_CONTEXTS_PER_FLAG && !perFlag.containsKey(ctxKey)) {
+                                perFlag.clear()
+                            }
+                            perFlag[ctxKey] = CacheEntry(enabled, configuration, variation)
+                        }
+                        _flagUpdates.update { it + (flagKey to enabled) }
                     }
-                    perFlag[ctxKey] = CacheEntry(enabled, configuration, variation)
                 }
-                _flagUpdates.update { it + (flagKey to enabled) }
 
                 // Apply overrides to evaluated result
                 configOverrides[flagKey]?.let { override ->
@@ -340,7 +352,7 @@ class OttoFlagsClient(
     fun setConfigOverride(flagKey: String, config: Map<String, Any>, merge: Boolean = false) {
         configOverrides[flagKey] = ConfigOverrideEntry(config, merge, System.currentTimeMillis())
         // Clear cache to force re-evaluation with override
-        flagCache.remove(flagKey)
+        invalidateCache(flagKey)
     }
 
     /**
@@ -349,7 +361,7 @@ class OttoFlagsClient(
     fun clearConfigOverride(flagKey: String) {
         configOverrides.remove(flagKey)
         // Clear cache to get fresh API values
-        flagCache.remove(flagKey)
+        invalidateCache(flagKey)
     }
 
     /**
@@ -359,7 +371,7 @@ class OttoFlagsClient(
     fun setVariationOverride(flagKey: String, variation: String) {
         variationOverrides[flagKey] = VariationOverrideEntry(variation, System.currentTimeMillis())
         // Clear cache to force re-evaluation with override
-        flagCache.remove(flagKey)
+        invalidateCache(flagKey)
     }
 
     /**
@@ -368,7 +380,7 @@ class OttoFlagsClient(
     fun clearVariationOverride(flagKey: String) {
         variationOverrides.remove(flagKey)
         // Clear cache to get fresh API values
-        flagCache.remove(flagKey)
+        invalidateCache(flagKey)
     }
 
     /**
@@ -416,10 +428,27 @@ class OttoFlagsClient(
     fun clearAllOverrides() {
         configOverrides.clear()
         variationOverrides.clear()
-        flagCache.clear()
+        invalidateCache(null)
     }
 
     // MARK: - Private Methods
+
+    private fun cacheGeneration(flagKey: String): Pair<Long, Long> =
+        synchronized(cacheLock) { cacheEpoch to (cacheGenerations[flagKey] ?: 0L) }
+
+    /** Drop a flag's cached results (every flag's when [flagKey] is null) and bump its generation. */
+    private fun invalidateCache(flagKey: String?) {
+        synchronized(cacheLock) {
+            if (flagKey != null) {
+                cacheGenerations[flagKey] = (cacheGenerations[flagKey] ?: 0L) + 1
+                flagCache.remove(flagKey)
+            } else {
+                cacheEpoch++
+                cacheGenerations.clear()
+                flagCache.clear()
+            }
+        }
+    }
 
     private fun startPolling() {
         if (config.pollingInterval <= 0) return
@@ -457,7 +486,7 @@ class OttoFlagsClient(
                         for (i in 0 until flags.length()) {
                             val key = flags.getJSONObject(i).getString("key")
                             // The list carries no context; invalidate instead of writing.
-                            flagCache.remove(key)
+                            invalidateCache(key)
                         }
                     }
                 }

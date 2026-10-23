@@ -192,6 +192,10 @@ class FlagClient:
                 self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
 
+            # Read before the request: an invalidation while it is in flight
+            # makes the cache drop this result instead of storing it stale.
+            generation = self._cache.generation(flag_key)
+
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = self._client.post(
                 f"{self._config.base_url}/api/flags/{quote(flag_key, safe='')}/evaluate",
@@ -218,6 +222,7 @@ class FlagClient:
                     version=version,
                     scope=scope,
                     context_key=ctx_key,
+                    generation=generation,
                 )
 
             # Apply overrides to evaluated result

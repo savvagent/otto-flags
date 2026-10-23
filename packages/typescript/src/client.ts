@@ -414,6 +414,9 @@ export class FlagClient {
         context: evaluationContext as any,
       };
 
+      // Read before the request: an invalidation while it is in flight drops this result.
+      const generation = this.cache.generation(flagKey);
+
       // Fetch from API with retry logic
       const response = await this.fetchWithRetry(
         () => {
@@ -443,7 +446,7 @@ export class FlagClient {
 
       // Cache the result (use key as ID since response doesn't include UUID)
       if (ctxKey !== null) {
-        this.cache.set(flagKey, value, data.key, ctxKey);
+        this.cache.set(flagKey, value, data.key, ctxKey, generation);
       }
 
       // Track evaluation

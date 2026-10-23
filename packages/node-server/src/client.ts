@@ -173,6 +173,9 @@ export class FlagClient {
         return result;
       }
 
+      // Read before the request: an invalidation while it is in flight drops this result.
+      const generation = this.cache.generation(flagKey);
+
       // Call API
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.config.timeout);
@@ -222,7 +225,7 @@ export class FlagClient {
 
       // Cache the result (including configuration and variation)
       if (ctxKey !== null) {
-        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey, { version, scope });
+        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey, { version, scope }, generation);
       }
 
       // Apply overrides to evaluated result

@@ -688,3 +688,64 @@ async fn a_timeout_falls_back() {
     assert!(result.value);
     assert_eq!(result.reason, "error");
 }
+
+#[tokio::test]
+async fn an_invalidation_during_the_request_drops_its_result() {
+    // The first answer (enabled) is slow; the kill switch flips while it is in flight.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/kill/evaluate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "enabled": true }))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/kill/evaluate"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "enabled": false })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server);
+    let ctx = || Some(Context::new().with_user_id("u"));
+    let (first, ()) = tokio::join!(client.evaluate("kill", ctx()), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client.invalidate_cache(Some("kill"));
+    });
+    assert!(first.unwrap().value);
+
+    let second = client.evaluate("kill", ctx()).await.unwrap();
+    assert_eq!(second.reason, "evaluated");
+    assert!(!second.value);
+}
+
+#[tokio::test]
+async fn an_invalidation_of_another_flag_keeps_the_result() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/flags/kill/evaluate"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "enabled": true }))
+                .set_delay(Duration::from_millis(300)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = client(&server);
+    let ctx = || Some(Context::new().with_user_id("u"));
+    let (_, ()) = tokio::join!(client.evaluate("kill", ctx()), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client.invalidate_cache(Some("other"));
+    });
+    assert_eq!(
+        client.evaluate("kill", ctx()).await.unwrap().reason,
+        "cached"
+    );
+}

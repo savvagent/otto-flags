@@ -17,7 +17,15 @@ type cache struct {
 	entries            map[string]map[string]cacheEntry
 	ttl                time.Duration
 	maxContextsPerFlag int
+
+	// epoch and generations are bumped by every invalidation, so a result fetched before
+	// one can be dropped instead of cached (see Generation and SetAt).
+	epoch       uint64
+	generations map[string]uint64
 }
+
+// cacheGeneration is a flag's invalidation generation at one moment.
+type cacheGeneration struct{ epoch, n uint64 }
 
 // newCache creates a new cache with the specified TTL
 func newCache(ttl time.Duration) *cache {
@@ -25,6 +33,7 @@ func newCache(ttl time.Duration) *cache {
 		entries:            make(map[string]map[string]cacheEntry),
 		ttl:                ttl,
 		maxContextsPerFlag: maxContextsPerFlag,
+		generations:        make(map[string]uint64),
 	}
 }
 
@@ -61,7 +70,28 @@ func (c *cache) GetEntry(key, ctxKey string) (*cacheEntry, bool) {
 func (c *cache) Set(key, ctxKey string, value bool, configuration map[string]interface{}, variation string, version int64, scope string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLocked(key, ctxKey, value, configuration, variation, version, scope)
+}
 
+// Generation returns the flag's invalidation generation. Read it before sending an evaluate
+// request and pass it to SetAt, which drops the write if the flag was invalidated since.
+func (c *cache) Generation(key string) cacheGeneration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return cacheGeneration{c.epoch, c.generations[key]}
+}
+
+// SetAt is Set, except that it stores nothing when the flag was invalidated after gen was read.
+func (c *cache) SetAt(gen cacheGeneration, key, ctxKey string, value bool, configuration map[string]interface{}, variation string, version int64, scope string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if gen != (cacheGeneration{c.epoch, c.generations[key]}) {
+		return
+	}
+	c.setLocked(key, ctxKey, value, configuration, variation, version, scope)
+}
+
+func (c *cache) setLocked(key, ctxKey string, value bool, configuration map[string]interface{}, variation string, version int64, scope string) {
 	contexts, ok := c.entries[key]
 	if !ok {
 		contexts = make(map[string]cacheEntry)
@@ -98,8 +128,11 @@ func (c *cache) Invalidate(key string) {
 	defer c.mu.Unlock()
 
 	if key == "" {
+		c.epoch++
+		c.generations = make(map[string]uint64)
 		c.entries = make(map[string]map[string]cacheEntry)
 	} else {
+		c.generations[key]++
 		delete(c.entries, key)
 	}
 }

@@ -127,6 +127,7 @@ class AsyncFlagClient:
         # Note: Since SSE callbacks are sync, we store keys to invalidate
         # and the next async operation will handle it
         import asyncio
+        self._cache.mark_invalidated(flag_key)
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self._cache.invalidate(flag_key))
@@ -213,6 +214,10 @@ class AsyncFlagClient:
                 await self._track_evaluation(flag_key, cached_entry.value, context, start_time)
                 return result
 
+            # Read before the request: an invalidation while it is in flight
+            # makes the cache drop this result instead of storing it stale.
+            generation = self._cache.generation(flag_key)
+
             # Call API - Per SDK Developer Guide: POST /api/flags/{key}/evaluate
             response = await self._client.post(
                 f"{self._config.base_url}/api/flags/{quote(flag_key, safe='')}/evaluate",
@@ -239,6 +244,7 @@ class AsyncFlagClient:
                     version=version,
                     scope=scope,
                     context_key=ctx_key,
+                    generation=generation,
                 )
 
             # Apply overrides to evaluated result

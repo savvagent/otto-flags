@@ -22,6 +22,27 @@ export class FlagCache {
     this.ttl = ttl;
   }
 
+  /** Bumped by every invalidation so a write from a request that started before it is dropped. */
+  private epoch = 0;
+  private generations = new Map<string, number>();
+
+  /**
+   * The flag's invalidation generation. Read it before sending an evaluate request and pass it to
+   * `set`, which drops the write if the flag was invalidated since (the result is stale).
+   */
+  generation(key: string): string {
+    return `${this.epoch}.${this.generations.get(key) ?? 0}`;
+  }
+
+  private bump(key?: string): void {
+    if (key) {
+      this.generations.set(key, (this.generations.get(key) ?? 0) + 1);
+    } else {
+      this.epoch++;
+      this.generations.clear();
+    }
+  }
+
   /**
    * Get a cached flag value
    */
@@ -58,8 +79,10 @@ export class FlagCache {
     configuration?: any,
     variation?: string,
     contextKey: string = '',
-    metadata?: { version?: number; scope?: string }
+    metadata?: { version?: number; scope?: string },
+    generation?: string
   ): void {
+    if (generation !== undefined && generation !== this.generation(key)) return;
     let contexts = this.cache.get(key);
     if (!contexts) {
       contexts = new Map();
@@ -87,6 +110,7 @@ export class FlagCache {
    * Invalidate a specific flag (every context) or all flags
    */
   invalidate(key?: string): void {
+    this.bump(key);
     if (key) {
       this.cache.delete(key);
     } else {
@@ -98,6 +122,7 @@ export class FlagCache {
    * Clear all cached values
    */
   clear(): void {
+    this.bump();
     this.cache.clear();
   }
 }

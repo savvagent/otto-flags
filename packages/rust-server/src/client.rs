@@ -294,6 +294,9 @@ impl FlagClient {
             return self.get_default_result(flag_key);
         }
 
+        // Read before the request: an invalidation while it is in flight drops this result.
+        let generation = self.cache.generation(flag_key);
+
         let data = match self.fetch(flag_key, &ctx).await {
             Ok(data) => data,
             Err(failure) => {
@@ -350,7 +353,8 @@ impl FlagClient {
 
         // Cache the result (including configuration, variation and metadata) for this context
         if let Some(key) = ctx_key {
-            self.cache.set(
+            self.cache.set_at(
+                generation,
                 flag_key,
                 key,
                 value,

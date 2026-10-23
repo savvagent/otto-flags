@@ -36,6 +36,14 @@ public class FlagClient implements AutoCloseable {
     private final int maxContextsPerFlag;
     /** Flag key to (context key to entry). The context key is the canonical JSON of the context. */
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, CacheEntry>> cache;
+    /**
+     * Bumped by every invalidation, so a result fetched before one is dropped instead of cached.
+     * Guarded by {@code generationLock}, which also makes check-then-store and bump-then-remove
+     * atomic with respect to each other.
+     */
+    private final Object generationLock = new Object();
+    private long epoch;
+    private final java.util.HashMap<String, Long> generations = new java.util.HashMap<>();
     private final ConcurrentHashMap<String, ConfigOverrideEntry> configOverrides;
     private final ConcurrentHashMap<String, VariationOverrideEntry> variationOverrides;
 
@@ -125,6 +133,9 @@ public class FlagClient implements AutoCloseable {
                         variation, "cached", cachedMetadata);
             }
 
+            // Read before the request: an invalidation while it is in flight drops this result.
+            long[] generation = generationOf(flagKey);
+
             // Call API
             // Build the URL segment by segment so the key is encoded as one path segment.
             HttpUrl url = HttpUrl.get(config.getBaseUrl()).newBuilder()
@@ -176,7 +187,7 @@ public class FlagClient implements AutoCloseable {
                 // Cache the result (including configuration and variation)
                 if (ctxKey != null) {
                     setCachedValue(flagKey, ctxKey, value, configuration, variation,
-                            metadata.getVersion(), metadata.getScope());
+                            metadata.getVersion(), metadata.getScope(), generation);
                 }
 
                 // Apply overrides to evaluated result
@@ -354,10 +365,22 @@ public class FlagClient implements AutoCloseable {
      * Invalidate cache for a specific flag
      */
     public void invalidateCache(String flagKey) {
-        if (flagKey != null) {
-            cache.remove(flagKey);
-        } else {
-            cache.clear();
+        synchronized (generationLock) {
+            if (flagKey != null) {
+                generations.merge(flagKey, 1L, Long::sum);
+                cache.remove(flagKey);
+            } else {
+                epoch++;
+                generations.clear();
+                cache.clear();
+            }
+        }
+    }
+
+    /** The flag's invalidation generation, to pass to {@link #setCachedValue}. */
+    private long[] generationOf(String flagKey) {
+        synchronized (generationLock) {
+            return new long[] {epoch, generations.getOrDefault(flagKey, 0L)};
         }
     }
 
@@ -409,6 +432,18 @@ public class FlagClient implements AutoCloseable {
     }
 
     private void setCachedValue(String flagKey, String ctxKey, boolean value,
+            Object configuration, String variation, Long version, String scope, long[] generation) {
+        synchronized (generationLock) {
+            // The flag was invalidated after the request started: its result is stale.
+            if (!java.util.Arrays.equals(generation, new long[] {
+                    epoch, generations.getOrDefault(flagKey, 0L)})) {
+                return;
+            }
+            storeCachedValue(flagKey, ctxKey, value, configuration, variation, version, scope);
+        }
+    }
+
+    private void storeCachedValue(String flagKey, String ctxKey, boolean value,
             Object configuration, String variation, Long version, String scope) {
         ConcurrentHashMap<String, CacheEntry> contexts =
                 cache.computeIfAbsent(flagKey, k -> new ConcurrentHashMap<>());
@@ -515,7 +550,7 @@ public class FlagClient implements AutoCloseable {
     public void clearAllOverrides() {
         configOverrides.clear();
         variationOverrides.clear();
-        cache.clear();
+        invalidateCache(null);
     }
 
     /**
@@ -553,7 +588,7 @@ public class FlagClient implements AutoCloseable {
 
     @Override
     public void close() {
-        cache.clear();
+        invalidateCache(null);
         httpClient.dispatcher().executorService().shutdown();
         httpClient.connectionPool().evictAll();
         logger.info("Otto Flags FlagClient closed");
