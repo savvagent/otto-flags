@@ -299,7 +299,9 @@ let result = client.evaluate("premium-features", Some(context)).await?;
 
 #### Config
 
-Configuration builder for the FlagClient.
+Configuration builder for the FlagClient. `with_default_env` accepts `1`, `true`, `yes`, `on` and
+`0`, `false`, `no`, `off` (ignoring case and surrounding whitespace); an unset or unrecognized
+variable is ignored with a warning and leaves any earlier default (else `false`).
 
 ```rust
 let config = Config::new("srv_key")  // or "sdk_key"
@@ -310,7 +312,9 @@ let config = Config::new("srv_key")  // or "sdk_key"
     .with_failure_cooldown(Duration::from_secs(5)) // the default
     .with_telemetry(true)             // the default
     .with_realtime(true)              // the default; false opens no stream
-    .with_default("flag", false);
+    .with_default("flag", false)
+    .with_default_env("other-flag", "OTHER_FLAG") // default from an env var, read once
+    .with_default_fn("third-flag", || Some(false)); // default from any closure
 ```
 
 Results are cached for `cache_ttl` per flag key and evaluation context: a different context
@@ -387,6 +391,32 @@ Checks if a flag is enabled (convenience method).
 
 ```rust
 let enabled = client.is_enabled("my-flag", Some(context)).await;
+```
+
+#### is_enabled_cached(&self, flag_key: &str, context: Option<&Context>) -> bool
+
+A synchronous read for code that cannot be `async`. It never makes a request, blocks or starts a
+task: it returns the unexpired cached value for this flag and context, else the flag's configured
+default. The cache is per context, and an entry lives for `cache_ttl`, so call `evaluate` or
+`is_enabled` from async code with the same context at least once per TTL to keep it warm; a flag
+that was never looked up, or whose entry expired or was invalidated, gets its default.
+
+```rust
+fn render_banner(client: &FlagClient, ctx: &Context) -> &'static str {
+    if client.is_enabled_cached("new-banner", Some(ctx)) { "new" } else { "old" }
+}
+```
+
+#### FlagClient::static_flags(flags) -> FlagClient
+
+A client that serves fixed values and never uses the network, for tests. Flags not listed are
+`false`; `evaluate` reports `reason: "static"`; overrides still apply. It makes no request, reports
+no telemetry, opens no stream and needs no Tokio runtime to build.
+
+```rust
+let client = FlagClient::static_flags([("new-checkout", true), ("beta-banner", false)]);
+assert!(client.is_enabled_cached("new-checkout", None));
+assert!(client.is_enabled("new-checkout", None).await);
 ```
 
 #### invalidate_cache(&self, flag_key: Option<&str>)

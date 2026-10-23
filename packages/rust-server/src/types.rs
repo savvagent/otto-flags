@@ -110,6 +110,64 @@ impl Config {
         self.defaults.insert(key.into(), value);
         self
     }
+
+    /// Set a flag's default from `value`, called once now; `None` leaves any earlier default
+    /// (or the built-in `false`) in place. For a default that comes from somewhere other than a
+    /// constant. The result is fixed when the config is built, not re-read per lookup.
+    pub fn with_default_fn(
+        mut self,
+        key: impl Into<String>,
+        value: impl FnOnce() -> Option<bool>,
+    ) -> Self {
+        if let Some(value) = value() {
+            self.defaults.insert(key.into(), value);
+        }
+        self
+    }
+
+    /// Set a flag's default from an environment variable, read once now, for a service moving
+    /// from env-var flags: "when otto-flags cannot be reached, use what the variable says".
+    ///
+    /// Accepted values, ignoring case and surrounding whitespace, are `1`, `true`, `yes`, `on`
+    /// and `0`, `false`, `no`, `off`. A variable that is unset, not valid Unicode, empty or
+    /// anything else is ignored with a warning (the value is not logged), leaving any earlier
+    /// default or the built-in `false` in place.
+    pub fn with_default_env(
+        self,
+        key: impl Into<String>,
+        var: impl AsRef<std::ffi::OsStr>,
+    ) -> Self {
+        let var = var.as_ref();
+        self.with_default_fn(key, || match std::env::var(var) {
+            Ok(raw) => {
+                let parsed = parse_bool(&raw);
+                if parsed.is_none() {
+                    tracing::warn!(
+                        "Otto Flags: environment variable {:?} is not a boolean; ignoring it",
+                        var
+                    );
+                }
+                parsed
+            }
+            Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                tracing::warn!(
+                    "Otto Flags: environment variable {:?} is not valid Unicode; ignoring it",
+                    var
+                );
+                None
+            }
+        })
+    }
+}
+
+/// `1`/`true`/`yes`/`on` and `0`/`false`/`no`/`off`, ignoring case and surrounding whitespace.
+fn parse_bool(raw: &str) -> Option<bool> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 /// Context for flag evaluation

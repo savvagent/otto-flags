@@ -139,6 +139,8 @@ pub struct FlagClient {
     telemetry: Telemetry,
     realtime: Realtime,
     stream: Option<StreamTarget>,
+    /// Set by `FlagClient::static_flags`: the values served instead of any lookup.
+    fixed: Option<Arc<HashMap<String, bool>>>,
     config_overrides: Arc<RwLock<HashMap<String, ConfigOverrideEntry>>>,
     variation_overrides: Arc<RwLock<HashMap<String, VariationOverrideEntry>>>,
 }
@@ -220,9 +222,33 @@ impl FlagClient {
             telemetry,
             realtime,
             stream,
+            fixed: None,
             config_overrides: Arc::new(RwLock::new(HashMap::new())),
             variation_overrides: Arc::new(RwLock::new(HashMap::new())),
         })
+    }
+
+    /// A client that serves fixed flag values and never touches the network, for tests.
+    ///
+    /// Each flag in `flags` evaluates to its value, any other flag to `false`; `evaluate` reports
+    /// `reason: "static"`. No request is made, nothing is reported, no stream is opened and no
+    /// background task is started, so it works outside a Tokio runtime. Config and variation
+    /// overrides still apply, which lets a test exercise code that reads them. It is not for
+    /// production use: it ignores the server entirely.
+    pub fn static_flags<K, I>(flags: I) -> Self
+    where
+        K: Into<String>,
+        I: IntoIterator<Item = (K, bool)>,
+    {
+        let config = Config::new("sdk_static")
+            .with_telemetry(false)
+            .with_realtime(false);
+        let mut client = Self::new(config)
+            .expect("a client with a static key, no telemetry and no stream always builds");
+        client.fixed = Some(Arc::new(
+            flags.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        ));
+        client
     }
 
     /// Evaluate a feature flag
@@ -260,6 +286,20 @@ impl FlagClient {
             return self.get_default_result(flag_key);
         }
 
+        if let Some(fixed) = &self.fixed {
+            let value = fixed.get(flag_key).copied().unwrap_or(false);
+            let (mut configuration, mut variation) = (None, None);
+            self.apply_overrides(flag_key, &mut configuration, &mut variation);
+            return Ok(EvaluationResult {
+                key: flag_key.to_string(),
+                value,
+                configuration,
+                variation,
+                reason: "static".to_string(),
+                metadata: None,
+            });
+        }
+
         // Starts the stream task on the first lookup inside a runtime (a client built outside
         // one has none yet); afterwards this is one atomic load.
         if let Some(target) = &self.stream {
@@ -289,28 +329,7 @@ impl FlagClient {
             let mut configuration = cached_entry.configuration.clone();
             let mut variation = cached_entry.variation.clone();
 
-            // Apply overrides
-            if let Ok(config_overrides) = self.config_overrides.read() {
-                if let Some(config_override) = config_overrides.get(flag_key) {
-                    if config_override.merge {
-                        if let Some(base_config) = configuration {
-                            configuration = Some(
-                                self.merge_configurations(&base_config, &config_override.config),
-                            );
-                        } else {
-                            configuration = Some(config_override.config.clone());
-                        }
-                    } else {
-                        configuration = Some(config_override.config.clone());
-                    }
-                }
-            }
-
-            if let Ok(variation_overrides) = self.variation_overrides.read() {
-                if let Some(variation_override) = variation_overrides.get(flag_key) {
-                    variation = Some(variation_override.variation.clone());
-                }
-            }
+            self.apply_overrides(flag_key, &mut configuration, &mut variation);
 
             tracing::debug!(
                 "Flag '{}' returned from cache: {}",
@@ -407,26 +426,7 @@ impl FlagClient {
         }
 
         // Apply overrides to evaluated result
-        if let Ok(config_overrides) = self.config_overrides.read() {
-            if let Some(config_override) = config_overrides.get(flag_key) {
-                if config_override.merge {
-                    if let Some(base_config) = configuration {
-                        configuration =
-                            Some(self.merge_configurations(&base_config, &config_override.config));
-                    } else {
-                        configuration = Some(config_override.config.clone());
-                    }
-                } else {
-                    configuration = Some(config_override.config.clone());
-                }
-            }
-        }
-
-        if let Ok(variation_overrides) = self.variation_overrides.read() {
-            if let Some(variation_override) = variation_overrides.get(flag_key) {
-                variation = Some(variation_override.variation.clone());
-            }
-        }
+        self.apply_overrides(flag_key, &mut configuration, &mut variation);
 
         tracing::debug!("Flag '{}' evaluated: {}", flag_key, value);
 
@@ -438,6 +438,31 @@ impl FlagClient {
             reason: "evaluated".to_string(),
             metadata: Some(metadata),
         })
+    }
+
+    /// Replace `configuration` and `variation` with the overrides set for the flag, if any.
+    fn apply_overrides(
+        &self,
+        flag_key: &str,
+        configuration: &mut Option<serde_json::Value>,
+        variation: &mut Option<String>,
+    ) {
+        if let Ok(config_overrides) = self.config_overrides.read() {
+            if let Some(config_override) = config_overrides.get(flag_key) {
+                *configuration = match (config_override.merge, configuration.take()) {
+                    (true, Some(base)) => {
+                        Some(self.merge_configurations(&base, &config_override.config))
+                    }
+                    _ => Some(config_override.config.clone()),
+                };
+            }
+        }
+
+        if let Ok(variation_overrides) = self.variation_overrides.read() {
+            if let Some(variation_override) = variation_overrides.get(flag_key) {
+                *variation = Some(variation_override.variation.clone());
+            }
+        }
     }
 
     /// POST the evaluate request and return the response body, which is known to carry a
@@ -527,6 +552,42 @@ impl FlagClient {
                 tracing::error!("Error evaluating flag '{}': {}", flag_key, e);
                 self.config.defaults.get(flag_key).copied().unwrap_or(false)
             }
+        }
+    }
+
+    /// Read a flag from the cache without waiting, for code that cannot be `async`.
+    ///
+    /// It never makes a request, never blocks and never starts a task: it returns the unexpired
+    /// cached value for this flag and context (the same context passed to an earlier `evaluate`
+    /// or `is_enabled`, since the cache is per context), and otherwise the flag's configured
+    /// default (`Config::with_default`, else `false`). A flag that has never been looked up, one
+    /// whose entry has outlived `Config::cache_ttl`, and one invalidated by the stream are all
+    /// misses, so something must keep the cache warm: call `evaluate` or `is_enabled` from async
+    /// code on the same context at least once per TTL. A hit is counted as an evaluation in
+    /// telemetry, as a cached `evaluate` is; a miss is not. On a client from
+    /// [`FlagClient::static_flags`] it returns the fixed value.
+    pub fn is_enabled_cached(&self, flag_key: &str, context: Option<&Context>) -> bool {
+        if let Some(fixed) = &self.fixed {
+            return fixed.get(flag_key).copied().unwrap_or(false);
+        }
+        let mut ctx = context.cloned().unwrap_or_default();
+        if ctx.application_id.is_none() {
+            ctx.application_id = self.config.application_id.clone();
+        }
+        let entry = context_key(&ctx)
+            .as_deref()
+            .and_then(|key| self.cache.get_entry(flag_key, key));
+        match entry {
+            Some(entry) => {
+                self.telemetry.track_evaluation(
+                    flag_key,
+                    entry.value,
+                    entry.variation.as_deref(),
+                    ctx.environment.as_deref(),
+                );
+                entry.value
+            }
+            None => self.config.defaults.get(flag_key).copied().unwrap_or(false),
         }
     }
 
