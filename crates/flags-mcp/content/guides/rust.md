@@ -56,8 +56,10 @@ neither of the two key prefixes fails there, so a misconfigured deploy stops at 
 Other `Config` builders, all optional: `with_base_url` (default `https://otto-flags.savvagent.com`,
 use `https`), `with_cache_ttl` (default 60 seconds), `with_timeout` (default 5 seconds),
 `with_failure_cooldown` (default 5 seconds), `with_telemetry` (default on), `with_realtime`
-(default on, see below) and `with_default` (flag key to the value served when evaluation
-fails).
+(default on, see below), `with_default` (flag key to the value served when evaluation
+fails), `with_default_env` (the same default, read once from an environment variable such as
+`NEW_CHECKOUT=true`, for a service moving off env-var flags) and `with_default_fn` (the same, from
+a closure that returns `Option<bool>`).
 
 ## Evaluate a flag
 
@@ -93,6 +95,14 @@ if let Err(e) = charge(&order).await {
     client.track_error(ErrorReport::from_error("new-checkout", enabled, &e));
 }
 ```
+
+From code that cannot be `async`, `client.is_enabled_cached("flag", Some(&context))` reads the
+cache without a request or a wait: the unexpired cached value for that flag and context, else the
+flag's configured default. Keep the cache warm by evaluating the same flag and context from async
+code at least once per `cache_ttl`.
+
+In tests, `FlagClient::static_flags([("new-checkout", true)])` builds a client that serves those
+values with no network, telemetry or runtime; flags it does not list are off.
 
 Call `client.flush().await` before the process exits, or the last few seconds of telemetry are
 lost. `invalidate_cache(Some("flag-key"))` drops a flag's cached results; `invalidate_cache(None)`
