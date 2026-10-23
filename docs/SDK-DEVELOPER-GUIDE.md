@@ -377,6 +377,13 @@ only the server-answered ones count. Reports sent with the public client key are
 allowance is set on the platform and is not recorded in this repository: the `usage` MCP tool shows
 this month's meters, the budget and any block. A blocked organization's evaluations keep serving.
 
+Only evaluations in one of the app's own environments count; an evaluation that names any other
+environment is answered and not counted. A public client key can be copied from a page, so the
+evaluations answered to client keys are billed only up to a ceiling per app and hour (the
+server's `FLAGS_CLIENT_EVAL_CEILING_PER_HOUR`, 500000 by default). Evaluations above it are still
+answered and are not billed. The `usage` MCP tool splits this month's evaluations by key kind and
+shows how many the ceiling left unbilled.
+
 #### Track Evaluations
 
 **Endpoint:** `POST /api/telemetry/evaluations`

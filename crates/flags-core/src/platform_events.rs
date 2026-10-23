@@ -250,6 +250,7 @@ async fn org_deleted(db: &Db, event: &WebhookEvent, org: OrgId) -> Result<Outcom
         // The flag_apps FK cascade would remove these rows anyway; listing the table makes
         // its count visible in the purge detail.
         "usage_meter_hourly",
+        "usage_meter_daily",
         "flag_apps",
         "usage_outbox",
         "usage_outbox_rejected",

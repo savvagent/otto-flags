@@ -5,7 +5,8 @@
 //! migration for why raw rows are not kept). Errors are kept as reported, one
 //! row each, truncated and with NUL replaced (see `stored`), for
 //! [`ERROR_RETENTION_DAYS`]; hourly buckets and rollback events are kept
-//! for [`EVAL_RETENTION_DAYS`]. [`sweep`] enforces all three.
+//! for [`EVAL_RETENTION_DAYS`], as are the per-day billing totals
+//! (`usage_meter_daily`, #143). [`sweep`] enforces all of them.
 //!
 //! Telemetry names flags by key and the key resolves within the reporting
 //! app, so an app can only ever count against its own flags. Unknown keys are
@@ -734,6 +735,11 @@ pub async fn sweep(db: &Db) -> Result<u64> {
         ),
         (
             "DELETE FROM flag_eval_hourly WHERE hour < now() - make_interval(days => $1)",
+            EVAL_RETENTION_DAYS,
+        ),
+        // The per-day split of billed evaluations (#143) is bounded the same way.
+        (
+            "DELETE FROM usage_meter_daily WHERE day < (now() AT TIME ZONE 'UTC')::date - $1",
             EVAL_RETENTION_DAYS,
         ),
         // Rollback events are bounded at the evaluation retention.

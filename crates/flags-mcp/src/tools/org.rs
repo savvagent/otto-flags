@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 use super::out;
 use crate::server::{Flags, McpResult};
+use flags_core::metering::MeteringExt;
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct NoArgs {}
@@ -79,9 +80,14 @@ impl Flags {
                        usage, such as otto-flags/evaluations), `budget` (the monthly budget and \
                        spend, if one is set), and `blockedReason` (set when the platform blocks \
                        billable usage; evaluations keep serving and are not billed meanwhile). \
-                       Every tool is free; billing is on production evaluations by the SDKs. The \
-                       older allowance fields are deprecated. If `blockedReason` is set, tell the \
-                       person you are working for.",
+                       Every tool is free; billing is on evaluations by the SDKs. \
+                       `evaluations` splits this month's closed hours by key kind: `clientServed` \
+                       (public client keys, which anyone holding the key can drive), \
+                       `serverServed`, and `clipped` (client-served above the per-app hourly \
+                       ceiling: answered, not billed), with the busiest `apps`. A client-served \
+                       spike the organization did not cause is a reason to rotate the app's client \
+                       key. The older allowance fields are deprecated. If `blockedReason` is set, \
+                       tell the person you are working for.",
         annotations(read_only_hint = true)
     )]
     pub async fn usage(
@@ -93,7 +99,8 @@ impl Flags {
         let usage = self.meter().report(caller.org_id).await.mcp()?;
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "usage").await?;
+        let evaluations = tx.evaluation_split().await.mcp()?;
         tx.commit().await.mcp()?;
-        Ok(Json(out::UsageOut { usage }))
+        Ok(Json(out::UsageOut { usage, evaluations }))
     }
 }

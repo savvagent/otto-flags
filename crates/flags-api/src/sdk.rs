@@ -101,13 +101,30 @@ pub async fn evaluate(
 
     let mut tx = begin_live(&state.db, sdk.0.org_id, None).await?;
     let flag = tx.find_flag(sdk.0.app_id, &key).await?;
+    // One primary-key read in the transaction already open: whether this is an
+    // environment the app has. The caller names the environment, and a public
+    // client key can name any, so only an app's own environments are counted
+    // (#143). An unknown one is answered exactly as before.
+    let billed_environment = tx
+        .get_app(sdk.0.app_id)
+        .await?
+        .is_some_and(|app| app.environments.contains(&environment));
     tx.commit().await?;
     let flag = flag
         .filter(|f| f.status == FlagStatus::Active)
         .ok_or_else(|| ApiError::flag_not_found(&key))?;
 
     let e = eval::evaluate(flag.view(), &environment, &context);
-    state.evaluations.served(sdk.0.org_id, sdk.0.app_id, 1);
+    if billed_environment {
+        // The client key is public: its share is counted apart so the hour's
+        // ceiling can apply to it (`flags_core::metering`).
+        match sdk.0.kind {
+            KeyKind::Client => state
+                .evaluations
+                .served_client(sdk.0.org_id, sdk.0.app_id, 1),
+            KeyKind::Server => state.evaluations.served(sdk.0.org_id, sdk.0.app_id, 1),
+        }
+    }
     Ok(Json(EvaluateResponse {
         key: flag.key,
         enabled: e.enabled,

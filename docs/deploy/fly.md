@@ -305,7 +305,7 @@ the new release, `/readyz` returns `{"status":"ready"}`, and the boot log shows
 
 ## Metering
 
-Production evaluations are billed on the meter `otto-flags/evaluations`. MCP tools are free.
+Evaluations are billed on the meter `otto-flags/evaluations`. MCP tools are free.
 
 - **Declaration.** The server declares the meter to the platform at startup. The platform side
   (`resource set-service`, `service=otto-flags`) is already done for production. Until a
@@ -323,7 +323,21 @@ Production evaluations are billed on the meter `otto-flags/evaluations`. MCP too
 - **What is counted.** Served evaluations (both key kinds) and reported evaluations (server-key
   telemetry only). Each app's hour is billed as the larger of the two, not the sum. The counts are
   held in memory, flushed to `usage_meter_hourly`, and closed into `usage_outbox` once the hour
-  is over.
+  is over. Only an environment the app has is counted: the caller names the environment, so an
+  evaluation in any other name is answered and not counted.
+- **Client-key ceiling (#143).** A public client key (`sdk_`) ships in every page, so anyone
+  holding it can drive the served count. The part of an hour's `served` answered to client keys
+  is billed up to `FLAGS_CLIENT_EVAL_CEILING_PER_HOUR` per app (default 500000, about 139 a
+  second sustained), so an app's hour is billed `GREATEST((served - served_client) +
+  LEAST(served_client, ceiling), reported)`. Evaluations above the ceiling are still answered;
+  they are not billed. A change to the variable takes effect for the hours that close after the
+  restart. When an hour is clipped, the close pass logs `client-key evaluations above the hourly
+  ceiling were served but not billed` (org, app, hour, `served_client`, `ceiling`, `clipped`; the
+  20 largest per pass) and its summary line carries `clipped_hours` and `clipped_evaluations`.
+  The per-day split (`usage_meter_daily`, 90 days) is what the `usage` tool shows as
+  `evaluations`: client-served, server-served and clipped this month, with the busiest apps, so
+  an org can see a spike it did not cause and rotate the app's client key (`rotate_app_keys`).
+  The ceiling is a pricing decision: set it above the busiest legitimate app's hour.
 - **Blocked orgs** keep evaluating. Their hours ship unbilled.
 - **Idle suspend.** The app scales to zero, so hours close when a machine is awake. An hour
   closed after the platform's month cutoff (2 h into the next month) is billed in the month it

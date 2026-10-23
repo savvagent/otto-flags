@@ -8,11 +8,17 @@
 //! - **served**: successful answers from the server's evaluate endpoint.
 //! - **reported**: evaluation events accepted from the SDKs' telemetry.
 //!
-//! The billed quantity for an hour is `GREATEST(served, reported)`, never the
-//! sum. With telemetry on, `reported` already includes every served
-//! evaluation (plus local and cached ones), so adding would double count; with
-//! telemetry off, the bill falls back to the work the server did. See
-//! `docs/specs/2026-10-20-meter-production-evaluations-design.md`, Decisions.
+//! The billed quantity for an hour is `GREATEST(served', reported)`, never the
+//! sum, where `served'` is `served` with its public-client-key share
+//! (`served_client`) held to a per-app, per-hour ceiling: `(served -
+//! served_client) + LEAST(served_client, ceiling)`. With telemetry on,
+//! `reported` already includes every served evaluation (plus local and cached
+//! ones), so adding would double count; with telemetry off, the bill falls
+//! back to the work the server did. A client key is public, so anyone holding
+//! it can drive `served_client`; the ceiling bounds what that can add to a
+//! bill, and evaluations above it are still answered, only not billed. See
+//! `docs/specs/2026-10-20-meter-production-evaluations-design.md`, Decisions,
+//! and `docs/specs/2026-10-23-client-eval-ceiling-design.md`.
 //!
 //! [`EvalCounter`] does no I/O and holds its lock for one map operation, so
 //! the SDK request path never waits on the database or the platform.
@@ -50,6 +56,11 @@ pub const CLOSE_BATCH_ORGS: i64 = 100;
 /// flush and close transaction. The server enforces both, so they hold even
 /// when the machine is suspended mid-transaction.
 pub const TX_TIMEOUT: &str = "30s";
+/// The most client-key evaluations billed per app per hour when
+/// `FLAGS_CLIENT_EVAL_CEILING_PER_HOUR` is not set: about 139 a second
+/// sustained, above what the shared 512 MB instance with its 5-connection pool
+/// can answer.
+pub const DEFAULT_CLIENT_CEILING_PER_HOUR: i64 = 500_000;
 /// The meter key declared to the platform.
 pub const METER_EVALUATIONS: &str = "otto-flags/evaluations";
 /// `(key, display name, unit)` for the platform's meter declaration.
@@ -61,8 +72,11 @@ pub const EVALUATIONS_TOOL: &str = "sdk_evaluations";
 /// Evaluations counted for one (org, app) since the last flush.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
-    /// Successful answers from the evaluate endpoint.
+    /// Successful answers from the evaluate endpoint, to either key kind.
     pub served: u64,
+    /// The part of `served` answered to a public client key. Never above
+    /// `served`.
+    pub served_client: u64,
     /// Evaluation events accepted from SDK telemetry.
     pub reported: u64,
 }
@@ -86,9 +100,11 @@ impl Counts {
 /// let counter = EvalCounter::default();
 /// let (org, app) = (OrgId::new(), FlagAppId::new());
 /// counter.served(org, app, 2);
+/// counter.served_client(org, app, 3);
 /// counter.reported(org, app, 5);
 /// let taken = counter.take();
-/// assert_eq!(taken[&(org, app)].served, 2);
+/// assert_eq!(taken[&(org, app)].served, 5);
+/// assert_eq!(taken[&(org, app)].served_client, 3);
 /// assert_eq!(taken[&(org, app)].reported, 5);
 /// assert!(counter.take().is_empty());
 /// ```
@@ -102,11 +118,21 @@ impl EvalCounter {
         self.counts.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Count `n` successful answers from the evaluate endpoint.
+    /// Count `n` successful answers from the evaluate endpoint, to a server key.
     pub fn served(&self, org: OrgId, app: FlagAppId, n: u64) {
         let mut map = self.lock();
         let c = map.entry((org, app)).or_default();
         c.served = c.served.saturating_add(n);
+    }
+
+    /// Count `n` successful answers from the evaluate endpoint, to a public
+    /// client key. They count as `served` too; `served_client` marks the share
+    /// the hour's ceiling applies to.
+    pub fn served_client(&self, org: OrgId, app: FlagAppId, n: u64) {
+        let mut map = self.lock();
+        let c = map.entry((org, app)).or_default();
+        c.served = c.served.saturating_add(n);
+        c.served_client = c.served_client.saturating_add(n);
     }
 
     /// Count `n` accepted telemetry evaluation events.
@@ -134,6 +160,7 @@ impl EvalCounter {
         for (key, back) in taken {
             let c = map.entry(key).or_default();
             c.served = c.served.saturating_add(back.served);
+            c.served_client = c.served_client.saturating_add(back.served_client);
             c.reported = c.reported.saturating_add(back.reported);
         }
     }
@@ -148,14 +175,16 @@ impl EvalCounter {
 /// composite foreign key does that check instead (foreign-key checks bypass
 /// row-level security): see [`upsert_all`] for how a violation is handled.
 const UPSERT: &str = "\
-INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, reported) \
-SELECT u.org_id, u.app_id, date_trunc('hour', now(), 'UTC'), u.served, u.reported \
-FROM unnest($1::uuid[], $2::uuid[], $3::bigint[], $4::bigint[]) AS u(org_id, app_id, served, reported) \
+INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, reported, served_client) \
+SELECT u.org_id, u.app_id, date_trunc('hour', now(), 'UTC'), u.served, u.reported, u.served_client \
+FROM unnest($1::uuid[], $2::uuid[], $3::bigint[], $4::bigint[], $5::bigint[]) \
+  AS u(org_id, app_id, served, reported, served_client) \
 WHERE NOT EXISTS (SELECT 1 FROM deleted_orgs d WHERE d.org_id = u.org_id) \
 ORDER BY u.org_id, u.app_id \
 ON CONFLICT (org_id, app_id, hour) DO UPDATE SET \
   served = LEAST(usage_meter_hourly.served::numeric + EXCLUDED.served, 9223372036854775807)::bigint, \
-  reported = LEAST(usage_meter_hourly.reported::numeric + EXCLUDED.reported, 9223372036854775807)::bigint";
+  reported = LEAST(usage_meter_hourly.reported::numeric + EXCLUDED.reported, 9223372036854775807)::bigint, \
+  served_client = LEAST(usage_meter_hourly.served_client::numeric + EXCLUDED.served_client, 9223372036854775807)::bigint";
 
 /// The most outbox rows one closed hour is split into; see [`CLOSE`].
 pub const MAX_SPLIT_ROWS: i64 = 1000;
@@ -221,6 +250,7 @@ async fn write(
             app: app.as_uuid(),
             served: clamp(c.served),
             reported: clamp(c.reported),
+            served_client: clamp(c.served_client).min(clamp(c.served)),
         })
         .collect();
     // One order on every machine: two flushes upserting the same rows in
@@ -255,6 +285,7 @@ struct Row {
     app: Uuid,
     served: i64,
     reported: i64,
+    served_client: i64,
 }
 
 async fn upsert(conn: &mut PgConnection, rows: &[Row]) -> sqlx::Result<usize> {
@@ -263,6 +294,7 @@ async fn upsert(conn: &mut PgConnection, rows: &[Row]) -> sqlx::Result<usize> {
         .bind(rows.iter().map(|r| r.app).collect::<Vec<_>>())
         .bind(rows.iter().map(|r| r.served).collect::<Vec<_>>())
         .bind(rows.iter().map(|r| r.reported).collect::<Vec<_>>())
+        .bind(rows.iter().map(|r| r.served_client).collect::<Vec<_>>())
         .execute(conn)
         .await?;
     Ok(usize::try_from(done.rows_affected()).unwrap_or(usize::MAX))
@@ -302,6 +334,79 @@ fn is_fk_violation(e: &sqlx::Error) -> bool {
     matches!(e, sqlx::Error::Database(d) if d.code().as_deref() == Some(FK_VIOLATION))
 }
 
+// ------------------------------------------------------------ usage by key kind
+
+/// An org's closed evaluation hours this month (UTC), split by who asked.
+/// The hour in progress and the last grace period are not in it yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EvaluationSplit {
+    /// Evaluations answered to public client keys (`sdk_`). Anyone holding the
+    /// key can add to this number, so a spike here may not be the org's own.
+    pub client_served: i64,
+    /// Evaluations answered to server keys (`srv_`).
+    pub server_served: i64,
+    /// Client-served evaluations above the per-app hourly ceiling: answered,
+    /// not billed.
+    pub clipped: i64,
+    /// The busiest apps by client-served evaluations, at most 20.
+    pub apps: Vec<AppSplit>,
+}
+
+/// One app's share of an [`EvaluationSplit`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSplit {
+    pub app_id: FlagAppId,
+    pub app_name: String,
+    pub client_served: i64,
+    pub server_served: i64,
+    pub clipped: i64,
+}
+
+const MONTH_START: &str = "date_trunc('month', now() AT TIME ZONE 'UTC')::date";
+const I64_MAX: &str = "9223372036854775807";
+
+pub trait MeteringExt {
+    /// This month's [`EvaluationSplit`] for the pinned org.
+    fn evaluation_split(&mut self) -> impl Future<Output = Result<EvaluationSplit>> + Send;
+}
+
+impl MeteringExt for otto_tenant::Tx<'_> {
+    async fn evaluation_split(&mut self) -> Result<EvaluationSplit> {
+        let org = self.org();
+        let apps: Vec<AppSplit> = sqlx::query_as(&format!(
+            "SELECT a.id AS app_id, a.name AS app_name, \
+               LEAST(sum(d.served_client), {I64_MAX})::bigint AS client_served, \
+               LEAST(sum(d.served_server), {I64_MAX})::bigint AS server_served, \
+               LEAST(sum(d.clipped), {I64_MAX})::bigint AS clipped \
+             FROM usage_meter_daily d \
+             JOIN flag_apps a ON a.org_id = d.org_id AND a.id = d.app_id \
+             WHERE d.org_id = $1 AND d.day >= {MONTH_START} \
+             GROUP BY a.id, a.name \
+             ORDER BY sum(d.served_client) DESC, a.name LIMIT 20"
+        ))
+        .bind(org)
+        .fetch_all(self.conn())
+        .await?;
+        let (client_served, server_served, clipped): (i64, i64, i64) = sqlx::query_as(&format!(
+            "SELECT coalesce(LEAST(sum(served_client), {I64_MAX}), 0)::bigint, \
+                        coalesce(LEAST(sum(served_server), {I64_MAX}), 0)::bigint, \
+                        coalesce(LEAST(sum(clipped), {I64_MAX}), 0)::bigint \
+                 FROM usage_meter_daily WHERE org_id = $1 AND day >= {MONTH_START}"
+        ))
+        .bind(org)
+        .fetch_one(self.conn())
+        .await?;
+        Ok(EvaluationSplit {
+            client_served,
+            server_served,
+            clipped,
+            apps,
+        })
+    }
+}
+
 // ------------------------------------------------------------------ hour close
 
 /// The orgs with a due hour, oldest due hour first, at most `$2` of them. An
@@ -318,24 +423,50 @@ GROUP BY org_id ORDER BY min(hour), org_id LIMIT $2";
 ///
 /// - `$2`: the orgs (a subset of `$1`) whose hours ship unmetered, one
 ///   `billable = false` row per closed hour row.
-/// - Every other org's row is billed `GREATEST(served, reported)` on
-///   `$3` (the meter), split into rows of at most `$4` that sum to it.
+/// - Every other org's row is billed `GREATEST((served - served_client) +
+///   LEAST(served_client, $8), reported)` on `$3` (the meter), split into rows
+///   of at most `$4` that sum to it. `$8` is the ceiling on the client-key
+///   share of `served` (#143); what it leaves out is `clipped`.
 /// - A row with nothing to bill (both counts zero) is deleted with no outbox
 ///   row.
 /// - An hour is billed at most `$4 * $7` ([`MAX_SPLIT_ROWS`] rows): far beyond
 ///   any real hour, it keeps a saturated count from asking `generate_series`
 ///   for billions of rows, failing on the statement timeout, and stalling
 ///   every org in the batch behind it forever.
+/// - Each closed row also adds to its (org, app, UTC day) row of
+///   `usage_meter_daily` in the same statement, so the day's totals are
+///   counted once, with the hour that was closed.
 ///
-/// Returns the rows closed and the billed and unbilled totals, for the log.
+/// Returns the rows closed, the billed, unbilled and clipped totals, and the
+/// 20 most clipped hours, for the log.
 const CLOSE: &str = "\
-WITH gone AS ( \
+WITH taken AS ( \
   DELETE FROM usage_meter_hourly \
   WHERE org_id = ANY($1::uuid[]) \
     AND hour <= now() - interval '1 hour' - make_interval(secs => $5) \
-  RETURNING org_id, hour, \
-    LEAST(GREATEST(served, reported), $4::bigint * $7::bigint) AS q, \
+  RETURNING org_id, app_id, hour, served, served_client, reported, \
     org_id = ANY($2::uuid[]) AS blocked \
+), gone AS ( \
+  SELECT t.org_id, t.app_id, t.hour, t.served, t.served_client, t.blocked, \
+    LEAST(p.ceiled, $4::bigint * $7::bigint) AS q, \
+    GREATEST(t.served, t.reported) - p.ceiled AS clipped \
+  FROM taken t, LATERAL ( \
+    SELECT GREATEST((t.served - t.served_client) + LEAST(t.served_client, $8::bigint), t.reported) AS ceiled \
+  ) p \
+), daily AS ( \
+  INSERT INTO usage_meter_daily (org_id, app_id, day, served_client, served_server, clipped) \
+  SELECT org_id, app_id, (hour AT TIME ZONE 'UTC')::date, \
+    LEAST(sum(served_client), 9223372036854775807)::bigint, \
+    LEAST(sum(served - served_client), 9223372036854775807)::bigint, \
+    LEAST(sum(clipped), 9223372036854775807)::bigint \
+  FROM gone WHERE served > 0 \
+  GROUP BY org_id, app_id, (hour AT TIME ZONE 'UTC')::date \
+  ORDER BY org_id, app_id, (hour AT TIME ZONE 'UTC')::date \
+  ON CONFLICT (org_id, app_id, day) DO UPDATE SET \
+    served_client = LEAST(usage_meter_daily.served_client::numeric + EXCLUDED.served_client, 9223372036854775807)::bigint, \
+    served_server = LEAST(usage_meter_daily.served_server::numeric + EXCLUDED.served_server, 9223372036854775807)::bigint, \
+    clipped = LEAST(usage_meter_daily.clipped::numeric + EXCLUDED.clipped, 9223372036854775807)::bigint \
+  RETURNING 1 \
 ), shipped AS ( \
   INSERT INTO usage_outbox (org_id, user_id, tool, billable, occurred_at, meter, quantity) \
   SELECT g.org_id, NULL::uuid, $6::text, false, g.hour, NULL::text, NULL::bigint \
@@ -352,7 +483,13 @@ SELECT \
   (SELECT coalesce(sum(q), 0)::numeric::text FROM gone WHERE NOT blocked) AS billed_quantity, \
   (SELECT count(*) FROM shipped WHERE billable) AS billed_events, \
   (SELECT count(*) FROM gone WHERE blocked AND q > 0) AS unbilled_hours, \
-  (SELECT coalesce(sum(q), 0)::numeric::text FROM gone WHERE blocked) AS unbilled_quantity";
+  (SELECT coalesce(sum(q), 0)::numeric::text FROM gone WHERE blocked) AS unbilled_quantity, \
+  (SELECT count(*) FROM gone WHERE clipped > 0) AS clipped_hours, \
+  (SELECT coalesce(sum(clipped), 0)::numeric::text FROM gone WHERE clipped > 0) AS clipped_quantity, \
+  (SELECT coalesce(json_agg(r), '[]'::json) FROM ( \
+     SELECT org_id, app_id, hour, served_client, clipped FROM gone \
+     WHERE clipped > 0 ORDER BY clipped DESC LIMIT 20) r)::text AS clipped_rows, \
+  (SELECT count(*) FROM daily) AS daily_rows";
 
 /// Close every due hour of up to [`CLOSE_BATCH_ORGS`] orgs into the usage
 /// outbox.
@@ -367,9 +504,11 @@ SELECT \
 ///
 /// A billed (org, app, hour) row becomes `GREATEST(served, reported)` on
 /// [`METER_EVALUATIONS`] under the [`EVALUATIONS_TOOL`] tool, at
-/// `occurred_at = hour`, split across several rows if it exceeds
-/// [`otto_resource::MAX_METER_QUANTITY`]. A row with both counts zero is
-/// deleted without an outbox row.
+/// `occurred_at = hour`, with the client-key share of `served` held to
+/// [`DEFAULT_CLIENT_CEILING_PER_HOUR`] (production uses
+/// [`close_due_at`] with its configured ceiling), split across several rows if
+/// it exceeds [`otto_resource::MAX_METER_QUANTITY`]. A row with both counts
+/// zero is deleted without an outbox row.
 ///
 /// Returns the number of hourly rows closed (deleted), including the ones
 /// with nothing to bill. A failure rolls the close back: the rows stay and
@@ -384,19 +523,38 @@ where
     F: FnMut(OrgId) -> Fut,
     Fut: Future<Output = BlockedLookup>,
 {
+    close_due_at(db, lookup, DEFAULT_CLIENT_CEILING_PER_HOUR).await
+}
+
+/// [`close_due`] billing at most `ceiling` client-key evaluations per app per
+/// hour (`FLAGS_CLIENT_EVAL_CEILING_PER_HOUR`); `ceiling` below 0 is taken as 0.
+pub async fn close_due_at<F, Fut>(db: &Db, lookup: F, ceiling: i64) -> Result<usize>
+where
+    F: FnMut(OrgId) -> Fut,
+    Fut: Future<Output = BlockedLookup>,
+{
     let cap = i64::try_from(otto_resource::MAX_METER_QUANTITY).unwrap_or(i64::MAX);
-    close_due_with(db, lookup, cap).await
+    close(db, lookup, cap, ceiling).await
 }
 
 /// [`close_due`] with the largest quantity one outbox row may carry, so a
 /// test can exercise the split with small numbers. `cap` below 1 is taken as 1.
 #[doc(hidden)]
-pub async fn close_due_with<F, Fut>(db: &Db, mut lookup: F, cap: i64) -> Result<usize>
+pub async fn close_due_with<F, Fut>(db: &Db, lookup: F, cap: i64) -> Result<usize>
+where
+    F: FnMut(OrgId) -> Fut,
+    Fut: Future<Output = BlockedLookup>,
+{
+    close(db, lookup, cap, DEFAULT_CLIENT_CEILING_PER_HOUR).await
+}
+
+async fn close<F, Fut>(db: &Db, mut lookup: F, cap: i64, ceiling: i64) -> Result<usize>
 where
     F: FnMut(OrgId) -> Fut,
     Fut: Future<Output = BlockedLookup>,
 {
     let cap = cap.max(1);
+    let ceiling = ceiling.max(0);
     let grace = CLOSE_GRACE.as_secs_f64();
 
     let mut tx = begin_bounded(db, TX_TIMEOUT).await?;
@@ -435,9 +593,26 @@ where
         .bind(grace)
         .bind(EVALUATIONS_TOOL)
         .bind(MAX_SPLIT_ROWS)
+        .bind(ceiling)
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
+
+    // The 20 most clipped hours of the pass, so an operator can see which app
+    // a public key is being driven against. A row that does not parse is
+    // skipped: the totals below still say that something was clipped.
+    let clipped: Vec<ClippedHour> = serde_json::from_str(&totals.clipped_rows).unwrap_or_default();
+    for c in &clipped {
+        tracing::warn!(
+            org = %c.org_id,
+            app = %c.app_id,
+            hour = %c.hour,
+            served_client = c.served_client,
+            ceiling,
+            clipped = c.clipped,
+            "client-key evaluations above the hourly ceiling were served but not billed"
+        );
+    }
 
     tracing::info!(
         orgs = orgs.len(),
@@ -449,6 +624,9 @@ where
         billed_events = totals.billed_events,
         unbilled_hours = totals.unbilled_hours,
         unbilled_evaluations = %totals.unbilled_quantity,
+        clipped_hours = totals.clipped_hours,
+        clipped_evaluations = %totals.clipped_quantity,
+        daily_rows = totals.daily_rows,
         "closed evaluation hours into the usage outbox"
     );
     Ok(usize::try_from(totals.closed).unwrap_or(usize::MAX))
@@ -465,6 +643,20 @@ struct CloseTotals {
     billed_events: i64,
     unbilled_hours: i64,
     unbilled_quantity: String,
+    clipped_hours: i64,
+    clipped_quantity: String,
+    clipped_rows: String,
+    daily_rows: i64,
+}
+
+/// One entry of the close statement's `clipped_rows`.
+#[derive(serde::Deserialize)]
+struct ClippedHour {
+    org_id: Uuid,
+    app_id: Uuid,
+    hour: chrono::DateTime<chrono::Utc>,
+    served_client: i64,
+    clipped: i64,
 }
 
 /// The server-side bound on the final flush at shutdown.
@@ -499,6 +691,7 @@ pub async fn run(
     db: Db,
     meter: Meter,
     counter: Arc<EvalCounter>,
+    client_ceiling: i64,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let (mut flush_failures, mut close_failures) = (0u32, 0u32);
@@ -536,7 +729,7 @@ pub async fn run(
                 let meter = meter.clone();
                 async move { meter.billable_blocked(org).await }
             };
-            match close_due(&db, lookup).await {
+            match close_due_at(&db, lookup, client_ceiling).await {
                 Ok(_) => close_failures = 0,
                 Err(e) => {
                     close_failures = close_failures.saturating_add(1);
@@ -597,6 +790,7 @@ mod tests {
             m[&(o1, a1)],
             Counts {
                 served: 5,
+                served_client: 0,
                 reported: 7
             }
         );
@@ -604,9 +798,34 @@ mod tests {
             m[&(o2, a2)],
             Counts {
                 served: 0,
+                served_client: 0,
                 reported: 1
             }
         );
+    }
+
+    #[test]
+    fn a_client_answer_counts_as_served_and_as_the_client_share() {
+        let c = EvalCounter::default();
+        let (o, a) = ids();
+        c.served(o, a, 2);
+        c.served_client(o, a, 3);
+        assert_eq!(
+            c.take()[&(o, a)],
+            Counts {
+                served: 5,
+                served_client: 3,
+                reported: 0
+            }
+        );
+    }
+
+    #[test]
+    fn the_close_statement_clipped_rows_parse() {
+        // The shape Postgres' json_agg gives the close statement's `clipped_rows`.
+        let json = r#"[{"org_id":"7f2bcb24-42e3-4c5b-8f10-930bbea07d98","app_id":"4b599b27-21e0-4ed3-9478-eb85fd41d3a3","hour":"2026-10-23T21:00:00+00:00","served_client":5,"clipped":3}]"#;
+        let rows: Vec<ClippedHour> = serde_json::from_str(json).unwrap();
+        assert_eq!((rows[0].served_client, rows[0].clipped), (5, 3));
     }
 
     #[test]
@@ -631,6 +850,7 @@ mod tests {
             c.take()[&(o, a)],
             Counts {
                 served: 5,
+                served_client: 0,
                 reported: 2
             }
         );

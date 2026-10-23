@@ -37,6 +37,9 @@ kill_timeout = "15s"
   # Small: otto-db is a shared 512 MB instance.
   FLAGS_DB_MAX_CONNECTIONS = "5"
   FLAGS_LOG_FORMAT = "json"
+  # Most evaluations answered to public client keys that are billed per app
+  # per hour; more are served and not billed (#143). Default 500000.
+  FLAGS_CLIENT_EVAL_CEILING_PER_HOUR = "500000"
   RUST_LOG = "info,flags_server=info,flags_mcp=info,flags_api=info"
 
 [http_service]

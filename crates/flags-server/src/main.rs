@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
         db.clone(),
         Meter::new(platform.clone()),
         evaluations.clone(),
+        config.client_eval_ceiling_per_hour,
         usage_shutdown,
     ));
     let sweeper = tokio::spawn(sweep_loop(db.clone(), shutdown.clone()));
