@@ -10,8 +10,9 @@
 //! carries a key step that differs by SDK: a server-key SDK stops for the person to store the
 //! key, a client-key SDK has nothing to hand off (see [`Lang::server_key`]).
 //!
-//! A guide or the recipe may carry five placeholders, filled from the app the caller names or,
-//! without one, left as angle-bracket placeholders a human fills in:
+//! A guide or the recipe may carry five placeholders. Four are filled from the app the caller names
+//! or, without one, left as angle-bracket placeholders a human fills in; `{{SDK_REF}}` is always the
+//! constant:
 //!
 //! | Placeholder        | From an app          | Without one      |
 //! |--------------------|----------------------|------------------|
@@ -213,8 +214,12 @@ fn environments_text(app: Option<&FlagApp>) -> String {
 ///
 /// It must be a full 40-character lowercase commit SHA already on `main`. A PR cannot name its own
 /// squash-merge commit, so bump it in a separate small PR after a merge that changes SDK code or a
-/// guide's claims about SDK behavior. Bumping means changing this constant and the literal copies
-/// in `AGENTS.md` and both `llms.txt` files; the tests fail until all agree.
+/// guide's claims about SDK behavior. Moving it changes what every consuming agent installs, so it
+/// is a human decision (Rob's, like an SDK release): the bump PR's reviewer compares the old and
+/// new ref (`git diff <old> <new> -- packages/`) and checks the new one is on `main` with
+/// `git merge-base --is-ancestor <new> origin/main`. Bumping means changing this constant and every
+/// literal copy in `AGENTS.md` and both `llms.txt` files; `every_full_sha_is_the_sdk_ref` fails
+/// until all agree.
 pub const SDK_REF: &str = "4c5afb7f5efabfbf32dad22e6252aa6f26e59a66";
 
 /// Renders the guide for `language`, filled from `app` when given, below the integration recipe.
@@ -441,7 +446,8 @@ mod tests {
     }
 
     /// #184: the guide supplies the ref, so nothing may still ask a person to approve a SHA or tell
-    /// the agent to go and find one.
+    /// the agent to go and find one. The phrase list is best-effort; `every_full_sha_is_the_sdk_ref`
+    /// and the install-line checks are what keep the ref itself from drifting.
     #[test]
     fn no_guide_asks_a_person_to_approve_a_sha_or_to_find_one() {
         for l in LANGUAGES {
@@ -459,6 +465,41 @@ mod tests {
                 "{}: lost the not-a-fork rule",
                 l.name
             );
+        }
+    }
+
+    /// Runs of 40 or more hex digits: a full commit SHA, or a longer string that contains one.
+    fn long_hex_runs(text: &str) -> Vec<&str> {
+        text.split(|c: char| !c.is_ascii_hexdigit())
+            .filter(|run| run.len() >= 40)
+            .collect()
+    }
+
+    /// A bump that edits the constant but misses a copy (a second mention in `llms.txt`, a guide
+    /// that hard-codes a SHA) must fail here rather than leave two refs in circulation.
+    #[test]
+    fn every_full_sha_is_the_sdk_ref() {
+        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
+        for l in LANGUAGES {
+            assert!(
+                long_hex_runs(l.md).is_empty(),
+                "{}: a guide must say {{{{SDK_REF}}}}, not a literal SHA",
+                l.name
+            );
+            let text = render(l.name, None).unwrap().1;
+            for run in long_hex_runs(&text) {
+                assert_eq!(run, SDK_REF, "{}: a rendering has another SHA", l.name);
+            }
+        }
+        for (what, text) in [
+            ("AGENTS.md", agents.as_str()),
+            ("llms.txt", crate::LLMS_TXT),
+        ] {
+            let runs = long_hex_runs(text);
+            assert!(!runs.is_empty(), "{what} carries no SHA");
+            for run in runs {
+                assert_eq!(run, SDK_REF, "{what}: stale SHA, bump it with SDK_REF");
+            }
         }
     }
 
@@ -1029,6 +1070,12 @@ mod tests {
             if has_cmd(&line, "pip install") && !line.contains("git+") {
                 problems.push(format!("pip install without git+: {line}"));
             }
+            if line.contains("git+") && !line.contains("@{{SDK_REF}}") {
+                problems.push(format!("git+ install without the SDK ref: {line}"));
+            }
+            if has_cmd(&line, "git checkout") && !line.contains("{{SDK_REF}}") {
+                problems.push(format!("git checkout without the SDK ref: {line}"));
+            }
             if has_cmd(&line, "npm install") {
                 if !line.contains(".tgz") {
                     problems.push(format!("npm install without a local tarball: {line}"));
@@ -1045,8 +1092,10 @@ mod tests {
             if has_cmd(&line, "go get") && !line.contains("@{{SDK_REF}}") {
                 problems.push(format!("go get without the SDK ref: {line}"));
             }
-            if has_cmd(&line, "cargo add") && !(line.contains("--git") && line.contains("--rev")) {
-                problems.push(format!("cargo add without --git and --rev: {line}"));
+            if has_cmd(&line, "cargo add")
+                && !(line.contains("--git") && line.contains("--rev {{SDK_REF}}"))
+            {
+                problems.push(format!("cargo add without --git and the SDK ref: {line}"));
             }
             // A Cargo.toml dependency line for the crate (`otto-flags = ...`).
             let dep = line.trim_start();
@@ -1104,6 +1153,10 @@ mod tests {
             "go get github.com/savvagent/otto-flags/packages/go-server@latest",
             "cargo add otto-flags",
             "cargo add otto-flags --git https://x/y",
+            "cargo add otto-flags --git https://x/y --rev abc123",
+            "pip install \"otto-flags @ git+https://x/y@main\"",
+            "git checkout main",
+            "git checkout 4c5afb7f5efabfbf32dad22e6252aa6f26e59a66",
             "otto-flags = \"0.1\"",
             "otto-flags = { version = \"0.1\" }",
             "otto-flags = { git = \"https://x/y\" }",
@@ -1116,6 +1169,7 @@ mod tests {
             "pnpm add ./otto-flags-sdk-1.tgz",
             "go get github.com/savvagent/otto-flags/packages/go-server@{{SDK_REF}}",
             "cargo add otto-flags --git https://x/y --rev {{SDK_REF}}",
+            "git checkout {{SDK_REF}}",
             "otto-flags = { git = \"https://x/y\", rev = \"{{SDK_REF}}\" }",
         ] {
             assert!(install_line_problems(good).is_empty(), "{good:?} failed");

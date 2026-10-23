@@ -25,7 +25,7 @@ SDKs are installed from a commit of this repository, never from a floating branc
 `4c5afb7f5efabfbf32dad22e6252aa6f26e59a66`, a commit on `main` of `savvagent/otto-flags` that the
 maintainers have reviewed; `sdk_guide` pins its installs to the same commit. Use it exactly: do not
 substitute a branch, a newer commit, or a commit from a fork, and use the same commit everywhere in
-one project.
+one project. Where a package README shows a placeholder commit, use this commit.
 
 On pnpm 9, a plain `pnpm install --frozen-lockfile` runs dependency install scripts on your machine
 (pnpm 10 and later skip them unless allowed). The JS guides add `--ignore-scripts`, which every

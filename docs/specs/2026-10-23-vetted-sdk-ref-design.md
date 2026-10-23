@@ -1,6 +1,6 @@
 # Have sdk_guide supply a maintainer-vetted SDK ref instead of asking a person to approve a SHA
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#185)
 **Ticket:** savvagent/otto-flags#184 (revises #156, spec `2026-10-23-review-pinned-sha-design.md`)
 
 ## Brief
@@ -56,7 +56,8 @@
   flag-change streams, #177 and #182). It is a commit that has gone through the merge gate, so the
   maintainers have reviewed it.
 - **Bump cadence: a separate, small PR after any merge that changes SDK code or a guide's claims
-  about SDK behavior**, not the same PR (the correction above). The constant's doc comment says so.
+  about SDK behavior**, not the same PR (the correction above). The bump is a human decision (Rob's),
+  recorded in `CLAUDE.md` (Ship > release, Human-only). The constant's doc comment says so.
   Staleness costs consumers only the newer SDK behavior; it never points them at unreviewed code.
 - **No CI ancestry check.** The `migrations-append-only` job already fetches full history, so
   `git merge-base --is-ancestor` could run there, but the ticket allows a documented step, a check
@@ -135,7 +136,7 @@ None. No secret, scope, config key or registration. The change redeploys server 
 All in `crates/flags-mcp/src/guide.rs` unit tests, run with the `test` gate. New tests:
 `sdk_ref_is_a_full_lowercase_sha`, `every_rendering_pins_the_sdk_ref` (all languages, with and
 without an app), `no_guide_asks_a_person_to_approve_a_sha_or_to_find_one`, and
-`agents_md_and_llms_txt_pin_the_sdk_ref`; the server's e2e test of the rendered python guide asserts the ref instead of `<commit>`. Replaced: the two `REVIEW_SHA` tests. Updated:
+`agents_md_and_llms_txt_pin_the_sdk_ref` and `every_full_sha_is_the_sdk_ref` (every run of 40 hex digits anywhere in a guide, rendering, `AGENTS.md` or `llms.txt` is the constant); the server's e2e test of the rendered python guide asserts the ref instead of `<commit>`. Replaced: the two `REVIEW_SHA` tests. Updated:
 `every_guide_has_the_commit_pin_and_the_standard_sections` and the install-line checks
 (`<commit>` becomes `{{SDK_REF}}` in raw guide text). The server's `/llms.txt` test compares the
 served body to `LLMS_TXT`, so it follows the file.

@@ -1,7 +1,7 @@
 # Vetted SDK Ref Implementation Plan
 
 > Execute task-by-task (fresh implementer per task, review between tasks). Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> (`- [x]`) syntax for tracking.
 
 **Goal:** `sdk_guide`, `AGENTS.md` and `llms.txt` pin SDK installs to one maintainer-chosen commit
 (`SDK_REF`) instead of telling the agent to pick a SHA and have a person approve it.
@@ -65,7 +65,7 @@ their agreement test. Each task ends with every gate that applies passing.
 
 **Model:** sonnet — contained Rust change with an exact spec.
 
-- [ ] **Step 1: Write the failing tests** (append inside `mod tests`, next to `no_rendering_contains_a_server_key_prefix`)
+- [x] **Step 1: Write the failing tests** (append inside `mod tests`, next to `no_rendering_contains_a_server_key_prefix`)
 
 ```rust
     #[test]
@@ -84,12 +84,12 @@ their agreement test. Each task ends with every gate that applies passing.
 then `render`'s new `.replace` has no placeholder to act on, and the existing
 `placeholders_are_filled_from_the_app_or_left_as_angle_brackets` guards against a stray `{{`.)
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide::tests::sdk_ref_is_a_full_lowercase_sha`
 Expected: FAIL to compile (`SDK_REF` not found).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add above `pub fn render` (after `environments_text`):
 
@@ -123,12 +123,12 @@ and after the table add the sentence: `{{SDK_REF}}` does not depend on the app.
 Update the first doc paragraph's "Install routes are commit-pinned source routes (`<commit>`)" to
 "(`{{SDK_REF}}`)".
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide`
 Expected: PASS, none skipped; `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-mcp/src/guide.rs
@@ -153,7 +153,7 @@ Fixes #184"
 
 **Model:** sonnet — mechanical edits, 17 files, exact rules; tests catch misses.
 
-- [ ] **Step 1: Write the failing tests / update the checks in `guide.rs`**
+- [x] **Step 1: Write the failing tests / update the checks in `guide.rs`**
 
 Replace `every_guide_has_the_commit_pin_and_the_standard_sections`' first assertion:
 
@@ -215,12 +215,12 @@ In `crates/flags-server/tests/e2e.rs`, replace the assertion `assert!(text.conta
     assert!(!text.contains("<commit>"), "{text}");
 ```
 
-- [ ] **Step 2: Run to verify they fail**
+- [x] **Step 2: Run to verify they fail**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide`
 Expected: FAIL (guides still contain `<commit>` and the approve sentence).
 
-- [ ] **Step 3: Edit the 17 guides**
+- [x] **Step 3: Edit the 17 guides**
 
 Rule, applied to the `## Install` section of each guide:
 
@@ -253,7 +253,7 @@ Placement differs by guide: in `android.md` and `java.md` the `Find the current 
 Leave the pnpm install-scripts paragraph and every `--ignore-scripts` line unchanged. Keep
 Markdown hard-wrapped near 100 columns like the surrounding text.
 
-- [ ] **Step 4: Run to verify they pass**
+- [x] **Step 4: Run to verify they pass**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`, then `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --all -- --check`.
 Expected: PASS (none skipped), including `js_guides_skip_dependency_install_scripts_and_say_why`,
@@ -261,7 +261,7 @@ Expected: PASS (none skipped), including `js_guides_skip_dependency_install_scri
 `grep -rn '<commit>' crates/flags-mcp/content/guides` (expect no output) and read the rendered Install
 section of three guides (`python`, `node`, `go`) to confirm they read naturally.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/flags-mcp/src/guide.rs crates/flags-mcp/content/guides crates/flags-server/tests/e2e.rs
@@ -286,7 +286,7 @@ Fixes #184"
 
 **Model:** sonnet.
 
-- [ ] **Step 1: Write the failing tests** (in `guide.rs`)
+- [x] **Step 1: Write the failing tests** (in `guide.rs`)
 
 Replace the `"<commit>"` needle in `agents_md_points_agents_at_the_guide` with nothing (remove it from the list), and add:
 
@@ -308,12 +308,12 @@ Replace the `"<commit>"` needle in `agents_md_points_agents_at_the_guide` with n
     }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test -p flags-mcp --lib guide::tests::agents_md_and_llms_txt_pin_the_sdk_ref`
 Expected: FAIL.
 
-- [ ] **Step 3: Edit the files**
+- [x] **Step 3: Edit the files**
 
 `AGENTS.md`: retitle the section `## Install from a pinned commit`, keep it, and replace its body's
 first paragraph through "Use the same SHA everywhere in one project." with:
@@ -335,7 +335,7 @@ commit, or a commit from a fork, and use the same commit everywhere in one proje
 
 and replace `@<commit>` in the Python quick start with `@<SDK_REF literal>`.
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `DATABASE_URL=postgres://flags:flags@localhost:15434/otto_flags cargo test --workspace`
 Expected: PASS, none skipped, per test binary counts reported (includes flags-server's `/llms.txt`
@@ -343,7 +343,7 @@ test and `llms_txt_is_one_definition_and_covers_every_tool_and_language`). Then
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, the migrations
 `extra` gate (no output), and `podman build -t otto-flags:check .`. Also `diff llms.txt crates/flags-mcp/content/llms.txt` prints nothing and `grep -rn '<commit>' AGENTS.md llms.txt crates/flags-mcp` prints nothing.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add AGENTS.md llms.txt crates/flags-mcp/content/llms.txt crates/flags-mcp/src/guide.rs
