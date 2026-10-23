@@ -1,6 +1,6 @@
 # Rust SDK: consume the flag-change stream
 
-**Status:** APPROVED
+**Status:** IMPLEMENTED (#170)
 **Ticket:** savvagent/otto-flags#167 (first of five per-SDK PRs, as the ticket directs; this one is Rust only)
 
 ## Brief
@@ -104,9 +104,14 @@ Public interface: additive only (`Config::with_realtime`). No wire change.
   `is_valid_flag_key`; it is never echoed to an agent.
 - **SDKs fall back to defaults and never throw into the host app**: the task swallows and logs every
   error; `evaluate` does no I/O for the stream.
-- **Small shared database**: each stream is one long-lived HTTP connection on the server and holds
-  no pool connection (`stream.rs` uses `begin_live` per notification only). Open-stream cost grows
-  with the number of SDK processes; one stream per client family keeps it at one per process.
+- **Small shared database**: a stream holds no pool connection while idle, but it is not free:
+  the server re-checks each stream's key (`keys::resolve_hash`) every 30 s, and opens one
+  transaction plus `find_flag` per subscriber for every flag change (`stream.rs`), so N streams
+  mean N identical queries per change. The JS, Node and Python consumers already cost this; the
+  default-on Rust consumer adds to it, and keeps a suspended Fly machine awake. One stream per
+  client family (not per process) bounds it. Follow-up for the server: render a change once and
+  fan it out. A deploy drops every stream; reconnects are spread over an extra 0 to 5 s so the
+  cache wipe on `connected` does not become one burst of evaluate calls.
 - Not touched: migrations, RLS, metering, bucketing, webhooks, licensing (the crate stays MIT; no
   server code is copied).
 
