@@ -80,7 +80,8 @@ client.close();
 `FlagClient` is `AutoCloseable`, so `try (FlagClient client = new FlagClient(config)) { ... }`
 works too. Other builder methods, all optional: `baseUrl` (default
 `https://otto-flags.savvagent.com`), `cacheTtl` (milliseconds, default 60000), `timeout`
-(milliseconds, default 5000), `enableRealtime` (default on, see below) and `defaults` (flag key to the value served when evaluation fails).
+(milliseconds, default 5000), `enableRealtime` (default on, see below) and `defaults` (flag key to
+the value served when evaluation fails).
 
 ## Evaluate a flag
 

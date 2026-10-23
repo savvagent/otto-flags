@@ -1,6 +1,6 @@
 # Java SDK: consume the flag-change stream
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#173)
 **Ticket:** savvagent/otto-flags#167 (third of five per-SDK PRs; after Rust #170 and Go #171)
 
 Applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md` to
@@ -30,7 +30,7 @@ Applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md` to
   `FlagClient` constructor when `config.isEnableRealtime()`; stopped by `close()` (idempotent).
 - Own `OkHttpClient` derived with `httpClient.newBuilder()`: `readTimeout(90 s)` (the idle
   watchdog: heartbeats arrive every 30 s), `callTimeout(0)`, `connectTimeout(config.getTimeout())`,
-  `followRedirects(false)`, `followSslRedirects(false)`, `retryOnConnectionFailure(false)`.
+  `followRedirects(false)`, `followSslRedirects(false)`, and no `retryOnConnectionFailure(false)`: with it, a failed first exchange marks the route failed and a reconnect never falls back to the working address (found in review).
 - Request `GET <baseUrl>/api/flags/stream` built with `HttpUrl` (path prefix kept, query dropped),
   headers `Authorization: Bearer <key>`, `Accept: text/event-stream`. A response whose content type
   is not `text/event-stream` is a refused attempt.

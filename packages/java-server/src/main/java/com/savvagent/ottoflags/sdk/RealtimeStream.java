@@ -186,7 +186,6 @@ final class RealtimeStream implements AutoCloseable {
                 // A redirect could carry the key elsewhere; a 3xx is a refused attempt.
                 .followRedirects(false)
                 .followSslRedirects(false)
-                .retryOnConnectionFailure(false)
                 .build();
         this.factory = EventSources.createFactory(streamClient);
         ScheduledThreadPoolExecutor executor =
@@ -509,7 +508,7 @@ final class RealtimeStream implements AutoCloseable {
             }
             try {
                 applyEvent(type, data, invalidate);
-            } catch (RuntimeException e) {
+            } catch (RuntimeException | StackOverflowError e) {
                 logger.warn("Otto Flags stream: applying an event failed: {}", e.toString());
             }
         }
