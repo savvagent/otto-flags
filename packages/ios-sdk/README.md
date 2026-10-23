@@ -5,7 +5,7 @@ The official iOS SDK for [Otto Flags](https://github.com/savvagent/otto-flags) -
 ## Features
 
 - **Native Swift API** - Idiomatic Swift with async/await support
-- **Real-time Updates** - WebSocket support for instant flag updates
+- **Polling Refresh** - the flag list is polled from `GET /api/sdk/flags` (no real-time stream yet)
 - **Automatic Caching** - Smart caching with configurable polling
 - **Type-Safe** - Full type safety with Swift's type system
 - **Lightweight** - Zero external dependencies
@@ -202,7 +202,7 @@ let config = OttoFlagsConfig(
     sdkKey: "your-sdk-key",
     environment: "production",
     pollingInterval: 60,        // Poll every 60 seconds
-    enableWebSocket: true,       // Enable real-time updates
+    enableWebSocket: true,       // Ignored: no WebSocket endpoint exists
     timeout: 30                  // Request timeout in seconds
 )
 ```
@@ -232,17 +232,7 @@ let enabled = await client.getVariation(
 
 ### Event Tracking
 
-```swift
-// Track custom events
-await client.track(
-    eventName: "feature_used",
-    context: context,
-    properties: [
-        "feature": "new-checkout",
-        "duration": 1234
-    ]
-)
-```
+`track` is a documented no-op (savvagent/otto-flags#125). The server has no custom-event endpoint (only `POST /api/telemetry/evaluations` and `/errors`), so nothing is sent. The method is kept so existing code compiles.
 
 ### Cleanup
 
@@ -270,16 +260,9 @@ let context = UserContext(
 )
 ```
 
-### WebSocket Support
+### Real-time Updates
 
-Enable WebSocket for real-time flag updates:
-
-```swift
-let config = OttoFlagsConfig(
-    sdkKey: "your-sdk-key",
-    enableWebSocket: true  // Flags update in real-time
-)
-```
+The server has no WebSocket endpoint, so the SDK opens no real-time connection (savvagent/otto-flags#125). `enableWebSocket` is ignored and kept only so existing code compiles. The documented real-time channel is the SSE stream `GET /api/flags/stream`, which this SDK does not consume yet; until it does, changes reach the client through the polling interval: each poll calls `GET /api/sdk/flags?environment=<env>` and drops the cached results of the flags it lists.
 
 ### Caching
 

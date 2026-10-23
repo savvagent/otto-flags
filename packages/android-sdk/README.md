@@ -5,7 +5,7 @@ The official Android SDK for [Otto Flags](https://github.com/savvagent/otto-flag
 ## Features
 
 - **Native Kotlin API** - Idiomatic Kotlin with coroutines support
-- **Real-time Updates** - WebSocket support for instant flag updates
+- **Polling Refresh** - the flag list is polled from `GET /api/sdk/flags` (no real-time stream yet)
 - **Automatic Caching** - Smart caching with configurable polling
 - **Type-Safe** - Full type safety with Kotlin's type system
 - **Lightweight** - Minimal dependencies
@@ -176,7 +176,7 @@ val config = OttoFlagsConfig(
     sdkKey = "your-sdk-key",
     environment = "production",
     pollingInterval = 60_000L,     // Poll every 60 seconds
-    enableWebSocket = true,         // Enable real-time updates
+    enableWebSocket = true,         // Ignored: no WebSocket endpoint exists
     timeout = 30_000L,              // Request timeout in milliseconds
     enableLogging = true            // Enable debug logging
 )
@@ -207,24 +207,12 @@ val enabled = client.getVariation(
 
 ### Event Tracking
 
-```kotlin
-// Track custom events
-lifecycleScope.launch {
-    client.track(
-        eventName = "feature_used",
-        userContext = context,
-        properties = mapOf(
-            "feature" to "new-checkout",
-            "duration" to 1234
-        )
-    )
-}
-```
+`track` is a documented no-op (savvagent/otto-flags#125). The server has no custom-event endpoint (only `POST /api/telemetry/evaluations` and `/errors`), so nothing is sent. The method is kept so existing code compiles.
 
 ### Real-time Flag Updates
 
-`flagUpdates` publishes, per flag, the result of each evaluation fetched from the server. Stream
-and poll messages drop the flag's cached results, so the next `evaluate` asks the server; they do
+`flagUpdates` publishes, per flag, the result of each evaluation fetched from the server. Each
+poll of `GET /api/sdk/flags` drops the flag's cached results, so the next `evaluate` asks the server; they do
 not publish into `flagUpdates` themselves.
 
 ```kotlin
@@ -266,16 +254,9 @@ val context = UserContext(
 )
 ```
 
-### WebSocket Support
+### Real-time Updates
 
-Enable WebSocket for real-time flag updates:
-
-```kotlin
-val config = OttoFlagsConfig(
-    sdkKey = "your-sdk-key",
-    enableWebSocket = true  // Stream messages drop cached results for the changed flag
-)
-```
+The server has no WebSocket endpoint, so the SDK opens no real-time connection (savvagent/otto-flags#125). `enableWebSocket` is ignored and kept only so existing code compiles. The documented real-time channel is the SSE stream `GET /api/flags/stream`, which this SDK does not consume yet; until it does, changes reach the client through the polling interval: each poll calls `GET /api/sdk/flags?environment=<env>` and drops the cached results of the flags it lists.
 
 ### Caching
 

@@ -24,6 +24,7 @@ data class OttoFlagsConfig(
     val sdkKey: String,
     val environment: String = "production",
     val pollingInterval: Long = 60_000L, // milliseconds
+    /** Ignored: the server has no WebSocket endpoint (savvagent/otto-flags#125); kept so callers compile. */
     val enableWebSocket: Boolean = true,
     val timeout: Long = 30_000L, // milliseconds
     val enableLogging: Boolean = false
@@ -116,16 +117,12 @@ class OttoFlagsClient(
     private val configOverrides = ConcurrentHashMap<String, ConfigOverrideEntry>()
     private val variationOverrides = ConcurrentHashMap<String, VariationOverrideEntry>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var webSocket: WebSocket? = null
     private var pollingJob: Job? = null
 
     private val _flagUpdates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val flagUpdates: StateFlow<Map<String, Boolean>> = _flagUpdates
 
     init {
-        if (config.enableWebSocket) {
-            setupWebSocket()
-        }
         startPolling()
     }
 
@@ -307,34 +304,18 @@ class OttoFlagsClient(
     }
 
     /**
-     * Track an event for analytics
+     * Track an event for analytics.
+     *
+     * A documented no-op (savvagent/otto-flags#125): the server has no custom-event endpoint
+     * (docs/SDK-DEVELOPER-GUIDE.md lists only the evaluation and error telemetry routes), so
+     * nothing is sent. Kept so existing callers compile.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun track(
         eventName: String,
         userContext: UserContext,
         properties: Map<String, Any> = emptyMap()
     ) {
-        withContext(Dispatchers.IO) {
-            try {
-                val url = "${config.apiUrl}/v1/events"
-                val json = JSONObject().apply {
-                    put("event", eventName)
-                    put("context", userContext.toJson())
-                    put("properties", JSONObject(properties))
-                    put("timestamp", System.currentTimeMillis())
-                }
-
-                val request = Request.Builder()
-                    .url(url)
-                    .post(json.toString().toRequestBody("application/json".toMediaType()))
-                    .addHeader("Authorization", "Bearer ${config.sdkKey}")
-                    .build()
-
-                okHttpClient.newCall(request).execute().close()
-            } catch (e: Exception) {
-                logError("Error tracking event: $eventName", e)
-            }
-        }
     }
 
     /**
@@ -349,7 +330,6 @@ class OttoFlagsClient(
      */
     fun close() {
         pollingJob?.cancel()
-        webSocket?.close(1000, "Client closed")
         scope.cancel()
     }
 
@@ -441,46 +421,6 @@ class OttoFlagsClient(
 
     // MARK: - Private Methods
 
-    private fun setupWebSocket() {
-        try {
-            val wsUrl = config.apiUrl.replace("http", "ws") + "/v1/stream"
-            val request = Request.Builder()
-                .url(wsUrl)
-                .addHeader("Authorization", "Bearer ${config.sdkKey}")
-                .build()
-
-            webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    handleWebSocketMessage(text)
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    logError("WebSocket failure", t)
-                    // Attempt to reconnect after delay
-                    scope.launch {
-                        delay(5000)
-                        setupWebSocket()
-                    }
-                }
-            })
-        } catch (e: Exception) {
-            logError("Error setting up WebSocket", e)
-        }
-    }
-
-    private fun handleWebSocketMessage(message: String) {
-        try {
-            val json = JSONObject(message)
-            val flagKey = json.getString("flagKey")
-
-            // The message carries no context, so it cannot be written to a per-context
-            // entry: drop the flag's entries and let the next evaluation fetch.
-            flagCache.remove(flagKey)
-        } catch (e: Exception) {
-            logError("Error handling WebSocket message", e)
-        }
-    }
-
     private fun startPolling() {
         if (config.pollingInterval <= 0) return
 
@@ -492,26 +432,34 @@ class OttoFlagsClient(
         }
     }
 
-    private suspend fun refreshFlags() {
+    /**
+     * Poll `GET /api/sdk/flags?environment=<env>` (docs/SDK-DEVELOPER-GUIDE.md) and drop the
+     * cached results of every flag it lists, so the next lookup re-evaluates. Never throws:
+     * a failed request, a non-2xx status or an unparseable body leaves the cache alone.
+     */
+    internal suspend fun refreshFlags() {
         try {
-            val url = "${config.apiUrl}/v1/flags"
+            val url = "${config.apiUrl}/api/sdk/flags".toHttpUrl().newBuilder()
+                .addQueryParameter("environment", config.environment)
+                .build()
             val request = Request.Builder()
                 .url(url)
+                .get()
                 .addHeader("Authorization", "Bearer ${config.sdkKey}")
                 .build()
 
-            val response = okHttpClient.newCall(request).execute()
+            withContext(Dispatchers.IO) {
+                okHttpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: ""
+                        val flags = JSONObject(body).getJSONArray("flags")
 
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: ""
-                val json = JSONObject(body)
-                val flags = json.getJSONArray("flags")
-
-                for (i in 0 until flags.length()) {
-                    val flag = flags.getJSONObject(i)
-                    val key = flag.getString("key")
-                    // The list carries no context; invalidate instead of writing.
-                    flagCache.remove(key)
+                        for (i in 0 until flags.length()) {
+                            val key = flags.getJSONObject(i).getString("key")
+                            // The list carries no context; invalidate instead of writing.
+                            flagCache.remove(key)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {

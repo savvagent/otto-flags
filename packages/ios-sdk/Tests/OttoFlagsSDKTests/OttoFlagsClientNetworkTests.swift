@@ -167,6 +167,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
         XCTAssertEqual(value, "light")
     }
 
+<<<<<<< HEAD
     func testTrackEventSendsCorrectPayload() async throws {
         respond()
 
@@ -194,6 +195,21 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
         await client.track(eventName: "button_click", context: UserContext(userId: "user-123"))
 
         XCTAssertTrue(recorded().requests.isEmpty)
+=======
+    /// `track` is a documented no-op (savvagent/otto-flags#125): the server has no
+    /// custom-event endpoint, so it must send nothing.
+    func testTrackSendsNoRequest() async {
+        var requestCount = 0
+        MockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (response, Data())
+        }
+
+        await client.track(eventName: "button_click", context: UserContext(userId: "user-123"))
+
+        XCTAssertEqual(requestCount, 0)
+>>>>>>> b4c7026 (fix(ios,android): poll the documented flag list and drop the unserved stream and events calls)
     }
 
     func testUserContextSerializesToJSON() {

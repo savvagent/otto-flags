@@ -9,6 +9,8 @@ public struct OttoFlagsConfig {
     let sdkKey: String
     let environment: String
     let pollingInterval: TimeInterval
+    /// Ignored. The server has no WebSocket endpoint and the SDK no longer opens one
+    /// (savvagent/otto-flags#125); kept so existing callers still compile.
     let enableWebSocket: Bool
     let timeout: TimeInterval
 
@@ -107,7 +109,6 @@ public class OttoFlagsClient {
     private static let maxContextsPerFlag = 10_000
     private var configOverrides: [String: ConfigOverrideEntry] = [:]
     private var variationOverrides: [String: VariationOverrideEntry] = [:]
-    private var webSocketTask: URLSessionWebSocketTask?
     private let session: URLSession
     private let queue = DispatchQueue(label: "com.savvagent.ottoflags.sdk", qos: .utility)
 
@@ -129,10 +130,6 @@ public class OttoFlagsClient {
     internal init(config: OttoFlagsConfig, session: URLSession) {
         self.config = config
         self.session = session
-
-        if config.enableWebSocket {
-            setupWebSocket()
-        }
 
         startPolling()
     }
@@ -365,34 +362,16 @@ public class OttoFlagsClient {
         ]
     }
 
-    /// Track an event for analytics
+    /// Track an event for analytics.
+    ///
+    /// A documented no-op (savvagent/otto-flags#125): the server has no custom-event endpoint
+    /// (`docs/SDK-DEVELOPER-GUIDE.md` lists only the evaluation and error telemetry routes), so
+    /// nothing is sent. The method stays so existing callers compile.
     /// - Parameters:
     ///   - eventName: Name of the event
     ///   - context: User context
     ///   - properties: Additional event properties
     public func track(eventName: String, context: UserContext, properties: [String: Any] = [:]) async {
-        guard let url = URL(string: "\(config.apiUrl)/v1/events") else {
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "event": eventName,
-            "context": context.toJSON(),
-            "properties": properties,
-            "timestamp": ISO8601DateFormatter().string(from: Date())
-        ]
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            _ = try await session.fetchData(for: request)
-        } catch {
-            // Silently fail for tracking
-        }
     }
 
     /// Flush any pending events or data
@@ -402,7 +381,6 @@ public class OttoFlagsClient {
 
     /// Close the client and cleanup resources
     public func close() {
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
     }
 
     /// Set a configuration override for a flag
@@ -504,97 +482,50 @@ public class OttoFlagsClient {
 
     // MARK: - Private Methods
 
-    private func setupWebSocket() {
-        guard let url = URL(string: config.apiUrl.replacingOccurrences(of: "http", with: "ws") + "/v1/stream") else {
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
-
-        webSocketTask = session.webSocketTask(with: request)
-        webSocketTask?.resume()
-
-        receiveWebSocketMessage()
-    }
-
-    private func receiveWebSocketMessage() {
-        webSocketTask?.receive { [weak self] result in
-            guard let self = self else { return }
-
-            switch result {
-            case .success(let message):
-                switch message {
-                case .string(let text):
-                    self.handleWebSocketMessage(text)
-                case .data(let data):
-                    if let text = String(data: data, encoding: .utf8) {
-                        self.handleWebSocketMessage(text)
-                    }
-                @unknown default:
-                    break
-                }
-
-                self.receiveWebSocketMessage()
-
-            case .failure:
-                // Attempt to reconnect after delay
-                DispatchQueue.global().asyncAfter(deadline: .now() + 5) {
-                    self.setupWebSocket()
-                }
-            }
-        }
-    }
-
-    private func handleWebSocketMessage(_ message: String) {
-        guard let data = message.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let flagKey = json["flagKey"] as? String,
-              json["enabled"] is Bool else {
-            return
-        }
-
-        // The message carries one result, but the cache holds one per context: drop them all.
-        queue.async { [weak self] in
-            self?.flagCache.removeValue(forKey: flagKey)
-        }
-    }
-
     private func startPolling() {
         guard config.pollingInterval > 0 else { return }
 
         queue.asyncAfter(deadline: .now() + config.pollingInterval) { [weak self] in
-            self?.refreshFlags()
+            Task { await self?.refreshFlags() }
             self?.startPolling()
         }
     }
 
-    private func refreshFlags() {
-        Task {
-            guard let url = URL(string: "\(config.apiUrl)/v1/flags") else {
+    /// Poll `GET /api/sdk/flags?environment=<env>` (docs/SDK-DEVELOPER-GUIDE.md) and drop the
+    /// cached results of every flag it lists, so the next lookup re-evaluates. Never throws:
+    /// a failed request, a non-2xx status or an unparseable body leaves the cache alone.
+    func refreshFlags() async {
+        guard var components = URLComponents(string: "\(config.apiUrl)/api/sdk/flags") else {
+            return
+        }
+        components.queryItems = [URLQueryItem(name: "environment", value: config.environment)]
+        guard let url = components.url else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = config.timeout
+
+        do {
+            let (data, response) = try await session.fetchData(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode),
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let flags = json["flags"] as? [[String: Any]] else {
                 return
             }
 
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
-
-            do {
-                let (data, _) = try await session.fetchData(for: request)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let flags = json["flags"] as? [[String: Any]] {
-
-                    for flag in flags {
-                        if let key = flag["key"] as? String,
-                           flag["enabled"] is Bool {
-                            queue.async { [weak self] in
-                                self?.flagCache.removeValue(forKey: key)
-                            }
-                        }
+            for flag in flags {
+                if let key = flag["key"] as? String {
+                    queue.async { [weak self] in
+                        self?.flagCache.removeValue(forKey: key)
                     }
                 }
-            } catch {
-                // Silently fail for polling
             }
+        } catch {
+            // Silently fail for polling
         }
     }
 

@@ -58,7 +58,7 @@ final class FlagKeyValidationTests: XCTestCase {
     private func flagRequests() -> [URL] {
         lock.lock()
         defer { lock.unlock() }
-        return urls.filter { $0.path != "/v1/flags" }
+        return urls.filter { $0.path != "/api/sdk/flags" }
     }
 
     private var invalidKeys: [String] {
