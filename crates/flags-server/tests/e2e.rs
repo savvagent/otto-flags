@@ -75,6 +75,9 @@ struct Platform {
     declared: Vec<String>,
     /// Every usage event received, in order.
     events: Vec<UsageEvent>,
+    /// When set, a metered event is rejected as `unknown_meter` unless its
+    /// meter is in `declared`, as the real platform does.
+    enforce_meters: bool,
 }
 
 /// How the mock answers one meter declaration.
@@ -219,11 +222,26 @@ async fn ship(
                 .collect(),
         }));
     }
-    p.shipped += b.events.len();
+    let unknown: Vec<RejectedEvent> = if p.enforce_meters {
+        b.events
+            .iter()
+            .filter_map(|e| {
+                let m = e.meter.as_ref()?;
+                (!p.declared.contains(m)).then(|| RejectedEvent {
+                    event_id: e.event_id,
+                    reason: format!("unknown_meter: {m}"),
+                })
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    let accepted = b.events.len() - unknown.len();
+    p.shipped += accepted;
     Ok(Json(UsageReceipt {
-        accepted: b.events.len() as u32,
+        accepted: accepted as u32,
         duplicates: 0,
-        rejected: vec![],
+        rejected: unknown,
     }))
 }
 
@@ -1998,6 +2016,119 @@ async fn a_rejected_metered_row_keeps_its_meter_and_quantity(pool: PgPool) {
     assert_eq!(meter.as_deref(), Some("otto-flags/evaluations"));
     assert_eq!(quantity, Some(55));
     assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+}
+
+fn quick_cfg() -> flags_core::usage::ShipperConfig {
+    flags_core::usage::ShipperConfig {
+        base_backoff: Duration::from_millis(10),
+        max_backoff: Duration::from_millis(40),
+        ..Default::default()
+    }
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn an_unknown_meter_rejection_redeclares_and_retries_instead_of_dead_lettering(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let event_id = insert_metered(s.db.pool(), Uuid::new_v4(), 77).await;
+    // The platform has forgotten the meter (or never saw it in this process).
+    platform.lock().unwrap().enforce_meters = true;
+
+    let n = flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    assert_eq!(n, 1);
+    // Re-declared, and the row kept for a retry rather than dead-lettered.
+    assert_eq!(
+        platform.lock().unwrap().declared,
+        vec!["otto-flags/evaluations".to_string()]
+    );
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 1);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+    let p = platform.lock().unwrap();
+    assert_eq!(p.shipped, 1);
+    let sent = p.events.iter().filter(|e| e.event_id == event_id).count();
+    assert_eq!(sent, 2, "sent once refused, once accepted");
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_failed_redeclaration_still_keeps_the_rows(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 5).await;
+    {
+        let mut p = platform.lock().unwrap();
+        p.enforce_meters = true;
+        p.meter_modes = [MeterMode::ServiceNotSet].into();
+    }
+
+    flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 1);
+    assert_eq!(row_count(s.db.pool(), "usage_outbox_rejected").await, 0);
+
+    // The next unknown_meter answer re-declares again and succeeds.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    assert_eq!(row_count(s.db.pool(), "usage_outbox").await, 0);
+    assert_eq!(platform.lock().unwrap().shipped, 1);
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn other_rejections_in_a_mixed_batch_still_dead_letter(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let metered = insert_metered(s.db.pool(), Uuid::new_v4(), 3).await;
+    let unmetered: Uuid = sqlx::query_scalar(
+        "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \
+         VALUES ($1, NULL, 'create_flag', false) RETURNING event_id",
+    )
+    .bind(Uuid::new_v4())
+    .fetch_one(s.db.pool())
+    .await
+    .unwrap();
+    platform.lock().unwrap().receipt = Some(UsageReceipt {
+        accepted: 0,
+        duplicates: 0,
+        rejected: vec![
+            RejectedEvent {
+                event_id: metered,
+                reason: "unknown_meter: otto-flags/evaluations".into(),
+            },
+            RejectedEvent {
+                event_id: unmetered,
+                reason: "invalid_quantity: nope".into(),
+            },
+        ],
+    });
+
+    flags_core::usage::ship_once(&s.db, &s.platform, &quick_cfg())
+        .await
+        .unwrap();
+    let rejected: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox_rejected")
+        .fetch_all(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(rejected, vec![unmetered]);
+    let kept: Vec<Uuid> = sqlx::query_scalar("SELECT event_id FROM usage_outbox")
+        .fetch_all(s.db.pool())
+        .await
+        .unwrap();
+    assert_eq!(kept, vec![metered]);
 }
 
 /// Runs `usage::run` against the mock until `done` holds, then stops it.

@@ -18,7 +18,10 @@
 //! - **Shipping declares first.** The platform refuses usage for a meter nobody
 //!   declared, so [`run`] first declares [`crate::metering::METER_DECLARATIONS`]
 //!   and ships nothing until the platform accepts them, retrying with backoff.
-//!   Rows stay queued meanwhile and nothing is lost.
+//!   Rows stay queued meanwhile and nothing is lost. If the platform later
+//!   refuses events as `unknown_meter` (it forgot the declaration), the shipper
+//!   re-declares and retries those events with backoff instead of
+//!   dead-lettering them (#144).
 //! - **Refused events are kept, then swept.** An event the platform rejects
 //!   outright moves to `usage_outbox_rejected` with its reason (and, for a
 //!   metered row, its meter and quantity), is kept for
@@ -387,8 +390,8 @@ pub async fn ship_once(
         return Ok(0);
     }
     rows.sort_by_key(|r| r.id);
-    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
-    let attempts: Vec<i32> = rows.iter().map(|r| r.attempts).collect();
+    let mut ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let mut attempts: Vec<i32> = rows.iter().map(|r| r.attempts).collect();
     let events: Vec<UsageEvent> = rows
         .iter()
         .map(|r| UsageEvent {
@@ -441,9 +444,39 @@ pub async fn ship_once(
         return Err(refuse_receipt(db, &ids, &attempts, msg, cfg).await);
     }
 
-    let mut rejected_ids: Vec<Uuid> = Vec::with_capacity(receipt.rejected.len());
-    let mut reasons: Vec<String> = Vec::with_capacity(receipt.rejected.len());
-    for r in &receipt.rejected {
+    // An event refused as `unknown_meter` is not dead-lettered: the platform
+    // lost the declaration, not the event. Re-declare, keep those rows and
+    // retry them with backoff. Only this batch's own ids can be in the set
+    // (checked above).
+    let (forgotten, refused): (Vec<_>, Vec<_>) = receipt
+        .rejected
+        .iter()
+        .partition(|r| is_unknown_meter(&r.reason));
+    if !forgotten.is_empty() {
+        tracing::warn!(
+            events = forgotten.len(),
+            "the platform refused usage events as unknown_meter; re-declaring the meters and retrying them"
+        );
+        let retry: HashSet<Uuid> = forgotten.iter().map(|r| r.event_id).collect();
+        let (retry_ids, retry_attempts): (Vec<i64>, Vec<i32>) = rows
+            .iter()
+            .filter(|r| retry.contains(&r.event_id))
+            .map(|r| (r.id, r.attempts))
+            .unzip();
+        reschedule(db, &retry_ids, &retry_attempts, UNKNOWN_METER, cfg).await;
+        redeclare_meters(platform).await;
+        let (kept_ids, kept_attempts) = rows
+            .iter()
+            .filter(|r| !retry.contains(&r.event_id))
+            .map(|r| (r.id, r.attempts))
+            .unzip();
+        ids = kept_ids;
+        attempts = kept_attempts;
+    }
+
+    let mut rejected_ids: Vec<Uuid> = Vec::with_capacity(refused.len());
+    let mut reasons: Vec<String> = Vec::with_capacity(refused.len());
+    for r in refused {
         // The platform's reason is its text, not ours: debug only, and kept in
         // usage_outbox_rejected for operators (#44), capped and with NUL
         // replaced so it is bounded and cannot fail the batch (#51).
@@ -505,7 +538,7 @@ pub async fn ship_once(
             "rejected usage events are no longer held by this claim; left as they are"
         );
     }
-    Ok(ids.len())
+    Ok(rows.len())
 }
 
 /// Delete rejected usage events older than [`REJECTED_RETENTION_DAYS`],
@@ -587,6 +620,50 @@ fn stored_reason(e: &otto_resource::Error) -> String {
     }
 }
 
+/// The platform's rejection code for an event naming a meter it does not hold.
+/// A rejection reason is `<code>: <detail>`.
+const UNKNOWN_METER: &str = "unknown_meter";
+
+/// Whether a platform rejection reason is the `unknown_meter` code.
+fn is_unknown_meter(reason: &str) -> bool {
+    reason
+        .split(':')
+        .next()
+        .is_some_and(|c| c.trim() == UNKNOWN_METER)
+}
+
+/// The meters this service declares, as the platform's client wants them.
+fn meter_declarations() -> Vec<MeterDeclaration> {
+    crate::metering::METER_DECLARATIONS
+        .iter()
+        .map(|(key, display, unit)| MeterDeclaration::new(*key, *display, *unit))
+        .collect()
+}
+
+/// Declare the meters once, after the platform refused events as
+/// `unknown_meter` (it forgot them, for example after a platform-side reset).
+/// Declaring is idempotent. A failure only logs, text-free: the rows stay
+/// queued and the next refusal tries again.
+async fn redeclare_meters(platform: &PlatformClient) {
+    let declarations = meter_declarations();
+    match declaration_failure(platform.declare_meters(&declarations).await) {
+        None => tracing::info!(
+            meters = declarations.len(),
+            "re-declared usage meters after the platform refused events as unknown_meter"
+        ),
+        Some((f, text)) => {
+            tracing::error!(
+                reason = f.reason,
+                status = f.status,
+                transport = f.transport,
+                "could not re-declare the usage meters after the platform refused events as \
+                 unknown_meter; those events stay queued and are retried"
+            );
+            tracing::debug!(reason = f.reason, platform_text = %text, "could not re-declare the usage meters");
+        }
+    }
+}
+
 /// How often a stuck meter declaration is logged.
 const DECLARE_LOG_EVERY: Duration = Duration::from_secs(60);
 
@@ -637,10 +714,7 @@ async fn declare_meters(
     cfg: &ShipperConfig,
     shutdown: &mut watch::Receiver<bool>,
 ) -> bool {
-    let declarations: Vec<MeterDeclaration> = crate::metering::METER_DECLARATIONS
-        .iter()
-        .map(|(key, display, unit)| MeterDeclaration::new(*key, *display, *unit))
-        .collect();
+    let declarations = meter_declarations();
     let mut attempt: u32 = 0;
     let mut last_logged: Option<tokio::time::Instant> = None;
     loop {
