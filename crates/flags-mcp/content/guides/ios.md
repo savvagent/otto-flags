@@ -60,9 +60,9 @@ let client = OttoFlagsClient(config: config)
 ```
 
 Other `OttoFlagsConfig` parameters, all optional: `apiUrl` (default
-`https://otto-flags.savvagent.com`), `pollingInterval` (seconds, default 60), `enableRealtime`
-(default `false`, see below), `enableWebSocket` (ignored) and `timeout` (seconds, default 30). Call
-`client.close()` when the app no longer needs the stream.
+`https://otto-flags.savvagent.com`), `pollingInterval` (seconds, default 60), `enableWebSocket` (ignored), `timeout` (seconds, default
+30) and `enableRealtime` (default `false`, see below). Pass them in that order. Call
+`client.close()` to stop the stream and release the client when the app no longer needs it.
 
 **Environment.** The `environment` this app evaluates in, wherever this guide sets it (the client
 configuration or a context), must be one of the app's environments: {{ENVIRONMENTS}}. Read it from the
@@ -75,7 +75,8 @@ which also reads the server's flag-change stream and drops a changed flag's cach
 about a round trip. It is off by default because a held connection costs battery and radio wake-ups.
 The stream never delays or fails a lookup; polling remains the fallback while it is down. It runs
 while the client is open, so call `close()` when the app goes to the background if you do not want
-the connection held (`close()` stops the stream only; create a new client on return).
+the connection held (`close()` stops the stream only, polling runs until the client is released; create a new client
+on return).
 
 ## Evaluate a flag
 

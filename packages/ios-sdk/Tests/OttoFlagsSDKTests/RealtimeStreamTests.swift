@@ -500,12 +500,14 @@ final class RealtimeStreamTests: XCTestCase {
 
     func testWhileTheStreamIsRefusedLookupsWorkAndThePollStillRefreshes() async throws {
         registry.fallback = .refusal(503, headers: ["Retry-After": "1"])
-        let client = makeClient(pollingInterval: 0.1)
+        // No timer: a background poll could outlive tearDown and hit a cleared handler, so the
+        // poll is run by hand, which is the same invalidation.
+        let client = makeClient()
         waitFor("stream retries") { registry.count >= 3 }
 
-        // Not `cache`: a poll may land between the lookup and its check.
-        _ = try await client.evaluate(flagKey: "checkout", context: user)
-        waitFor("the poll invalidating checkout") { !client.isCached(flagKey: "checkout") }
+        try await cache(client, "checkout")
+        await client.refreshFlags()
+        XCTAssertFalse(client.isCached(flagKey: "checkout"))
         XCTAssertFalse(paths.all.filter { $0.hasSuffix("/api/sdk/flags") }.isEmpty)
         let again = try await client.evaluate(flagKey: "checkout", context: user)
         XCTAssertTrue(again.value)

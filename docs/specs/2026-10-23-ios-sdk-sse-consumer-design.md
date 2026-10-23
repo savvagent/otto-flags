@@ -1,6 +1,6 @@
 # iOS SDK: consume the flag-change stream
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#182)
 **Ticket:** savvagent/otto-flags#167 (fifth and last of the per-SDK PRs; after Rust #170, Go #171, Java #173, Android #177)
 
 Applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md` to `packages/ios-sdk`;
@@ -52,14 +52,14 @@ with a polling fallback and `enableRealtime` default off).
   between data packets; heartbeats arrive every 30 s), `timeoutIntervalForResource` very large,
   `httpShouldUsePipelining` unchanged, no cache (`urlCache = nil`, `requestCachePolicy =
   .reloadIgnoringLocalCacheData`), a delegate object, and a serial delegate `OperationQueue`. The
-  session is created by an injectable factory (`(URLSessionDataDelegate, OperationQueue) ->
+  session is created by an injectable factory (`(URLSessionConfiguration, URLSessionDataDelegate, OperationQueue) ->
   URLSession`) so tests can supply `protocolClasses`.
 - Request: `GET <apiUrl>/api/flags/stream` built with `URLComponents` (path prefix kept, no query),
   headers `Authorization: Bearer <sdkKey>`, `Accept: text/event-stream`, `Accept-Encoding:
   identity`.
 - Delegate callbacks (all on the delegate queue; state guarded by one lock or by confining it to
-  that queue): `didReceive response` -> require HTTP 2xx and a `Content-Type` containing
-  `text/event-stream`, else cancel the attempt as refused (`completionHandler(.cancel)`) with the
+  that queue): `didReceive response` -> require HTTP 2xx and a `Content-Type` whose media type is
+  exactly `text/event-stream` (parameters and case ignored), else cancel the attempt as refused (`completionHandler(.cancel)`) with the
   status recorded (and `Retry-After` for 429/503); `didReceive data` -> parser -> events;
   `willPerformHTTPRedirection` -> `completionHandler(nil)` (a redirect is a refused attempt; the
   key must not follow it); `didCompleteWithError` -> schedule the reconnect. The delegate holds the

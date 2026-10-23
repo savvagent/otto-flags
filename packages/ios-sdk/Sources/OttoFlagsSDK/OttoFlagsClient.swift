@@ -442,7 +442,8 @@ public class OttoFlagsClient {
     /// Close the client and cleanup resources.
     ///
     /// Stops the flag-change stream (`enableRealtime`): its connection is cancelled and it does
-    /// not reconnect. Idempotent. Lookups keep working afterwards.
+    /// not reconnect. Idempotent. Lookups keep working afterwards. Polling is not stopped: it runs
+    /// until the client is released, so drop your reference to a closed client.
     public func close() {
         let stream: RealtimeStream? = queue.sync {
             let current = self.stream
