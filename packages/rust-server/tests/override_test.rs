@@ -172,7 +172,7 @@ async fn test_clear_configuration_override() {
 
 #[tokio::test]
 async fn test_has_override() {
-    let config = Config::new("sdk_test_key");
+    let config = Config::new("sdk_test_key").with_realtime(false);
     let client = FlagClient::new(config).unwrap();
 
     assert!(!client.has_config_override("test-flag"));
@@ -190,7 +190,7 @@ async fn test_has_override() {
 
 #[tokio::test]
 async fn test_clear_all_overrides() {
-    let config = Config::new("sdk_test_key");
+    let config = Config::new("sdk_test_key").with_realtime(false);
     let client = FlagClient::new(config).unwrap();
 
     client
@@ -259,7 +259,7 @@ async fn test_deep_merge_nested_configurations() {
 
 #[tokio::test]
 async fn test_get_all_overrides() {
-    let config = Config::new("sdk_test_key");
+    let config = Config::new("sdk_test_key").with_realtime(false);
     let client = FlagClient::new(config).unwrap();
 
     client

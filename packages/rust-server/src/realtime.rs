@@ -19,7 +19,7 @@
 use crate::backoff::parse_retry_after;
 use crate::cache::Cache;
 use crate::client::is_valid_flag_key;
-use reqwest::header::{ACCEPT, AUTHORIZATION, RETRY_AFTER};
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, RETRY_AFTER};
 use reqwest::StatusCode;
 use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -69,10 +69,12 @@ pub(crate) struct SseParser {
     line: Vec<u8>,
     /// The pending event's name.
     event: Option<String>,
-    /// The pending event's data lines.
-    data: Vec<String>,
-    /// The bytes held in `data`, counting one joining `\n` per line.
-    data_bytes: usize,
+    /// The pending event's data lines, joined with `\n` as they arrive, so the buffer's length
+    /// is exactly what the cap counts (a flood of empty `data:` lines still costs a byte each).
+    data: String,
+    /// Whether the pending event has had a `data` line (the buffer alone cannot say: the line
+    /// may have been empty).
+    has_data: bool,
 }
 
 impl SseParser {
@@ -100,7 +102,7 @@ impl SseParser {
     }
 
     fn check_size(&self) -> Result<(), TooLarge> {
-        if self.line.len() + self.data_bytes > MAX_EVENT_BYTES {
+        if self.line.len() + self.data.len() > MAX_EVENT_BYTES {
             Err(TooLarge)
         } else {
             Ok(())
@@ -112,13 +114,13 @@ impl SseParser {
         if line.is_empty() {
             let event = self.event.take();
             let data = std::mem::take(&mut self.data);
-            self.data_bytes = 0;
-            if event.is_none() && data.is_empty() {
+            let has_data = std::mem::take(&mut self.has_data);
+            if event.is_none() && !has_data {
                 return None;
             }
             return Some(SseEvent {
                 event: event.unwrap_or_else(|| "message".to_string()),
-                data: data.join("\n"),
+                data,
             });
         }
         if line.starts_with(':') {
@@ -131,8 +133,11 @@ impl SseParser {
         match field {
             "event" => self.event = Some(value.to_string()),
             "data" => {
-                self.data_bytes += value.len() + 1;
-                self.data.push(value.to_string());
+                if self.has_data {
+                    self.data.push('\n');
+                }
+                self.data.push_str(value);
+                self.has_data = true;
             }
             // `id` and `retry` are not used: a reconnect clears the cache rather than resuming,
             // and the delay is the client's own.
@@ -155,6 +160,20 @@ pub(crate) fn reconnect_delay(attempt: u32, cap: Duration, unit: f64) -> Duratio
         unit.clamp(0.0, 1.0)
     };
     full.mul_f64(0.5 + unit / 2.0)
+}
+
+/// The longest extra wait before the first retry of a stream that was up and ended.
+const RECONNECT_SPREAD: Duration = Duration::from_secs(5);
+
+/// Extra wait on top of [`reconnect_delay`] for the first retry after an established stream
+/// ended, uniform in `[0, RECONNECT_SPREAD)` by `unit`; zero otherwise. The base delay is
+/// about a second, far too narrow to spread every client of an app whose streams a deploy
+/// dropped at the same instant.
+pub(crate) fn reconnect_spread(attempt: u32, was_up: bool, unit: f64) -> Duration {
+    if attempt != 0 || !was_up || unit.is_nan() {
+        return Duration::ZERO;
+    }
+    RECONNECT_SPREAD.mul_f64(unit.clamp(0.0, 1.0))
 }
 
 /// A value in `[0, 1)` for jitter, from the standard library's randomly keyed hasher (each
@@ -183,7 +202,6 @@ fn changed_flag_key(data: &str) -> Option<String> {
     is_valid_flag_key(key).then(|| key.to_string())
 }
 
-/// Apply one event to the cache. `heartbeat` and events this SDK does not know are ignored.
 /// What an event does to the cache.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Invalidation {
@@ -215,6 +233,7 @@ pub(crate) fn invalidation_for(event: &SseEvent) -> Option<Invalidation> {
     }
 }
 
+/// Apply one event to the cache. `heartbeat` and events this SDK does not know are ignored.
 fn handle(cache: &Cache, event: &SseEvent) {
     match invalidation_for(event) {
         Some(Invalidation::All) => cache.invalidate(None),
@@ -233,6 +252,10 @@ pub(crate) struct StreamTarget {
     pub url: reqwest::Url,
     /// The app's server or client key.
     pub api_key: String,
+    /// How long the server may take to start answering (the response headers); the body then
+    /// has [`IDLE_TIMEOUT`] per chunk. `reqwest` has no such bound of its own on a client
+    /// without a total timeout.
+    pub header_timeout: Duration,
 }
 
 struct Inner {
@@ -329,8 +352,10 @@ async fn run(client: Weak<Inner>, shutdown: Arc<Notify>, target: StreamTarget) {
             ended = connection(&target) => ended,
             _ = shutdown.notified() => return,
         };
+        let mut was_up = false;
         let cap = match &ended {
             Ended::Dropped { since } => {
+                was_up = true;
                 if since.elapsed() >= STABLE_AFTER {
                     attempt = 0;
                 }
@@ -346,7 +371,8 @@ async fn run(client: Weak<Inner>, shutdown: Arc<Notify>, target: StreamTarget) {
             }
             _ => MAX_DELAY,
         };
-        let mut delay = reconnect_delay(attempt, cap, unit_random());
+        let mut delay = reconnect_delay(attempt, cap, unit_random())
+            + reconnect_spread(attempt, was_up, unit_random());
         if let Ended::Refused {
             status: StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE,
             retry_after: Some(retry_after),
@@ -366,17 +392,23 @@ async fn run(client: Weak<Inner>, shutdown: Arc<Notify>, target: StreamTarget) {
 /// One connection: open the stream and apply its events until it ends. Every failure is
 /// logged here and reported as how the attempt ended; nothing reaches the host.
 async fn connection(target: &StreamTarget) -> Ended {
-    let sent = target
+    let request = target
         .http
         .get(target.url.clone())
         .header(AUTHORIZATION, format!("Bearer {}", target.api_key))
         .header(ACCEPT, "text/event-stream")
-        .send()
-        .await;
-    let mut response = match sent {
-        Ok(response) => response,
-        Err(e) => {
+        .send();
+    let mut response = match tokio::time::timeout(target.header_timeout, request).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(e)) => {
             tracing::warn!("Otto Flags stream: connect failed ({})", e.without_url());
+            return Ended::Unreachable;
+        }
+        Err(_) => {
+            tracing::warn!(
+                "Otto Flags stream: no response within {:?}; reconnecting",
+                target.header_timeout
+            );
             return Ended::Unreachable;
         }
     };
@@ -398,6 +430,23 @@ async fn connection(target: &StreamTarget) -> Ended {
         return Ended::Refused {
             status,
             retry_after,
+        };
+    }
+    let is_event_stream = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.to_ascii_lowercase().contains("text/event-stream"));
+    if !is_event_stream {
+        // A captive portal or a proxy's error page: reading it as events would idle until
+        // the timeout and then log a successful connection.
+        tracing::warn!(
+            "Otto Flags stream: the response is not text/event-stream (status {}); not using it",
+            status
+        );
+        return Ended::Refused {
+            status,
+            retry_after: None,
         };
     }
     tracing::info!("Otto Flags stream: connected");
@@ -497,6 +546,32 @@ mod tests {
     }
 
     #[test]
+    fn parser_counts_empty_data_lines_against_the_cap() {
+        let mut p = SseParser::default();
+        let chunk = b"data:\n".repeat(64 * 1024);
+        let mut fed = 0;
+        let refused = loop {
+            if p.feed(&chunk).is_err() {
+                break true;
+            }
+            fed += chunk.len();
+            if fed > 8 * MAX_EVENT_BYTES {
+                break false;
+            }
+        };
+        assert!(refused, "{fed} bytes of empty data lines were accepted");
+        assert!(p.data.len() <= MAX_EVENT_BYTES + chunk.len());
+    }
+
+    #[test]
+    fn parser_keeps_an_event_made_of_one_empty_data_line() {
+        let mut p = SseParser::default();
+        let got = p.feed(b"data:\n\ndata:\ndata:\n\n").unwrap();
+        let got: Vec<_> = got.into_iter().map(|e| e.data).collect();
+        assert_eq!(got, vec!["".to_string(), "\n".to_string()]);
+    }
+
+    #[test]
     fn parser_counts_accumulated_data_lines_against_the_cap() {
         let mut p = SseParser::default();
         let line = format!("data: {}\n", "x".repeat(1024 * 1024));
@@ -532,6 +607,19 @@ mod tests {
                 d >= Duration::from_secs(2) && d <= Duration::from_secs(4),
                 "{unit}: {d:?}"
             );
+        }
+    }
+
+    #[test]
+    fn reconnect_spread_applies_only_to_the_first_retry_of_an_established_stream() {
+        let s = Duration::from_secs;
+        assert_eq!(reconnect_spread(0, true, 0.0), Duration::ZERO);
+        assert_eq!(reconnect_spread(0, true, 0.5), Duration::from_millis(2500));
+        assert!(reconnect_spread(0, true, 0.999999) < s(5));
+        assert_eq!(reconnect_spread(1, true, 0.5), Duration::ZERO);
+        assert_eq!(reconnect_spread(0, false, 0.5), Duration::ZERO);
+        for unit in [f64::NAN, f64::INFINITY, -1.0, 2.0] {
+            assert!(reconnect_spread(0, true, unit) <= s(5), "{unit}");
         }
     }
 
@@ -630,6 +718,7 @@ mod tests {
             http: reqwest::Client::new(),
             url: stream_url(url).unwrap(),
             api_key: "srv_test".into(),
+            header_timeout: IDLE_TIMEOUT,
         }
     }
 
@@ -702,5 +791,30 @@ mod tests {
         assert!(wait_for_requests(&server, 1).await);
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_never_answers_is_abandoned_and_requested_again() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/flags/stream"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let realtime = Realtime::new();
+        let mut t = target(&server.uri());
+        t.header_timeout = Duration::from_millis(100);
+        realtime.ensure_started(&t);
+        // The retry waits 0.5 to 1 s after the first attempt times out.
+        let both = tokio::time::timeout(Duration::from_secs(4), async {
+            while server.received_requests().await.unwrap_or_default().len() < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(both.is_ok(), "the stalled attempt was never retried");
     }
 }

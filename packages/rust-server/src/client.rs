@@ -1,6 +1,6 @@
 use crate::backoff::{parse_retry_after, Backoff, Scope};
 use crate::cache::{context_key, Cache};
-use crate::realtime::{stream_url, Realtime, StreamTarget};
+use crate::realtime::{stream_url, Realtime, StreamTarget, IDLE_TIMEOUT};
 use crate::telemetry::Telemetry;
 use crate::types::{
     Config, ConfigOverrideEntry, ConfigOverrideOptions, Context, ErrorReport, EvaluationResult,
@@ -183,6 +183,8 @@ impl FlagClient {
         let stream = if config.enable_realtime {
             let http = HttpClient::builder()
                 .connect_timeout(config.timeout)
+                // A redirect is a refused attempt, not a reason to send the key elsewhere.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(OttoFlagsError::RequestFailed)?;
             match stream_url(&config.base_url) {
@@ -191,6 +193,7 @@ impl FlagClient {
                     http,
                     url,
                     api_key: config.api_key.clone(),
+                    header_timeout: IDLE_TIMEOUT,
                 }),
                 None => {
                     tracing::warn!(

@@ -230,3 +230,30 @@ async fn events_for_other_flags_or_with_invalid_keys_leave_this_one_cached() {
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(reason(&client, "f").await, "cached");
 }
+
+#[tokio::test]
+async fn a_200_that_is_not_an_event_stream_is_not_read_as_events() {
+    let server = MockServer::start().await;
+    mock_evaluate(&server, "h", true, 5).await;
+    // A proxy's page that happens to look like an event.
+    Mock::given(method("GET"))
+        .and(path("/api/flags/stream"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw("event: connected\ndata: {}\n\n".to_string(), "text/html"),
+        )
+        .mount(&server)
+        .await;
+    let client = FlagClient::new(config(&server, LONG_TTL)).unwrap();
+
+    assert_eq!(reason(&client, "h").await, "evaluated");
+    assert!(
+        wait_until(Duration::from_secs(2), || async {
+            !stream_requests(&server).await.is_empty()
+        })
+        .await
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // The `connected` event would have cleared the cache.
+    assert_eq!(reason(&client, "h").await, "cached");
+}

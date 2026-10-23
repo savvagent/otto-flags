@@ -531,6 +531,7 @@ async fn refuses_without_a_request(flag: &str) {
     let client = FlagClient::new(
         Config::new(KEY)
             .with_base_url(server.uri())
+            .with_realtime(false)
             .with_default(flag, true),
     )
     .unwrap();
