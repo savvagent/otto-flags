@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Configuration for the Otto Flags SDK client
 public struct OttoFlagsConfig {
@@ -226,7 +229,7 @@ public class OttoFlagsClient {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: evaluateBody)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.fetchData(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
@@ -378,7 +381,7 @@ public class OttoFlagsClient {
 
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            _ = try await session.data(for: request)
+            _ = try await session.fetchData(for: request)
         } catch {
             // Silently fail for tracking
         }
@@ -564,7 +567,7 @@ public class OttoFlagsClient {
             request.setValue("Bearer \(config.sdkKey)", forHTTPHeaderField: "Authorization")
 
             do {
-                let (data, _) = try await session.data(for: request)
+                let (data, _) = try await session.fetchData(for: request)
                 if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let flags = json["flags"] as? [[String: Any]] {
 

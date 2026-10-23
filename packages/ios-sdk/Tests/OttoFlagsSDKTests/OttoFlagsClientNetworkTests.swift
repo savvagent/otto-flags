@@ -1,27 +1,36 @@
 import XCTest
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import OttoFlagsSDK
 
+/// Drives the client through its internal `init(config:session:)` with a URLProtocol stub, so
+/// each test asserts on the request the SDK sent and on what it does with the response.
 final class OttoFlagsClientNetworkTests: XCTestCase {
-    var client: OttoFlagsClient!
-    var configuration: URLSessionConfiguration!
+    private var client: OttoFlagsClient!
+    private let lock = NSLock()
+    private var requests: [URLRequest] = []
+    private var bodies: [Data] = []
 
     override func setUp() {
         super.setUp()
+        requests = []
+        bodies = []
+        MockURLProtocol.error = nil
+        MockURLProtocol.requestHandler = nil
 
-        // Configure URLSession to use our mock protocol
-        configuration = URLSessionConfiguration.ephemeral
+        let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
 
         let config = OttoFlagsConfig(
-            apiUrl: "https://otto-flags.savvagent.com",
+            apiUrl: "https://otto-flags.example.com",
             sdkKey: "test-key",
             environment: "test",
             pollingInterval: 0, // Disable polling for tests
             enableWebSocket: false
         )
-
-        // We'll need to modify OttoFlagsClient to accept custom URLSession for testing
-        // For now, these tests demonstrate the structure
+        client = OttoFlagsClient(config: config, session: session)
     }
 
     override func tearDown() {
@@ -32,137 +41,159 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
         super.tearDown()
     }
 
-    func testIsEnabledReturnsTrue() async throws {
-        // Mock successful response with enabled=true
-        MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/api/flags/test-flag/evaluate")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
-
+    /// Answers every request with `status` and `body`, recording the request and its body
+    /// (URLProtocol sees the body as a stream, not `httpBody`).
+    private func respond(status: Int = 200, body: String = "{}") {
+        MockURLProtocol.requestHandler = { [weak self] request in
+            self?.record(request)
             let response = HTTPURLResponse(
                 url: request.url!,
-                statusCode: 200,
+                statusCode: status,
                 httpVersion: nil,
-                headerFields: nil
+                headerFields: ["Content-Type": "application/json"]
             )!
-
-            let jsonData = """
-            {
-                "enabled": true,
-                "key": "test-flag"
-            }
-            """.data(using: .utf8)!
-
-            return (response, jsonData)
+            return (response, body.data(using: .utf8)!)
         }
+    }
 
-        let context = UserContext(userId: "user-123")
+    private func record(_ request: URLRequest) {
+        lock.lock()
+        defer { lock.unlock() }
+        requests.append(request)
+        bodies.append(request.httpBody ?? Self.read(request.httpBodyStream))
+    }
 
-        // This would work if we could inject the URLSession
-        // let isEnabled = try await client.isEnabled(flagKey: "test-flag", context: context)
-        // XCTAssertTrue(isEnabled)
+    private func recorded() -> (requests: [URLRequest], bodies: [Data]) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (requests, bodies)
+    }
+
+    private static func read(_ stream: InputStream?) -> Data {
+        guard let stream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+
+    func testIsEnabledReturnsTrue() async throws {
+        respond(body: #"{"key": "test-flag", "enabled": true}"#)
+
+        let enabled = try await client.isEnabled(flagKey: "test-flag", context: UserContext(userId: "user-123"))
+
+        XCTAssertTrue(enabled)
+        let sent = recorded().requests
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?.httpMethod, "POST")
+        XCTAssertEqual(sent.first?.url?.path, "/api/flags/test-flag/evaluate")
+        XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
     }
 
     func testIsEnabledReturnsFalse() async throws {
-        MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
+        respond(body: #"{"key": "test-flag", "enabled": false}"#)
 
-            let jsonData = """
-            {
-                "enabled": false,
-                "key": "test-flag"
-            }
-            """.data(using: .utf8)!
+        let enabled = try await client.isEnabled(flagKey: "test-flag", context: UserContext(userId: "user-123"))
 
-            return (response, jsonData)
-        }
-
-        // Test would go here
+        XCTAssertFalse(enabled)
     }
 
-    func testIsEnabledHandlesHTTPError() async throws {
-        MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 404,
-                httpVersion: nil,
-                headerFields: nil
-            )!
+    func testIsEnabledThrowsRequestFailedOnHTTPError() async {
+        respond(status: 404, body: "")
 
-            return (response, Data())
+        do {
+            _ = try await client.isEnabled(flagKey: "test-flag", context: UserContext(userId: "user-123"))
+            XCTFail("expected OttoFlagsError.requestFailed")
+        } catch OttoFlagsError.requestFailed {
+            // expected
+        } catch {
+            XCTFail("expected OttoFlagsError.requestFailed, got \(error)")
         }
-
-        // Should throw OttoFlagsError.requestFailed
     }
 
-    func testIsEnabledHandlesNetworkError() async throws {
+    func testIsEnabledThrowsInvalidResponseWhenEnabledIsMissing() async {
+        respond(body: #"{"key": "test-flag"}"#)
+
+        do {
+            _ = try await client.isEnabled(flagKey: "test-flag", context: UserContext(userId: "user-123"))
+            XCTFail("expected OttoFlagsError.invalidResponse")
+        } catch OttoFlagsError.invalidResponse {
+            // expected
+        } catch {
+            XCTFail("expected OttoFlagsError.invalidResponse, got \(error)")
+        }
+    }
+
+    func testIsEnabledPropagatesNetworkError() async {
         MockURLProtocol.error = URLError(.notConnectedToInternet)
 
-        // Should throw network error
+        do {
+            _ = try await client.isEnabled(flagKey: "test-flag", context: UserContext(userId: "user-123"))
+            XCTFail("expected a network error")
+        } catch let error as URLError {
+            XCTAssertEqual(error.code, .notConnectedToInternet)
+        } catch {
+            XCTFail("expected a URLError, got \(error)")
+        }
     }
 
-    func testGetVariationReturnsStringValue() async throws {
-        MockURLProtocol.requestHandler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
+    func testGetVariationReturnsStringValue() async {
+        respond(body: #"{"key": "theme", "enabled": true, "variation": "dark-mode", "configuration": null}"#)
 
-            let jsonData = """
-            {
-                "key": "theme",
-                "enabled": true,
-                "variation": "dark-mode",
-                "configuration": null
-            }
-            """.data(using: .utf8)!
+        let value = await client.getVariation(
+            flagKey: "theme",
+            context: UserContext(userId: "user-123"),
+            defaultValue: "light"
+        )
 
-            return (response, jsonData)
-        }
-
-        // Test variation retrieval
+        XCTAssertEqual(value, "dark-mode")
     }
 
     func testGetVariationReturnsDefaultOnError() async {
         MockURLProtocol.error = URLError(.notConnectedToInternet)
 
-        let context = UserContext(userId: "user-123")
+        let value = await client.getVariation(
+            flagKey: "theme",
+            context: UserContext(userId: "user-123"),
+            defaultValue: "light"
+        )
 
-        // Should return default value on error
-        // let value = await client.getVariation(flagKey: "theme", context: context, defaultValue: "light")
-        // XCTAssertEqual(value, "light")
+        XCTAssertEqual(value, "light")
     }
 
-    func testTrackEventSendsCorrectPayload() async {
-        MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/events")
-            XCTAssertEqual(request.httpMethod, "POST")
+    func testTrackEventSendsCorrectPayload() async throws {
+        respond()
 
-            // Verify event payload
-            if let bodyData = request.httpBody,
-               let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] {
-                XCTAssertEqual(json["event"] as? String, "button_click")
-                XCTAssertNotNil(json["timestamp"])
-            }
+        await client.track(
+            eventName: "button_click",
+            context: UserContext(userId: "user-123"),
+            properties: ["screen": "home"]
+        )
 
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
+        let (sent, bodies) = recorded()
+        XCTAssertEqual(sent.count, 1)
+        XCTAssertEqual(sent.first?.httpMethod, "POST")
+        XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        let json = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: try XCTUnwrap(bodies.first)) as? [String: Any]
+        )
+        XCTAssertEqual(json["event"] as? String, "button_click")
+        XCTAssertEqual((json["properties"] as? [String: Any])?["screen"] as? String, "home")
+        XCTAssertNotNil(json["timestamp"])
+    }
 
-            return (response, Data())
-        }
+    func testTrackDoesNotThrowOnNetworkError() async {
+        MockURLProtocol.error = URLError(.notConnectedToInternet)
 
-        // Test tracking
+        await client.track(eventName: "button_click", context: UserContext(userId: "user-123"))
+
+        XCTAssertTrue(recorded().requests.isEmpty)
     }
 
     func testUserContextSerializesToJSON() {
@@ -191,31 +222,16 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
     }
 
     func testCachingWorks() async throws {
-        var callCount = 0
+        respond(body: #"{"key": "test-flag", "enabled": true}"#)
+        let context = UserContext(userId: "user-123")
 
-        MockURLProtocol.requestHandler = { request in
-            callCount += 1
+        let first = try await client.evaluate(flagKey: "test-flag", context: context)
+        let second = try await client.evaluate(flagKey: "test-flag", context: context)
 
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-
-            let jsonData = """
-            {
-                "enabled": true,
-                "key": "test-flag"
-            }
-            """.data(using: .utf8)!
-
-            return (response, jsonData)
-        }
-
-        // First call should hit the API
-        // Second call should use cache
-        // XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(first.reason, "evaluated")
+        XCTAssertEqual(second.reason, "cached")
+        XCTAssertTrue(second.value)
+        XCTAssertEqual(recorded().requests.count, 1, "the second evaluation must come from the cache")
     }
 
     func testConfigurationDefaults() {

@@ -77,7 +77,10 @@ against one cluster; serialize them, or give a worktree its own container on ano
 The pnpm gate lists exactly the pnpm workspace members (the `packages/*` and `examples/*` dirs with
 a `package.json`); root `pnpm lint/build/test` cover `packages/*` only. Known-red gates pass on no
 new failures against an `origin/main` baseline; the PR that fixes one removes its entry.
-The Java and Swift gates are unverified here (no toolchain on the dev host); the Go gate needs
+The Java and Swift gates are unverified here (no toolchain on the dev host); the Swift gate
+(`swift test`) is known red until savvagent/otto-flags#119 is verified fixed on a machine with
+a Swift toolchain (the fix is in, but has never been compiled), and the PR that confirms it
+removes this entry; the Go gate needs
 Go 1.21+. When a gate's
 toolchain is missing, do not install one: report the gate as not run, with the reason, in the PR
 body. `packages/android-sdk` has no gate (no Gradle wrapper; needs Gradle 8+ and an Android SDK),
