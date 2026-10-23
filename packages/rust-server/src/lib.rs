@@ -49,6 +49,7 @@
 mod backoff;
 mod cache;
 mod client;
+mod realtime;
 mod telemetry;
 mod types;
 
