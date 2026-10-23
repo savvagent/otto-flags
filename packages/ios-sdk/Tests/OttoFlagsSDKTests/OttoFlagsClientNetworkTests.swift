@@ -167,8 +167,9 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
         XCTAssertEqual(value, "light")
     }
 
-<<<<<<< HEAD
-    func testTrackEventSendsCorrectPayload() async throws {
+    /// `track` is a documented no-op (savvagent/otto-flags#125): the server has no
+    /// custom-event endpoint, so it must send nothing.
+    func testTrackSendsNoRequest() async {
         respond()
 
         await client.track(
@@ -177,16 +178,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
             properties: ["screen": "home"]
         )
 
-        let (sent, bodies) = recorded()
-        XCTAssertEqual(sent.count, 1)
-        XCTAssertEqual(sent.first?.httpMethod, "POST")
-        XCTAssertEqual(sent.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
-        let json = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: try XCTUnwrap(bodies.first)) as? [String: Any]
-        )
-        XCTAssertEqual(json["event"] as? String, "button_click")
-        XCTAssertEqual((json["properties"] as? [String: Any])?["screen"] as? String, "home")
-        XCTAssertNotNil(json["timestamp"])
+        XCTAssertTrue(recorded().requests.isEmpty)
     }
 
     func testTrackDoesNotThrowOnNetworkError() async {
@@ -195,21 +187,6 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
         await client.track(eventName: "button_click", context: UserContext(userId: "user-123"))
 
         XCTAssertTrue(recorded().requests.isEmpty)
-=======
-    /// `track` is a documented no-op (savvagent/otto-flags#125): the server has no
-    /// custom-event endpoint, so it must send nothing.
-    func testTrackSendsNoRequest() async {
-        var requestCount = 0
-        MockURLProtocol.requestHandler = { request in
-            requestCount += 1
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
-            return (response, Data())
-        }
-
-        await client.track(eventName: "button_click", context: UserContext(userId: "user-123"))
-
-        XCTAssertEqual(requestCount, 0)
->>>>>>> b4c7026 (fix(ios,android): poll the documented flag list and drop the unserved stream and events calls)
     }
 
     func testUserContextSerializesToJSON() {
