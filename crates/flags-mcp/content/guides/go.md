@@ -52,8 +52,8 @@ func main() {
 ```
 
 Other `Config` fields, all optional: `BaseURL` (default `https://otto-flags.savvagent.com`),
-`CacheTTL` (default 60 seconds), `Timeout` (default 5 seconds), and `Defaults` (flag key to the
-value served when evaluation fails). `OnError` defaults to printing to standard output, so set it.
+`CacheTTL` (default 60 seconds), `Timeout` (default 5 seconds), `EnableRealtime` (default off, see
+below), and `Defaults` (flag key to the value served when evaluation fails). `OnError` defaults to printing to standard output, so set it.
 
 ## Evaluate a flag
 
@@ -121,9 +121,14 @@ r.GET("/checkout", func(c *gin.Context) {
   `IsEnabled` returns just that value. Always use the result even when `err` is set. An invalid
   flag key (1 to 128 ASCII letters, digits, `-`, `_` and `.`) is refused the same way without a
   request.
-- `EnableRealtime` and `EnableTelemetry` are fields of `Config`, but this SDK does not act on
-  them: it opens no real-time connection and reports no evaluation counts or errors. A change made
-  with `set_flag_environment` or `rollback_flag` reaches the app when the cached result expires
-  (`CacheTTL`), and `flag_health` and auto-rollback get no data from this SDK.
+- `EnableTelemetry` is a field of `Config`, but this SDK does not act on it: it reports no
+  evaluation counts or errors, so `flag_health` and auto-rollback get no data from it.
+- Real-time updates are off unless you set `EnableRealtime: true` (a Go `bool` cannot default to
+  true). With it on, a change made with `set_flag_environment` or `rollback_flag` reaches the app
+  within about a round trip: the client reads the server's flag-change stream in a background
+  goroutine and drops the changed flag's cached results. The stream never delays or fails a
+  lookup; while it is down, or with `EnableRealtime` off, a change reaches the app when the cached
+  result expires (`CacheTTL`). It reconnects with backoff and drops the whole cache on every
+  connection. `Close` stops it, and `OnError` may be called from its goroutine.
 - Create flags before code references them: an unknown flag key evaluates to its default.
 - The wire contract the SDK speaks is `docs/SDK-DEVELOPER-GUIDE.md` in the repository.
