@@ -16,9 +16,10 @@ with:
 git ls-remote https://github.com/savvagent/otto-flags main
 ```
 
-and use that SHA (or another one you have checked) in place of `<commit>`. You need `git`, a JDK 17,
-the Android SDK and Gradle 8 or later; the repository has no Gradle wrapper, so use your own
-`gradle`:
+Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
+already checked. Use that SHA (or another one you have checked) in place of `<commit>`. You need
+`git`, a JDK 17, the Android SDK and Gradle 8 or later; the repository has no Gradle wrapper, so use
+your own `gradle`:
 
 ```bash
 git clone https://github.com/savvagent/otto-flags

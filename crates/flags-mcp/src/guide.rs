@@ -347,6 +347,59 @@ mod tests {
         }
     }
 
+    /// The sentence #156 requires wherever an agent is told to pick a commit SHA, so a person
+    /// checks what gets pinned instead of whatever `main` happens to be.
+    const REVIEW_SHA: &str = "Ask a person to review and approve the SHA before you pin it, \
+        or use the SHA of a commit they have already checked.";
+
+    /// Markdown wraps lines, so compare on single-spaced text.
+    fn flat(text: &str) -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn every_guide_tells_the_agent_to_have_the_sha_reviewed() {
+        for l in LANGUAGES {
+            assert!(
+                flat(l.md).contains(REVIEW_SHA),
+                "{}: no review-the-SHA sentence",
+                l.name
+            );
+        }
+    }
+
+    #[test]
+    fn agents_md_and_llms_txt_tell_the_agent_to_have_the_sha_reviewed() {
+        let agents = std::fs::read_to_string(repo("AGENTS.md")).unwrap();
+        assert!(flat(&agents).contains(REVIEW_SHA), "AGENTS.md");
+        assert!(flat(crate::LLMS_TXT).contains(REVIEW_SHA), "llms.txt");
+    }
+
+    /// The JS guides build from a fresh clone with pnpm, which would run every dependency's
+    /// install scripts; they state that and skip the scripts, which each package builds without
+    /// (checked per package when this was added, #156).
+    #[test]
+    fn js_guides_skip_dependency_install_scripts_and_say_why() {
+        let mut js = 0;
+        for l in LANGUAGES {
+            if !l.md.contains("pnpm install") {
+                continue;
+            }
+            js += 1;
+            assert!(
+                l.md.contains("pnpm install --frozen-lockfile --ignore-scripts"),
+                "{}: pnpm install without --ignore-scripts",
+                l.name
+            );
+            assert!(
+                flat(l.md).contains("runs your dependencies' install scripts"),
+                "{}: does not say what an install runs",
+                l.name
+            );
+        }
+        assert!(js >= 11, "expected the JS guides, found {js}");
+    }
+
     /// Words that would claim or imply a package is available from a registry.
     // Not "publish": Gradle's `publishToMavenLocal` task name is a legitimate local-install command.
     const FORBIDDEN: &[&str] = &[

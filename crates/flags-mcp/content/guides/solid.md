@@ -17,16 +17,21 @@ These packages are not installable by name yet. Install from source, pinned to a
 git ls-remote https://github.com/savvagent/otto-flags main
 ```
 
-and use that SHA (or another one you have checked) in place of `<commit>`. Build and pack each
-package in dependency order (`@otto-flags/sdk`, `@otto-flags/solid`), because a package's tarball
-names the others it depends on and they cannot be resolved by name. You need `git`, Node.js and
-`pnpm`.
+Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
+already checked. Use that SHA (or another one you have checked) in place of `<commit>`. Build and
+pack each package in dependency order (`@otto-flags/sdk`, `@otto-flags/solid`), because a package's
+tarball names the others it depends on and they cannot be resolved by name. You need `git`, Node.js
+and `pnpm`.
+
+A normal install runs your dependencies' install scripts on this machine (pnpm 10 and later skip
+them unless allowed; earlier versions run them). The lockfile fixes which versions you get, not what
+their scripts do. None of these packages needs them to build, so skip them with `--ignore-scripts`.
 
 ```bash
 git clone https://github.com/savvagent/otto-flags
 cd otto-flags
 git checkout <commit>
-pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile --ignore-scripts
 mkdir -p ../otto-flags-tarballs
 pnpm --filter @otto-flags/sdk build
 pnpm --filter @otto-flags/sdk pack --pack-destination ../otto-flags-tarballs

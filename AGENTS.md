@@ -23,7 +23,11 @@ guide says `<commit>`, put a full commit SHA there. Find one with:
 
     git ls-remote https://github.com/savvagent/otto-flags main
 
+Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have already checked.
 Use the same SHA everywhere in one project.
+
+The JS builds run `pnpm install --frozen-lockfile`, which runs dependency install scripts on your
+machine; the guides add `--ignore-scripts`, which every one of those packages builds without.
 
 ## Wire contract
 

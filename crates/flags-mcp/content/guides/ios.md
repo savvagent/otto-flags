@@ -16,7 +16,8 @@ full commit SHA of `savvagent/otto-flags`. Find the current tip of `main` with:
 git ls-remote https://github.com/savvagent/otto-flags main
 ```
 
-and use that SHA (or another one you have checked) in place of `<commit>`:
+Ask a person to review and approve the SHA before you pin it, or use the SHA of a commit they have
+already checked. Use that SHA (or another one you have checked) in place of `<commit>`:
 
 ```bash
 git clone https://github.com/savvagent/otto-flags
