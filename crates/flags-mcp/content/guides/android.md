@@ -151,9 +151,12 @@ class CheckoutViewModel(private val client: OttoFlagsClient) : ViewModel() {
 - Results are cached in memory per flag and per user context, so one user's result is never served
   to another. The cache has no expiry; the SDK polls the flag list every `pollingInterval` and
   drops the cached results of the flags it lists, so a flag changed afterwards (including a kill
-  switch or rollback) reaches a running app within about one polling interval, or within about a
-  round trip with `enableRealtime` on (see Real-time updates). `client.flagUpdates` is a `StateFlow` of the latest value of
-  each flag the app has evaluated.
+  switch or rollback) typically reaches a running app within about one polling interval, or within
+  about a round trip with `enableRealtime` on (see Real-time updates). That holds while the device
+  is online and the app is running, a failed poll is not retried until the next one, and an archived
+  or deleted flag drops out of the list, so turn a flag off with `set_flag_environment` rather than
+  archiving it when you need a kill switch.
+  `client.flagUpdates` is a `StateFlow` of the latest value of each flag the app has evaluated.
 - Flag evaluations are not counted by this SDK and `track(eventName, userContext, properties)` posts
   to an endpoint the server does not serve, so `flag_health` and auto-rollback get no data from it.
 - Create flags before code references them: an unknown flag key is answered with 404, which the SDK reports as a failed lookup.
