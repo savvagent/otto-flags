@@ -30,7 +30,9 @@ type Config struct {
 	// Defaults provides default flag values when evaluation fails
 	Defaults map[string]bool
 
-	// OnError is a custom error handler
+	// OnError is a custom error handler. With EnableRealtime it can also be called from the
+	// stream goroutine, at the same time as calls from lookups, so it must be safe for concurrent
+	// use, and it must not call Close.
 	OnError func(error)
 
 	// Timeout is the HTTP request timeout (default: 5 seconds)

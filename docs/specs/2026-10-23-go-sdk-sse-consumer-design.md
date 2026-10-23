@@ -1,6 +1,6 @@
 # Go SDK: consume the flag-change stream
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#171)
 **Ticket:** savvagent/otto-flags#167 (second of five per-SDK PRs; follows the Rust SDK, #170)
 
 This applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md` to
@@ -27,14 +27,13 @@ This applies the approved design of `2026-10-23-rust-sdk-sse-consumer-design.md`
 ## Design
 
 - `realtime.go`: `startRealtime()` called from `NewClient` when `EnableRealtime`. One goroutine,
-  stopped by `Close()` (a `context.Context` cancelled by `Close`, `sync.WaitGroup` or a done
+  stopped by `Close()` (a `context.Context` cancelled by `Close` and a done
   channel so `Close` returns promptly, once, and is safe to call twice).
 - Connect `GET <BaseURL>/api/flags/stream` (path prefix kept, as the evaluate URL is built) with
   `Authorization: Bearer <key>` and `Accept: text/event-stream` using an `http.Client` with no total
   timeout (a `Transport` with `ResponseHeaderTimeout` 90 s, dial timeout `Config.Timeout`) and
   `CheckRedirect` returning `http.ErrUseLastResponse`. A 200 without `Content-Type` containing
-  `text/event-stream` is a refused attempt. Read with a `bufio.Reader`, lines capped so one event
-  never exceeds 4 MiB, and an idle watchdog of 90 s that cancels the request.
+  `text/event-stream` is a refused attempt. Read in 32 KiB chunks into a parser that caps one event (line, name and data) at 4 MiB, and an idle watchdog of 90 s that cancels the request.
 - SSE framing: `event:` / `data:` fields, comments, `\r\n`, multi-line data, blank line dispatches.
 - Events: `connected` clears the whole cache (`cache.Invalidate("")`); `flag.created|updated|deleted`
   decode `data` JSON, take string `key`, and if `isValidFlagKey` (flagkey.go) call

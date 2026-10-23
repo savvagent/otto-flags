@@ -33,7 +33,7 @@ import (
 	"time"
 )
 
-// maxEventBytes bounds one event (the pending line plus the pending data). One event carries
+// maxEventBytes bounds one event (the pending line, name and data). One event carries
 // one flag with its variations and their configurations: generous, but finite, so a broken or
 // hostile peer cannot grow the buffer without bound.
 const maxEventBytes = 4 * 1024 * 1024
@@ -141,7 +141,7 @@ func (p *sseParser) feed(chunk []byte) ([]sseEvent, error) {
 }
 
 func (p *sseParser) tooLarge() bool {
-	return len(p.line)+len(p.data) > maxEventBytes
+	return len(p.line)+len(p.data)+len(p.event) > maxEventBytes
 }
 
 // process applies one complete line; an empty line dispatches the pending event. It copies
@@ -247,7 +247,7 @@ func parseRetryAfter(value string) (time.Duration, bool) {
 }
 
 // streamURL is <baseURL>/api/flags/stream, keeping any path prefix in baseURL (one trailing
-// slash is dropped, as the evaluate URL is built) and dropping any query or fragment. The error
+// slash is dropped) and dropping any query or fragment. The error
 // does not echo baseURL.
 func streamURL(baseURL string) (string, error) {
 	u, err := url.Parse(baseURL)
@@ -377,8 +377,14 @@ func startRealtime(config Config, c *cache, opts realtimeOptions) *realtimeStrea
 	if t, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = t.Clone()
 	} else {
-		transport = &http.Transport{Proxy: http.ProxyFromEnvironment}
+		transport = &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			TLSHandshakeTimeout: 10 * time.Second,
+			ForceAttemptHTTP2:   true,
+		}
 	}
+	// Automatic gzip could hold events back if a proxy compresses without flushing each one.
+	transport.DisableCompression = true
 	transport.DialContext = (&net.Dialer{Timeout: config.Timeout, KeepAlive: 30 * time.Second}).DialContext
 	transport.ResponseHeaderTimeout = opts.headerTimeout
 	// No total timeout, which would cut the stream off; the transport bounds the dial and the
