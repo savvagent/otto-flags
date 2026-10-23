@@ -1,6 +1,6 @@
 # Rust SDK: env-derived defaults, a sync cached read and a static test client
 
-**Status:** IMPLEMENTED (#PR)
+**Status:** IMPLEMENTED (#174)
 **Ticket:** savvagent/otto-flags#159
 
 ## Brief
@@ -34,8 +34,9 @@ None. `Config::with_default` is at `types.rs` and `FlagClient::is_enabled` at `c
   documented.
 - A sync cache hit is counted as an evaluation in telemetry, exactly as a cached `evaluate` is; a
   miss is not.
-- Accepted env spellings: `1/true/yes/on` and `0/false/no/off`, ignoring case and whitespace;
-  anything else is ignored with a warning that does not log the value.
+- Accepted env spellings: `1/true/yes/on` and `0/false/no/off`, ignoring case and whitespace. An
+  unset variable is ignored silently (the normal production case); an empty, non-Unicode or
+  unrecognized one is ignored with a warning that names the variable, not its value.
 - The static client keeps config and variation overrides working, so tests of override-reading code
   need no second client.
 - The sync read takes `Option<&Context>` (no clone needed by the caller), unlike the async methods'
@@ -87,9 +88,10 @@ None. The merge redeploys the server because `crates/flags-mcp/content/guides/ru
 ## Error Handling & Edge Cases
 
 Unset, empty, non-boolean or non-Unicode env vars leave the earlier default. A context that cannot
-be serialized for the cache key is a miss. The sync read outside a Tokio runtime works (it starts
-no task). `static_flags` with an invalid flag key still gets the default `false` via the existing
-key check.
+be serialized for the cache key is a miss. The sync read outside a Tokio runtime works: it makes no
+request and does not wait (a hit queues a telemetry event, which starts the flusher only when a
+runtime is current). An invalid flag key gets its default on both `evaluate` and the sync read,
+including on a static client. The follow-up survey of the other SDKs is #175.
 
 ## Testing Approach
 
@@ -101,4 +103,4 @@ port for the fallback). Gates: package fmt/clippy/test `--locked` in `packages/r
 
 The sync read returns the default for a flag nobody has evaluated yet; a caller that never warms
 the cache would always get the default. The docs say so. The follow-up survey of other SDKs is
-filed as a separate issue.
+#175.

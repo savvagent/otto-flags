@@ -129,9 +129,18 @@ impl Config {
     /// from env-var flags: "when otto-flags cannot be reached, use what the variable says".
     ///
     /// Accepted values, ignoring case and surrounding whitespace, are `1`, `true`, `yes`, `on`
-    /// and `0`, `false`, `no`, `off`. A variable that is unset, not valid Unicode, empty or
-    /// anything else is ignored with a warning (the value is not logged), leaving any earlier
-    /// default or the built-in `false` in place.
+    /// and `0`, `false`, `no`, `off`. An unset variable is ignored silently (in production it is
+    /// the normal case); one that is not valid Unicode, is empty or says anything else is ignored
+    /// with a warning that names the variable but not its value. Either way any earlier default,
+    /// or the built-in `false`, stays in place.
+    ///
+    /// ```
+    /// use otto_flags::Config;
+    ///
+    /// std::env::set_var("OTTO_DOC_NEW_CHECKOUT", "true");
+    /// let config = Config::new("sdk_key").with_default_env("new-checkout", "OTTO_DOC_NEW_CHECKOUT");
+    /// assert_eq!(config.defaults.get("new-checkout"), Some(&true));
+    /// ```
     pub fn with_default_env(
         self,
         key: impl Into<String>,
@@ -424,6 +433,7 @@ pub(crate) struct VariationOverrideEntry {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_bool;
     use super::ConfigOverrideOptions;
 
     // `set_config_override(.., None)` uses `unwrap_or_default()`, so `default()` must keep
@@ -438,5 +448,18 @@ mod tests {
             format!("{opts:?}"),
             format!("{:?}", ConfigOverrideOptions::new())
         );
+    }
+
+    #[test]
+    fn every_documented_spelling_parses() {
+        for raw in ["1", "true", "Yes", "ON", " TRUE\n"] {
+            assert_eq!(parse_bool(raw), Some(true), "{raw:?}");
+        }
+        for raw in ["0", "False", "no", " off\n", "OFF"] {
+            assert_eq!(parse_bool(raw), Some(false), "{raw:?}");
+        }
+        for raw in ["", " ", "maybe", "2", "y", "enabled"] {
+            assert_eq!(parse_bool(raw), None, "{raw:?}");
+        }
     }
 }

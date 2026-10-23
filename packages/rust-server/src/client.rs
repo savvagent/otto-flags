@@ -235,6 +235,19 @@ impl FlagClient {
     /// background task is started, so it works outside a Tokio runtime. Config and variation
     /// overrides still apply, which lets a test exercise code that reads them. It is not for
     /// production use: it ignores the server entirely.
+    ///
+    /// # Panics
+    ///
+    /// If the HTTP client cannot be built, which `FlagClient::new` also needs (for example a
+    /// host where the TLS backend fails to initialise).
+    ///
+    /// ```
+    /// use otto_flags::FlagClient;
+    ///
+    /// let client = FlagClient::static_flags([("new-checkout", true)]);
+    /// assert!(client.is_enabled_cached("new-checkout", None));
+    /// assert!(!client.is_enabled_cached("anything-else", None));
+    /// ```
     pub fn static_flags<K, I>(flags: I) -> Self
     where
         K: Into<String>,
@@ -243,8 +256,8 @@ impl FlagClient {
         let config = Config::new("sdk_static")
             .with_telemetry(false)
             .with_realtime(false);
-        let mut client = Self::new(config)
-            .expect("a client with a static key, no telemetry and no stream always builds");
+        let mut client =
+            Self::new(config).expect("the HTTP client of a static client failed to build");
         client.fixed = Some(Arc::new(
             flags.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         ));
@@ -557,7 +570,7 @@ impl FlagClient {
 
     /// Read a flag from the cache without waiting, for code that cannot be `async`.
     ///
-    /// It never makes a request, never blocks and never starts a task: it returns the unexpired
+    /// It makes no request and does not wait: it returns the unexpired
     /// cached value for this flag and context (the same context passed to an earlier `evaluate`
     /// or `is_enabled`, since the cache is per context), and otherwise the flag's configured
     /// default (`Config::with_default`, else `false`). A flag that has never been looked up, one
@@ -566,7 +579,22 @@ impl FlagClient {
     /// code on the same context at least once per TTL. A hit is counted as an evaluation in
     /// telemetry, as a cached `evaluate` is; a miss is not. On a client from
     /// [`FlagClient::static_flags`] it returns the fixed value.
+    ///
+    /// Config and variation overrides never change the answer (they do not change a flag's
+    /// value in `evaluate` either).
+    ///
+    /// ```
+    /// use otto_flags::{Config, FlagClient};
+    ///
+    /// let client = FlagClient::new(Config::new("sdk_key").with_default("new-banner", true)).unwrap();
+    /// // Nothing is cached yet, so this is the configured default.
+    /// assert!(client.is_enabled_cached("new-banner", None));
+    /// ```
     pub fn is_enabled_cached(&self, flag_key: &str, context: Option<&Context>) -> bool {
+        // As `evaluate` does, a key no flag can have gets its default.
+        if !is_valid_flag_key(flag_key) {
+            return self.config.defaults.get(flag_key).copied().unwrap_or(false);
+        }
         if let Some(fixed) = &self.fixed {
             return fixed.get(flag_key).copied().unwrap_or(false);
         }

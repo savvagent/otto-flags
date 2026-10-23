@@ -300,8 +300,9 @@ let result = client.evaluate("premium-features", Some(context)).await?;
 #### Config
 
 Configuration builder for the FlagClient. `with_default_env` accepts `1`, `true`, `yes`, `on` and
-`0`, `false`, `no`, `off` (ignoring case and surrounding whitespace); an unset or unrecognized
-variable is ignored with a warning and leaves any earlier default (else `false`).
+`0`, `false`, `no`, `off` (ignoring case and surrounding whitespace). An unset variable is ignored
+silently; an empty, non-Unicode or unrecognized one is ignored with a warning that names the
+variable, not its value. Either way any earlier default (else `false`) stays.
 
 ```rust
 let config = Config::new("srv_key")  // or "sdk_key"
@@ -395,9 +396,10 @@ let enabled = client.is_enabled("my-flag", Some(context)).await;
 
 #### is_enabled_cached(&self, flag_key: &str, context: Option<&Context>) -> bool
 
-A synchronous read for code that cannot be `async`. It never makes a request, blocks or starts a
-task: it returns the unexpired cached value for this flag and context, else the flag's configured
-default. The cache is per context, and an entry lives for `cache_ttl`, so call `evaluate` or
+A synchronous read for code that cannot be `async`. It makes no request and does not wait: it
+returns the unexpired cached value for this flag and context, else the flag's configured default.
+Overrides never change the answer. The cache is per context, and an entry lives for `cache_ttl`, so
+call `evaluate` or
 `is_enabled` from async code with the same context at least once per TTL to keep it warm; a flag
 that was never looked up, or whose entry expired or was invalidated, gets its default.
 

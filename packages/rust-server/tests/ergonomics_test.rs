@@ -76,30 +76,6 @@ fn an_unset_or_unparsable_env_var_leaves_the_earlier_default() {
 }
 
 #[test]
-fn every_documented_spelling_parses() {
-    for (i, (raw, want)) in [
-        ("1", true),
-        ("true", true),
-        ("Yes", true),
-        ("ON", true),
-        ("0", false),
-        ("False", false),
-        ("no", false),
-        (" off\n", false),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let var = format!("OTTO_TEST_SPELLING_{i}");
-        std::env::set_var(&var, raw);
-        let config = Config::new("sdk_test_key")
-            .with_default("k", !want)
-            .with_default_env("k", &var);
-        assert_eq!(config.defaults.get("k"), Some(&want), "{raw:?}");
-    }
-}
-
-#[test]
 fn a_closure_sets_the_default_only_when_it_returns_some() {
     let config = Config::new("sdk_test_key")
         .with_default_fn("a", || Some(true))
@@ -155,11 +131,11 @@ async fn the_sync_read_falls_back_to_the_default_on_a_miss() {
 async fn the_sync_read_ignores_an_expired_entry() {
     let server = MockServer::start().await;
     serve(&server, "ttl-flag", true).await;
-    let client = warmable_client(&server, Duration::from_millis(50));
+    let client = warmable_client(&server, Duration::from_millis(300));
 
     assert!(client.is_enabled("ttl-flag", None).await);
     assert!(client.is_enabled_cached("ttl-flag", None));
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
     assert!(!client.is_enabled_cached("ttl-flag", None));
 }
 
@@ -202,4 +178,64 @@ async fn a_static_client_still_applies_overrides() {
     assert!(result.enabled);
     assert_eq!(result.variation, "dark");
     assert_eq!(result.configuration, Some(json!({"accent": "teal"})));
+}
+
+#[tokio::test]
+async fn the_sync_read_uses_the_configured_application_id_like_evaluate() {
+    let server = MockServer::start().await;
+    serve(&server, "scoped", true).await;
+    let client = FlagClient::new(
+        Config::new("sdk_test_key")
+            .with_base_url(server.uri())
+            .with_application_id("app-1")
+            .with_telemetry(false)
+            .with_realtime(false),
+    )
+    .unwrap();
+    let ctx = Context::new().with_user_id("u1");
+
+    assert!(client.is_enabled("scoped", Some(ctx.clone())).await);
+    // The same context, as the caller wrote it: the application id is filled in on both paths.
+    assert!(client.is_enabled_cached("scoped", Some(&ctx)));
+}
+
+#[test]
+fn a_static_client_gives_an_invalid_flag_key_its_default_on_every_path() {
+    let client = FlagClient::static_flags([("New Checkout", true)]);
+    assert!(!client.is_enabled_cached("New Checkout", None));
+}
+
+#[tokio::test]
+async fn a_sync_hit_counts_as_an_evaluation_and_a_miss_does_not() {
+    let server = MockServer::start().await;
+    serve(&server, "counted", true).await;
+    Mock::given(method("POST"))
+        .and(path("/api/telemetry/evaluations"))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&server)
+        .await;
+    let client = FlagClient::new(
+        Config::new("srv_test_key")
+            .with_base_url(server.uri())
+            .with_realtime(false),
+    )
+    .unwrap();
+
+    assert!(!client.is_enabled_cached("counted", None)); // miss: not counted
+    assert!(client.is_enabled("counted", None).await); // evaluated: counted
+    assert!(client.is_enabled_cached("counted", None)); // hit: counted
+    client.flush().await;
+
+    let events: usize = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.url.path() == "/api/telemetry/evaluations")
+        .map(|r| {
+            let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+            body["evaluations"].as_array().unwrap().len()
+        })
+        .sum();
+    assert_eq!(events, 2);
 }
