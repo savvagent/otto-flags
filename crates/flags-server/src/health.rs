@@ -8,6 +8,9 @@
 //! The one thing worse than a degraded service is a degraded service that keeps
 //! restarting.
 //!
+//! **`/statusz`** reports what is degraded but not worth leaving rotation for
+//! (today: a meter declaration that keeps failing). It always answers `200`.
+//!
 //! **`/readyz` does touch it**, because it answers a different question: "should
 //! traffic come *here*?" The answer to that is no while the database is
 //! unreachable, and the remedy is to route elsewhere and try again — not to
@@ -20,6 +23,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use flags_core::usage::DeclarationHealth;
 use otto_tenant::Db;
 
 /// How long a readiness check waits on the database.
@@ -29,11 +33,29 @@ use otto_tenant::Db;
 /// and the answer it eventually gives arrives after the decision was needed.
 const READY_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub fn router(db: Db) -> Router {
+pub fn router(db: Db, meters: DeclarationHealth) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .with_state(db)
+        .merge(
+            Router::new()
+                .route("/statusz", get(statusz))
+                .with_state(meters),
+        )
+}
+
+/// `GET /statusz` — what is degraded without making this replica unfit to
+/// serve. Always `200`: it is for people and monitors to read, never for a
+/// load balancer, so a stall here cannot take the service out of rotation.
+/// It touches no database and, being unauthenticated, holds only the coarse
+/// declaration state (`declaring`, `stalled`, `declared`); the detail is in the log.
+async fn statusz(State(meters): State<DeclarationHealth>) -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "metering": meters.report() })),
+    )
+        .into_response()
 }
 
 /// `GET /healthz` — the process is running and the runtime is scheduling.

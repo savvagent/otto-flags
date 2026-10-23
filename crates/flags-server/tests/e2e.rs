@@ -2131,6 +2131,91 @@ async fn other_rejections_in_a_mixed_batch_still_dead_letter(pool: PgPool) {
     assert_eq!(kept, vec![metered]);
 }
 
+async fn get_json(app: &Router, path: &str) -> (StatusCode, Value) {
+    send(
+        app,
+        Request::builder().uri(path).body(Body::empty()).unwrap(),
+    )
+    .await
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn a_stalled_meter_declaration_shows_on_statusz_but_not_readyz(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    insert_metered(s.db.pool(), Uuid::new_v4(), 10).await;
+    let health = flags_core::usage::DeclarationHealth::default();
+    let mut config = Config::for_test();
+    config.platform_url = url.clone();
+    let app = flags_server::router_with_meter_health(
+        s.db.clone(),
+        s.platform.clone(),
+        Listener::detached(),
+        Hints::detached(),
+        s.evaluations.clone(),
+        &config,
+        health.clone(),
+    );
+
+    // Before the shipper has tried: declaring, nothing failing.
+    let (status, body) = get_json(&app, "/statusz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["metering"]["declaration"], "declaring", "{body}");
+
+    platform.lock().unwrap().meter_modes =
+        std::iter::repeat_n(MeterMode::ServiceNotSet, 3).collect();
+    let cfg = flags_core::usage::ShipperConfig {
+        poll: Duration::from_millis(20),
+        base_backoff: Duration::from_millis(50),
+        max_backoff: Duration::from_millis(50),
+        ..Default::default()
+    };
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(flags_core::usage::run_reporting(
+        s.db.clone(),
+        s.platform.clone(),
+        cfg,
+        shutdown,
+        health,
+    ));
+
+    // While it keeps failing: stalled, and the service is still ready.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let (_, body) = get_json(&app, "/statusz").await;
+            if body["metering"]["declaration"] == "stalled" {
+                return body;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .map(|body| {
+        // Only the coarse state: no queue depth, duration, reason or status.
+        assert_eq!(body, json!({"metering": {"declaration": "stalled"}}));
+    })
+    .expect("statusz reports the stall");
+    let (status, body) = get_json(&app, "/readyz").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, json!({"status": "ready"}));
+
+    // Once a declaration succeeds the signal clears.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let (_, body) = get_json(&app, "/statusz").await;
+            if body["metering"]["declaration"] == "declared" {
+                assert_eq!(body, json!({"metering": {"declaration": "declared"}}));
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("statusz reports the declaration");
+    stop.send(true).unwrap();
+    task.await.unwrap();
+}
+
 /// Runs `usage::run` against the mock until `done` holds, then stops it.
 async fn run_shipper_until(
     s: &Server,

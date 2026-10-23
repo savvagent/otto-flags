@@ -22,6 +22,8 @@
 //!   refuses events as `unknown_meter` (it forgot the declaration), the shipper
 //!   re-declares and retries those events with backoff instead of
 //!   dead-lettering them (#144).
+//!   A stall is also visible outside the log, on `/statusz`
+//!   ([`DeclarationHealth`]), which never affects readiness.
 //! - **Refused events are kept, then swept.** An event the platform rejects
 //!   outright moves to `usage_outbox_rejected` with its reason (and, for a
 //!   metered row, its meter and quantity), is kept for
@@ -664,6 +666,62 @@ async fn redeclare_meters(platform: &PlatformClient) {
     }
 }
 
+/// Where the meter declaration stands, shared between the shipper (which
+/// writes it) and the server's `/statusz` (which reads it).
+///
+/// Informational only: nothing gates on it. A stalled declaration delays
+/// billing and loses no usage, and SDK evaluation must keep serving, so this
+/// is deliberately not part of readiness. Clones share one state.
+#[derive(Debug, Clone, Default)]
+pub struct DeclarationHealth(Arc<std::sync::Mutex<DeclarationState>>);
+
+#[derive(Debug, Default)]
+struct DeclarationState {
+    declared: bool,
+    failing: bool,
+}
+
+/// A point-in-time view of [`DeclarationHealth`], serialized as the
+/// `metering` object of `/statusz`. Deliberately only the coarse state:
+/// `/statusz` is unauthenticated, so the queue depth (platform-wide, across
+/// every tenant), how long it has been failing and why stay in the shipper's
+/// log line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeclarationReport {
+    /// `declaring` before the first attempt has failed or succeeded,
+    /// `stalled` while attempts keep failing, `declared` once one succeeded.
+    pub declaration: &'static str,
+}
+
+impl DeclarationHealth {
+    fn state(&self) -> std::sync::MutexGuard<'_, DeclarationState> {
+        self.0.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn failed(&self) {
+        self.state().failing = true;
+    }
+
+    fn succeeded(&self) {
+        *self.state() = DeclarationState {
+            declared: true,
+            failing: false,
+        };
+    }
+
+    /// The current state.
+    pub fn report(&self) -> DeclarationReport {
+        let st = self.state();
+        DeclarationReport {
+            declaration: match (st.declared, st.failing) {
+                (_, true) => "stalled",
+                (true, false) => "declared",
+                (false, false) => "declaring",
+            },
+        }
+    }
+}
+
 /// How often a stuck meter declaration is logged.
 const DECLARE_LOG_EVERY: Duration = Duration::from_secs(60);
 
@@ -713,6 +771,7 @@ async fn declare_meters(
     platform: &PlatformClient,
     cfg: &ShipperConfig,
     shutdown: &mut watch::Receiver<bool>,
+    health: &DeclarationHealth,
 ) -> bool {
     let declarations = meter_declarations();
     let mut attempt: u32 = 0;
@@ -726,6 +785,7 @@ async fn declare_meters(
             _ = shutdown.changed() => return false,
         };
         let Some((f, text)) = declaration_failure(result) else {
+            health.succeeded();
             tracing::info!(meters = declarations.len(), "declared usage meters");
             return true;
         };
@@ -752,6 +812,7 @@ async fn declare_meters(
                 "could not declare the usage meters"
             );
         }
+        health.failed();
         let wait = cfg
             .base_backoff
             .saturating_mul(1u32 << attempt.min(20))
@@ -775,9 +836,21 @@ pub async fn run(
     db: Db,
     platform: Arc<PlatformClient>,
     cfg: ShipperConfig,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) {
-    if !declare_meters(&db, &platform, &cfg, &mut shutdown).await {
+    run_reporting(db, platform, cfg, shutdown, DeclarationHealth::default()).await;
+}
+
+/// [`run`], recording the state of the meter declaration in `health` for the
+/// server's `/statusz`.
+pub async fn run_reporting(
+    db: Db,
+    platform: Arc<PlatformClient>,
+    cfg: ShipperConfig,
+    mut shutdown: watch::Receiver<bool>,
+    health: DeclarationHealth,
+) {
+    if !declare_meters(&db, &platform, &cfg, &mut shutdown, &health).await {
         return;
     }
     let mut failures: u32 = 0;
