@@ -33,6 +33,11 @@ public class FlagClientConfig {
     public String getApiKey() { return apiKey; }
     public String getApplicationId() { return applicationId; }
     public String getBaseUrl() { return baseUrl; }
+    /**
+     * Whether the client reads the flag-change stream; see {@link Builder#enableRealtime(boolean)}.
+     *
+     * @return true when real-time updates are on (the default)
+     */
     public boolean isEnableRealtime() { return enableRealtime; }
     public long getCacheTtl() { return cacheTtl; }
     public boolean isEnableTelemetry() { return enableTelemetry; }
@@ -69,6 +74,25 @@ public class FlagClientConfig {
             return this;
         }
 
+        /**
+         * Turns real-time updates on or off. Default: {@code true}.
+         *
+         * <p>When on, the client holds one long-lived connection to
+         * {@code GET <baseUrl>/api/flags/stream} on a background (daemon) thread and drops a
+         * cached evaluation as soon as the server reports that its flag changed, so a change, a
+         * kill switch above all, takes effect in about a round trip instead of after
+         * {@link #cacheTtl(long)}. Every (re)connect clears the whole cache, since changes may
+         * have been missed while the stream was down. A dropped or refused stream is retried
+         * with exponential backoff; lookups never wait on it and keep being served from the
+         * cache and the evaluate endpoint meanwhile.
+         *
+         * <p>A failed connect attempt is passed to {@link #onError(Consumer)}, which may then run
+         * on the stream's own thread rather than a caller's. Call {@link FlagClient#close()} to
+         * stop the stream.
+         *
+         * @param enableRealtime true to read the flag-change stream
+         * @return this builder
+         */
         public Builder enableRealtime(boolean enableRealtime) {
             this.enableRealtime = enableRealtime;
             return this;
