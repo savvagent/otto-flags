@@ -1,6 +1,6 @@
 # Bound what a public client key can add to an org's bill
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#187)
 **Ticket:** savvagent/otto-flags#143 (PR 1 of 2; PR 2 adds a per-app origin allowlist)
 
 ## Brief
