@@ -7397,6 +7397,7 @@ async fn the_database_rejects_an_app_name_validate_name_would_reject(pool: PgPoo
         .execute(tx.conn())
         .await;
         let err = r.expect_err(&format!("{bad:?} must be refused"));
+        assert_eq!(sqlstate(&err), "23514", "{bad:?}: {err}");
         assert!(
             err.to_string().contains("flag_apps_name_check"),
             "{bad:?} refused by something other than the check: {err}"
@@ -7419,5 +7420,7 @@ async fn the_database_rejects_an_app_name_validate_name_would_reject(pool: PgPoo
     let r = sqlx::query("UPDATE flag_apps SET name = 'not ok' WHERE name = 'web'")
         .execute(tx.conn())
         .await;
-    assert!(r.is_err(), "a rename to an invalid name must be refused");
+    let err = r.expect_err("a rename to an invalid name must be refused");
+    assert_eq!(sqlstate(&err), "23514", "{err}");
+    assert!(err.to_string().contains("flag_apps_name_check"), "{err}");
 }

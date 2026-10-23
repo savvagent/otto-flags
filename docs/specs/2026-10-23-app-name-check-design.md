@@ -1,6 +1,6 @@
 # Enforce the app name rule with a database CHECK constraint
 
-**Status:** DRAFT
+**Status:** IMPLEMENTED (#172)
 **Ticket:** savvagent/otto-flags#157 (follow-up to #153)
 
 ## Brief
@@ -64,7 +64,8 @@ interface change.
 ## Migration
 
 See Architecture. `ADD CONSTRAINT ... NOT VALID` takes a brief ACCESS EXCLUSIVE lock without
-scanning the table.
+scanning the table; it waits behind any open transaction on `flag_apps` and readers queue behind
+it, so the file starts with `SET LOCAL lock_timeout = '3s'` like 0002, 0005, 0007 and 0008.
 
 ## Out-of-band
 
@@ -89,5 +90,8 @@ UPDATE case. Gates: the section's test, lint, format, extra, and the Docker buil
 
 ## Risks & Open Questions
 
-Legacy production rows that violate the rule: harmless while NOT VALID (they stay readable; an
-UPDATE touching such a row's name would fail), and surfaced by the diagnostic above.
+Legacy production rows that violate the rule are not expected (`create_app` has always validated).
+If the diagnostic above finds one, it stays readable, but Postgres checks a CHECK constraint on every
+UPDATE of the row, NOT VALID or not, whichever column changes: `set_app_environments` and key
+rotation would fail for that app until it is renamed, in this release and after a rollback. Rob
+should rename such an app (or decide otherwise) before anything depends on those tools for it.

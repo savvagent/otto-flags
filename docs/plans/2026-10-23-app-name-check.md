@@ -17,4 +17,4 @@
 
 - [x] Write the failing db test (insert bad names raw; expect `flag_apps_name_check`).
 - [x] Add migration 0009; run `cargo test -p flags-core --test db the_database_rejects`; it passes.
-- [ ] Run every gate; commit `feat(db): enforce the app name rule with a check constraint`, body why, `Fixes #157`.
+- [x] Run every gate; commit `feat(db): enforce the app name rule with a check constraint`, body why, `Fixes #157`.
