@@ -7367,3 +7367,57 @@ mod metering_close {
         assert_eq!(hourly_left(&pool).await, 0);
     }
 }
+
+/// `validate_name` guards every write path today; the CHECK constraint
+/// (migration 0009, #157) makes the database refuse what it would refuse, so a
+/// future path that skips it cannot store a name `sdk_guide` renders into
+/// agent-facing text.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_database_rejects_an_app_name_validate_name_would_reject(pool: PgPool) {
+    let db = db(pool).await;
+    let org = OrgId::new();
+    let too_long = "a".repeat(65);
+    let longest = "a".repeat(64);
+
+    for bad in [
+        "",
+        "has space",
+        "line\nbreak",
+        "trailing\n",
+        "semi;colon",
+        "ünïcode",
+        too_long.as_str(),
+    ] {
+        let mut tx = db.begin(org).await.unwrap();
+        let r = sqlx::query(
+            "INSERT INTO flag_apps (org_id, name, client_key) VALUES ($1, $2, 'sdk_x')",
+        )
+        .bind(org)
+        .bind(bad)
+        .execute(tx.conn())
+        .await;
+        let err = r.expect_err(&format!("{bad:?} must be refused"));
+        assert!(
+            err.to_string().contains("flag_apps_name_check"),
+            "{bad:?} refused by something other than the check: {err}"
+        );
+    }
+
+    for good in ["web", "Checkout_Web-2.0", "0", longest.as_str()] {
+        let mut tx = db.begin(org).await.unwrap();
+        sqlx::query("INSERT INTO flag_apps (org_id, name, client_key) VALUES ($1, $2, 'sdk_x')")
+            .bind(org)
+            .bind(good)
+            .execute(tx.conn())
+            .await
+            .unwrap_or_else(|e| panic!("{good:?} must be accepted: {e}"));
+        tx.commit().await.unwrap();
+    }
+
+    // An update that skips validate_name is refused too.
+    let mut tx = db.begin(org).await.unwrap();
+    let r = sqlx::query("UPDATE flag_apps SET name = 'not ok' WHERE name = 'web'")
+        .execute(tx.conn())
+        .await;
+    assert!(r.is_err(), "a rename to an invalid name must be refused");
+}
