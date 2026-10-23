@@ -20,10 +20,21 @@ type FlagClient struct {
 	configOverrides    map[string]configOverrideEntry
 	variationOverrides map[string]variationOverrideEntry
 	overrideMutex      sync.RWMutex
+
+	// realtime is the flag-change stream, nil when EnableRealtime is false.
+	realtime  *realtimeStream
+	closeOnce sync.Once
 }
 
-// NewClient creates a new FlagClient with the given configuration
+// NewClient creates a new FlagClient with the given configuration. When
+// config.EnableRealtime is true it also opens the flag-change stream in a background
+// goroutine; call Close to stop it.
 func NewClient(config Config) (*FlagClient, error) {
+	return newClient(config, defaultRealtimeOptions())
+}
+
+// newClient is NewClient with the stream's timings given, so tests can make them small.
+func newClient(config Config, streamOpts realtimeOptions) (*FlagClient, error) {
 	// Validate API key
 	if config.APIKey == "" || !strings.HasPrefix(config.APIKey, "sdk_") {
 		return nil, fmt.Errorf("invalid API key: must start with 'sdk_'")
@@ -56,6 +67,9 @@ func NewClient(config Config) (*FlagClient, error) {
 		cache:              newCache(config.CacheTTL),
 		configOverrides:    make(map[string]configOverrideEntry),
 		variationOverrides: make(map[string]variationOverrideEntry),
+	}
+	if config.EnableRealtime {
+		client.realtime = startRealtime(config, client.cache, streamOpts)
 	}
 
 	return client, nil
@@ -290,8 +304,15 @@ func (c *FlagClient) InvalidateCache(flagKey string) {
 	c.cache.Invalidate(flagKey)
 }
 
-// Close cleans up resources
+// Close stops the flag-change stream, if one is open, and clears the cache. It returns once
+// the stream's goroutine has ended, and is safe to call more than once. Do not call it from
+// OnError: the stream's goroutine calls OnError, and Close waits for that goroutine.
 func (c *FlagClient) Close() error {
+	c.closeOnce.Do(func() {
+		if c.realtime != nil {
+			c.realtime.stop()
+		}
+	})
 	c.cache.Clear()
 	return nil
 }
