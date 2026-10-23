@@ -1803,7 +1803,7 @@ async fn sdk_guide_without_an_app_defaults_to_the_only_app_or_lists_the_choices(
         Role::Owner,
         flags_core::scopes::KNOWN,
     );
-    let none = tool(&s.app, &owner, "sdk_guide", json!({"language": "go"}))
+    let none = tool(&s.app, &owner, "sdk_guide", json!({"language": "python"}))
         .await
         .unwrap();
     assert!(none["app"].is_null(), "{none}");
