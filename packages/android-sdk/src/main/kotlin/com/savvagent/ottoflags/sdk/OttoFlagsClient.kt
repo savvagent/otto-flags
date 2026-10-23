@@ -27,7 +27,24 @@ data class OttoFlagsConfig(
     /** Ignored: the server has no WebSocket endpoint (savvagent/otto-flags#125); kept so callers compile. */
     val enableWebSocket: Boolean = true,
     val timeout: Long = 30_000L, // milliseconds
-    val enableLogging: Boolean = false
+    val enableLogging: Boolean = false,
+    /**
+     * Hold a connection to the flag-change stream (`GET /api/flags/stream`) and drop a flag's
+     * cached evaluations as soon as it changes, so a kill switch reaches the app in about a
+     * round trip instead of at the next poll.
+     *
+     * Off by default: a held connection costs battery and radio wake-ups on a phone, and a
+     * server connection per install, while polling already bounds staleness to
+     * [pollingInterval]. Turn it on when flags must change fast. Polling keeps running either
+     * way: it is the fallback while the stream is down and repairs any missed event.
+     *
+     * The stream runs until [OttoFlagsClient.close]; the SDK does not watch the app lifecycle,
+     * so call `close()` when the app goes to the background (and build a new client on return),
+     * or enable this only for clients used in the foreground. Stream failures are retried with
+     * backoff, never thrown; with [enableLogging] they are logged (from the stream's own
+     * coroutine), once per run of failed attempts.
+     */
+    val enableRealtime: Boolean = false
 )
 
 /**
@@ -94,10 +111,14 @@ private data class VariationOverrideEntry(
 /**
  * Main Otto Flags SDK client for feature flag evaluation
  */
-class OttoFlagsClient(
+class OttoFlagsClient internal constructor(
     private val config: OttoFlagsConfig,
-    private val context: Context? = null
+    private val context: Context?,
+    realtimeTimings: RealtimeTimings
 ) {
+    constructor(config: OttoFlagsConfig, context: Context? = null) :
+        this(config, context, RealtimeTimings.DEFAULT)
+
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(config.timeout, TimeUnit.MILLISECONDS)
         .readTimeout(config.timeout, TimeUnit.MILLISECONDS)
@@ -123,12 +144,14 @@ class OttoFlagsClient(
     private val variationOverrides = ConcurrentHashMap<String, VariationOverrideEntry>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var pollingJob: Job? = null
+    private var realtimeJob: Job? = null
 
     private val _flagUpdates = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     val flagUpdates: StateFlow<Map<String, Boolean>> = _flagUpdates
 
     init {
         startPolling()
+        if (config.enableRealtime) startRealtime(realtimeTimings)
     }
 
     /**
@@ -338,10 +361,12 @@ class OttoFlagsClient(
     }
 
     /**
-     * Close the client and cleanup resources
+     * Close the client and cleanup resources: stops polling and, with
+     * [OttoFlagsConfig.enableRealtime], the flag-change stream and its reconnects.
      */
     fun close() {
         pollingJob?.cancel()
+        realtimeJob?.cancel()
         scope.cancel()
     }
 
@@ -448,6 +473,25 @@ class OttoFlagsClient(
                 flagCache.clear()
             }
         }
+    }
+
+    /** Whether [flagKey] has any cached evaluation (tests watch the stream through this). */
+    internal fun isCached(flagKey: String): Boolean = flagCache[flagKey]?.isNotEmpty() == true
+
+    private fun startRealtime(timings: RealtimeTimings) {
+        val url = RealtimeStream.streamUrl(config.apiUrl)
+        if (url == null) {
+            logError("Otto Flags stream: apiUrl is not an http(s) URL; real-time updates are off")
+            return
+        }
+        realtimeJob = RealtimeStream(
+            url = url,
+            sdkKey = config.sdkKey,
+            baseClient = okHttpClient,
+            invalidate = { invalidateCache(it) },
+            logError = { message, throwable -> logError(message, throwable) },
+            timings = timings,
+        ).start(scope)
     }
 
     private fun startPolling() {
