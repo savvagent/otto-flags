@@ -219,30 +219,12 @@ class OttoFlagsClientNetworkTest {
         assertEquals(10, value)
     }
 
+    // track is a documented no-op (#125): the server has no custom-event endpoint.
     @Test
-    fun testTrackEventSendsCorrectPayload() = runTest {
-        mockWebServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-        )
+    fun testTrackSendsNoRequest() = runTest {
+        client.track("button_click", UserContext(userId = "user-123"), mapOf("button" to "checkout"))
 
-        val context = UserContext(userId = "user-123")
-        val properties = mapOf(
-            "button" to "checkout",
-            "value" to 99.99
-        )
-
-        client.track("button_click", context, properties)
-
-        val request = mockWebServer.takeRequest()
-        assertEquals("/v1/events", request.path)
-        assertEquals("POST", request.method)
-
-        val body = request.body.readUtf8()
-        assertTrue(body.contains("button_click"))
-        assertTrue(body.contains("user-123"))
-        assertTrue(body.contains("button"))
-        assertTrue(body.contains("checkout"))
+        assertEquals(0, mockWebServer.requestCount)
     }
 
     @Test

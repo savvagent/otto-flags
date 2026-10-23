@@ -64,7 +64,7 @@ final class EvaluateContractTests: XCTestCase {
     private func record(_ request: URLRequest) -> Data {
         lock.lock()
         defer { lock.unlock() }
-        guard request.url?.path != "/v1/flags" else { return Data() }
+        guard request.url?.path != "/api/sdk/flags" else { return Data() }
         requests.append(request)
         bodies.append(request.httpBody ?? Self.read(request.httpBodyStream))
         return responseBody

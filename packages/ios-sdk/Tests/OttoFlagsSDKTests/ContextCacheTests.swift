@@ -51,7 +51,7 @@ final class ContextCacheTests: XCTestCase {
     private func answer(_ request: URLRequest) -> Data {
         lock.lock()
         defer { lock.unlock() }
-        guard request.url?.path != "/v1/flags" else { return Data() }
+        guard request.url?.path != "/api/sdk/flags" else { return Data() }
         requestCount += 1
         let data = request.httpBody ?? Self.read(request.httpBodyStream)
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
