@@ -191,6 +191,8 @@ Evaluate a feature flag and return detailed results.
 ```typescript
 const result = await client.evaluate('my-flag', { user_id: '123' });
 // Returns: { key, value, reason, metadata? }
+// metadata: { version?, scope? } as sent by the server, on evaluated and cached results
+// (flagId, description and variant are never sent by the otto-flags server)
 ```
 
 ##### isEnabled(flagKey, context?)

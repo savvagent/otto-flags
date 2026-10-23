@@ -57,7 +57,8 @@ export class FlagCache {
     flagId?: string,
     configuration?: any,
     variation?: string,
-    contextKey: string = ''
+    contextKey: string = '',
+    metadata?: { version?: number; scope?: string }
   ): void {
     let contexts = this.cache.get(key);
     if (!contexts) {
@@ -77,6 +78,8 @@ export class FlagCache {
       variation,
       expiresAt: Date.now() + this.ttl,
       flagId,
+      version: metadata?.version,
+      scope: metadata?.scope,
     });
   }
 

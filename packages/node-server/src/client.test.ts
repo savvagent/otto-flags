@@ -701,4 +701,83 @@ describe('FlagClient', () => {
       client.close();
     });
   });
+
+  describe('result metadata (#124)', () => {
+    const body = (extra: Record<string, unknown> = {}) => ({
+      key: 'checkout',
+      enabled: true,
+      scope: 'application',
+      variation: null,
+      configuration: null,
+      timestamp: 1700000000,
+      version: 3,
+      context: { environment: 'production' },
+      ...extra,
+    });
+    let originalFetch: typeof global.fetch;
+    let fetchMock: jest.Mock;
+
+    beforeEach(() => {
+      originalFetch = global.fetch;
+      fetchMock = jest.fn();
+      global.fetch = fetchMock as unknown as typeof fetch;
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    const make = (onError: jest.Mock = jest.fn()) =>
+      new FlagClient({
+        apiKey: 'sdk_test_key',
+        baseUrl: 'https://flags.example.test',
+        enableRealtime: false,
+        enableTelemetry: false,
+        onError,
+      });
+
+    it('reports the version and scope the server sends, and no field it does not', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => body() });
+      const client = make();
+      const r = await client.evaluate('checkout', { user_id: 'a' });
+      expect(r.reason).toBe('evaluated');
+      expect(r.metadata?.version).toBe(3);
+      expect(r.metadata?.scope).toBe('application');
+      expect(r.metadata?.flagId).toBeUndefined();
+      expect(r.metadata?.description).toBeUndefined();
+      expect(r.metadata?.variant).toBeUndefined();
+      client.close();
+    });
+
+    it('carries the same version and scope on a cached result', async () => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => body() });
+      const client = make();
+      await client.evaluate('checkout', { user_id: 'a' });
+      const r = await client.evaluate('checkout', { user_id: 'a' });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(r.reason).toBe('cached');
+      expect(r.metadata?.version).toBe(3);
+      expect(r.metadata?.scope).toBe('application');
+      expect(r.metadata?.flagId).toBeUndefined();
+      client.close();
+    });
+
+    test.each([
+      ['string version', { version: '3', scope: 7 }],
+      ['boolean version', { version: true }],
+      ['fractional version', { version: 1.5 }],
+    ])('drops a malformed field without failing the lookup (%s)', async (_n, extra) => {
+      fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => body(extra) });
+      const onError = jest.fn();
+      const client = make(onError);
+      const r = await client.evaluate('checkout', { user_id: 'a' });
+      expect(r.value).toBe(true);
+      expect(r.reason).toBe('evaluated');
+      expect(r.metadata?.version).toBeUndefined();
+      if ('scope' in extra) expect(r.metadata?.scope).toBeUndefined();
+      else expect(r.metadata?.scope).toBe('application');
+      expect(onError).not.toHaveBeenCalled();
+      client.close();
+    });
+  });
 });

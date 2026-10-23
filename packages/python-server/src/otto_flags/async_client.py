@@ -19,7 +19,7 @@ import httpx
 
 from ._context_key import context_key
 from ._flag_key import default_for, describe_flag_key, is_valid_flag_key
-from ._response import evaluate_payload
+from ._response import evaluate_payload, response_metadata
 from .cache import AsyncFlagCache
 from .exceptions import InvalidAPIKeyError, InvalidFlagKeyError
 from .realtime import AsyncRealtimeService
@@ -202,6 +202,11 @@ class AsyncFlagClient:
                     configuration=configuration,
                     variation=variation,
                     reason="cached",
+                    metadata=FlagMetadata(
+                        flag_id=cached_entry.flag_id,
+                        version=cached_entry.version,
+                        scope=cached_entry.scope,
+                    ),
                 )
 
                 self._last_values[flag_key] = cached_entry.value
@@ -221,6 +226,7 @@ class AsyncFlagClient:
 
             data, value = evaluate_payload(response.json())
             self._last_values[flag_key] = value
+            version, scope = response_metadata(data)
 
             # Cache the result (including configuration and variation)
             if ctx_key is not None:
@@ -230,6 +236,8 @@ class AsyncFlagClient:
                     data.get("flagId"),
                     data.get("configuration"),
                     data.get("variation"),
+                    version=version,
+                    scope=scope,
                     context_key=ctx_key,
                 )
 
@@ -259,6 +267,8 @@ class AsyncFlagClient:
                     flag_id=data.get("flagId"),
                     description=data.get("description"),
                     variant=data.get("variant"),
+                    version=version,
+                    scope=scope,
                 ),
             )
 

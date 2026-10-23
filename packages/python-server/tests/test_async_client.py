@@ -526,3 +526,63 @@ class TestAsyncContextCache:
                 result = await client.evaluate("checkout", FlagContext(user_id="b"))
         assert result.value is False
         assert result.reason == "evaluated"
+
+
+FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+
+
+class TestResultMetadata:
+    """The result reports the server's `version` and `scope` (#124)."""
+
+    @respx.mock
+    async def test_evaluated_and_cached_results_carry_version_and_scope(
+        self, async_config: FlagClientConfig
+    ) -> None:
+        route = respx.post(FLAG_URL).mock(
+            return_value=httpx.Response(200, json=server_body("checkout", True))
+        )
+        async with AsyncFlagClient(async_config) as client:
+            first = await client.evaluate("checkout")
+            second = await client.evaluate("checkout")
+        assert route.call_count == 1
+        assert first.reason == "evaluated"
+        assert first.metadata is not None
+        assert first.metadata.version == 3
+        assert first.metadata.scope == "application"
+        assert first.metadata.flag_id is None
+        assert first.metadata.description is None
+        assert first.metadata.variant is None
+        assert second.reason == "cached"
+        assert second.metadata is not None
+        assert second.metadata.version == 3
+        assert second.metadata.scope == "application"
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"version": "3", "scope": 7},
+            {"version": True},
+            {"version": 1.5},
+            {"version": None, "scope": None},
+        ],
+    )
+    @respx.mock
+    async def test_malformed_metadata_never_fails_the_lookup(
+        self, async_config: FlagClientConfig, overrides: dict
+    ) -> None:
+        body = {**server_body("checkout", True), **overrides}
+        respx.post(FLAG_URL).mock(return_value=httpx.Response(200, json=body))
+        errors: list[Exception] = []
+        async_config.on_error = errors.append
+        async with AsyncFlagClient(async_config) as client:
+            first = await client.evaluate("checkout")
+            second = await client.evaluate("checkout")
+        assert errors == []
+        for result, reason in ((first, "evaluated"), (second, "cached")):
+            assert result.value is True
+            assert result.reason == reason
+            assert result.metadata is not None
+            if "version" in overrides:
+                assert result.metadata.version is None
+            if "scope" in overrides:
+                assert result.metadata.scope is None

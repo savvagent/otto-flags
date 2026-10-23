@@ -58,7 +58,7 @@ func (c *cache) GetEntry(key, ctxKey string) (*cacheEntry, bool) {
 // Set stores a value in the cache with TTL. When the flag already holds the maximum number of
 // contexts, expired entries are dropped first, and if more than half the bound is still live
 // the flag's contexts are cleared, so a sweep runs at most once per half-bound of new contexts.
-func (c *cache) Set(key, ctxKey string, value bool, configuration map[string]interface{}, variation string) {
+func (c *cache) Set(key, ctxKey string, value bool, configuration map[string]interface{}, variation string, version int64, scope string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -85,6 +85,8 @@ func (c *cache) Set(key, ctxKey string, value bool, configuration map[string]int
 		Value:         value,
 		Configuration: configuration,
 		Variation:     variation,
+		Version:       version,
+		Scope:         scope,
 		ExpiresAt:     time.Now().Add(c.ttl),
 	}
 }

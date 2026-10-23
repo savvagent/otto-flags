@@ -306,7 +306,16 @@ type EvaluationResult struct {
     Reason   string    // "cached", "evaluated", "default", "error"
     Metadata *Metadata
 }
+
+// Metadata: the server sends only Version and Scope.
+type Metadata struct {
+    Version int64  // flag version that produced the result; 0 when the server sent none
+    Scope   string // e.g. "application"; empty when the server sent none
+    // FlagID, Description and Variant exist for compatibility; the server never sends them.
+}
 ```
+
+Version and Scope are also set on `cached` results.
 
 ### Methods
 

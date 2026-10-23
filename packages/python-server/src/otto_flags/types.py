@@ -119,8 +119,19 @@ class FlagMetadata:
     """Metadata about a flag."""
 
     flag_id: str | None = None
+    """Not sent by the otto-flags server; always None from it, kept for compatibility."""
+
     description: str | None = None
+    """Not sent by the otto-flags server; always None from it, kept for compatibility."""
+
     variant: str | None = None
+    """Not sent by the otto-flags server; always None from it, kept for compatibility."""
+
+    version: int | None = None
+    """The flag version that produced this result."""
+
+    scope: str | None = None
+    """``"application"`` or ``"enterprise"``."""
 
 
 @dataclass
@@ -178,6 +189,12 @@ class CacheEntry:
 
     flag_id: str | None = None
     """Flag ID for reference."""
+
+    version: int | None = None
+    """Flag version that produced the cached result."""
+
+    scope: str | None = None
+    """Flag scope that produced the cached result."""
 
 
 @dataclass

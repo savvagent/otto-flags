@@ -306,6 +306,11 @@ result = client.evaluate("my-flag", FlagContext(user_id="123"))
 # Returns: FlagEvaluationResult(key, value, configuration, variation, reason, metadata)
 ```
 
+`result.metadata.version` is the flag version that produced the result (an `int`) and
+`result.metadata.scope` is `"application"` or `"enterprise"`; both are also set on `cached`
+results, and are `None` if the server omits them or sends the wrong type. `flag_id`,
+`description` and `variant` are not sent by the otto-flags server and are always `None` from it.
+
 ##### is_enabled(flag_key, context?) → bool
 
 Check if a flag is enabled.

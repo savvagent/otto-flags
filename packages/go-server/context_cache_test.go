@@ -137,7 +137,7 @@ func TestEvaluateDoesNotModifyCallerContext(t *testing.T) {
 
 func TestCacheMissForOtherContext(t *testing.T) {
 	c := newCache(time.Minute)
-	c.Set("f", `{"user_id":"a"}`, true, nil, "")
+	c.Set("f", `{"user_id":"a"}`, true, nil, "", 0, "")
 	if _, found := c.Get("f", `{"user_id":"a"}`); !found {
 		t.Error("same context: want a hit")
 	}
@@ -151,9 +151,9 @@ func TestCacheMissForOtherContext(t *testing.T) {
 
 func TestCacheInvalidateDropsAllContexts(t *testing.T) {
 	c := newCache(time.Minute)
-	c.Set("f", "a", true, nil, "")
-	c.Set("f", "b", false, nil, "")
-	c.Set("g", "a", true, nil, "")
+	c.Set("f", "a", true, nil, "", 0, "")
+	c.Set("f", "b", false, nil, "", 0, "")
+	c.Set("g", "a", true, nil, "", 0, "")
 	c.Invalidate("f")
 	if _, found := c.Get("f", "a"); found {
 		t.Error("f/a survived Invalidate(f)")
@@ -170,7 +170,7 @@ func TestCacheBoundsContextsPerFlag(t *testing.T) {
 	c := newCache(time.Minute)
 	c.maxContextsPerFlag = 4
 	for i := 0; i < 10; i++ {
-		c.Set("f", fmt.Sprintf("ctx-%d", i), true, nil, "")
+		c.Set("f", fmt.Sprintf("ctx-%d", i), true, nil, "", 0, "")
 		if n := len(c.entries["f"]); n > 4 {
 			t.Fatalf("after %d inserts, %d contexts held, want at most 4", i+1, n)
 		}

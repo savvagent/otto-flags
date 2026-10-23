@@ -79,9 +79,21 @@ type EvaluationResult struct {
 
 // Metadata contains additional information about a flag
 type Metadata struct {
-	FlagID      string `json:"flag_id,omitempty"`
+	// FlagID is not sent by the otto-flags server, so it is empty.
+	FlagID string `json:"flag_id,omitempty"`
+
+	// Description is not sent by the otto-flags server, so it is empty.
 	Description string `json:"description,omitempty"`
-	Variant     string `json:"variant,omitempty"`
+
+	// Variant is not sent by the otto-flags server, so it is empty.
+	Variant string `json:"variant,omitempty"`
+
+	// Version is the flag version that produced the result; 0 when the server sent none.
+	Version int64 `json:"version,omitempty"`
+
+	// Scope is the scope the server reports for the flag (for example "application"); empty
+	// when the server sent none.
+	Scope string `json:"scope,omitempty"`
 }
 
 // VariationResult contains variation information for multi-variant flags
@@ -101,6 +113,8 @@ type cacheEntry struct {
 	Value         bool
 	Configuration map[string]interface{}
 	Variation     string
+	Version       int64
+	Scope         string
 	ExpiresAt     time.Time
 }
 

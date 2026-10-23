@@ -152,6 +152,11 @@ export class FlagClient {
           configuration,
           variation,
           reason: 'cached',
+          metadata: {
+            flagId: cachedEntry.flagId,
+            version: cachedEntry.version,
+            scope: cachedEntry.scope,
+          },
         };
 
         this.lastValues.set(flagKey, cachedEntry.value);
@@ -196,6 +201,8 @@ export class FlagClient {
         flagId?: string;
         description?: string;
         variant?: string;
+        version?: unknown;
+        scope?: unknown;
       } | null;
       // The result is `enabled` (docs/SDK-DEVELOPER-GUIDE.md). A body without a boolean
       // `enabled` is a failed lookup: substituting the default here would cache it for the
@@ -208,10 +215,14 @@ export class FlagClient {
       // The server sends both as null when the flag has none; the SDK's types say undefined.
       const configuration = data.configuration ?? undefined;
       const variation = data.variation ?? undefined;
+      // Metadata the server sends; a malformed field is dropped, never a failed lookup.
+      const version =
+        typeof data.version === 'number' && Number.isInteger(data.version) ? data.version : undefined;
+      const scope = typeof data.scope === 'string' ? data.scope : undefined;
 
       // Cache the result (including configuration and variation)
       if (ctxKey !== null) {
-        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey);
+        this.cache.set(flagKey, value, data.flagId, configuration, variation, ctxKey, { version, scope });
       }
 
       // Apply overrides to evaluated result
@@ -241,6 +252,8 @@ export class FlagClient {
           flagId: data.flagId,
           description: data.description,
           variant: data.variant,
+          version,
+          scope,
         },
       };
 

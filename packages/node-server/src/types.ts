@@ -77,9 +77,16 @@ export interface FlagEvaluationResult {
   reason: 'cached' | 'evaluated' | 'default' | 'error';
   /** Metadata about the flag */
   metadata?: {
+    /** Never sent by the otto-flags server; always undefined against it. */
     flagId?: string;
+    /** Never sent by the otto-flags server; always undefined against it. */
     description?: string;
+    /** Never sent by the otto-flags server; always undefined against it. */
     variant?: string;
+    /** The flag's version the server evaluated, when it sends one. */
+    version?: number;
+    /** The scope the server evaluated the flag at (e.g. `application`), when it sends one. */
+    scope?: string;
   };
 }
 
@@ -118,6 +125,8 @@ export interface CacheEntry {
   variation?: string;
   expiresAt: number;
   flagId?: string;
+  version?: number;
+  scope?: string;
 }
 
 /**

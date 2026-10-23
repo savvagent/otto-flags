@@ -114,6 +114,7 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 			Configuration: configuration,
 			Variation:     variation,
 			Reason:        "cached",
+			Metadata:      &Metadata{Version: cachedEntry.Version, Scope: cachedEntry.Scope},
 		}, nil
 	}
 
@@ -163,9 +164,13 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		Enabled       *bool                  `json:"enabled"`
 		Configuration map[string]interface{} `json:"configuration"`
 		Variation     string                 `json:"variation"`
-		FlagID        string                 `json:"flag_id"`
-		Description   string                 `json:"description"`
-		Variant       string                 `json:"variant"`
+		Version       json.RawMessage        `json:"version"`
+		Scope         json.RawMessage        `json:"scope"`
+
+		// Never sent by the otto-flags server; still read for compatibility.
+		FlagID      json.RawMessage `json:"flag_id"`
+		Description json.RawMessage `json:"description"`
+		Variant     json.RawMessage `json:"variant"`
 	}
 
 	if err := json.Unmarshal(body, &response); err != nil {
@@ -179,8 +184,18 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 	}
 	enabled := *response.Enabled
 
-	// Cache the result (including configuration and variation)
-	c.cache.Set(flagKey, ctxKey, enabled, response.Configuration, response.Variation)
+	// Version and scope are metadata only: a value of the wrong type is dropped, never a
+	// failed lookup.
+	var version int64
+	if len(response.Version) > 0 {
+		if json.Unmarshal(response.Version, &version) != nil {
+			version = 0
+		}
+	}
+	scope := metadataString(response.Scope)
+
+	// Cache the result (including configuration, variation, version and scope)
+	c.cache.Set(flagKey, ctxKey, enabled, response.Configuration, response.Variation, version, scope)
 
 	// Apply overrides to evaluated result
 	finalConfiguration := response.Configuration
@@ -206,11 +221,23 @@ func (c *FlagClient) Evaluate(flagKey string, ctx *Context) (*EvaluationResult, 
 		Variation:     finalVariation,
 		Reason:        "evaluated",
 		Metadata: &Metadata{
-			FlagID:      response.FlagID,
-			Description: response.Description,
-			Variant:     response.Variant,
+			FlagID:      metadataString(response.FlagID),
+			Description: metadataString(response.Description),
+			Variant:     metadataString(response.Variant),
+			Version:     version,
+			Scope:       scope,
 		},
 	}, nil
+}
+
+// metadataString decodes a metadata field that should be a JSON string. Anything else (absent,
+// null, another type) is "": metadata is informational and never fails a lookup.
+func metadataString(raw json.RawMessage) string {
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // IsEnabled checks if a flag is enabled (convenience method)
