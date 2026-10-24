@@ -69,11 +69,10 @@ A `configuration`, the flag's or a variation's, is at most 32 KiB (32 768 bytes)
 when written; the server refuses a larger one. An evaluate response carries one configuration
 (the matched variation's, else the flag's), so size its read cap well above the limit (the Rust
 SDK reads up to 1 MiB) and treat a response over the cap as a failed lookup. Flags stored before
-the limit existed may carry more, so do not reject a configuration for exceeding it. The limit
-does not bound the [list](#list-all-flags-for-local-overrides) response or a
-[stream](#real-time-updates-sse) event the same way: each flag there carries its configuration and
-every variation's (up to 20), and the list has no limit on the number of flags, so do not apply
-the evaluate cap to them.
+the limit existed may carry more, so do not reject a configuration for exceeding it. The
+[list](#list-all-flags-for-local-overrides) response and each [stream](#real-time-updates-sse)
+event carry a flag's configuration and every variation's, so they have bounds of their own,
+documented there; do not apply the evaluate cap to them.
 
 #### Request
 
@@ -150,6 +149,16 @@ SDKs often need to fetch all available flags for local override functionality, o
 **Authentication:** Required (SDK Key)
 
 Returns all active flags for the SDK key's application, plus any enterprise-scoped flags for the organization.
+
+**Size.** The server refuses a write that would take one flag's environments, variations, and
+configurations past 128 KiB (131 072 bytes), or an application's active flags past 1 MiB
+(1 048 576 bytes) counting each flag plus 256 bytes for its other fields. Both are measured on
+the stored form, which is never shorter than the JSON the server sends. So this response is at
+most about 1 MiB plus a small envelope (also at most 4 096 flags). Concurrent writes can take an
+application slightly over its budget (each by at most one flag), and flags stored before the
+limits may exceed them, so size the read cap with headroom: read up to 4 MiB, and treat a larger
+response as a failed refresh (keep the cached flags and the defaults). A server key's response
+includes targeting rules and is the larger; a client key's omits them.
 
 ##### Request
 
@@ -276,6 +285,11 @@ class OttoFlagsClient {
 **Authentication:** Required (SDK Key or JWT)
 
 Server-Sent Events stream for real-time flag change notifications.
+
+Each `flag.created` / `flag.updated` / `flag.deleted` event carries one flag, so it is at most
+about 128 KiB (the per-flag limit under [List All Flags](#list-all-flags-for-local-overrides))
+plus its envelope. Read events with a cap of 1 MiB, and treat a larger one as missed (the next
+poll of the list catches up).
 
 #### Connection
 

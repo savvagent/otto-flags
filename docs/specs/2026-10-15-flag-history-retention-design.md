@@ -75,7 +75,7 @@ closes #123.
   versions of the last 90 days (plus up to an hour until the next sweep). Each version is a
   metered MCP write (recorded for billing; quotas are not enforced in production today,
   `FLAGS_ENFORCE_QUOTAS` defaults to false), and part 2 of #123 (next PR) caps a flag's size at
-  64 KiB, so the table's growth is bounded by 90 days of writes, like the other retention
+  128 KiB (part 2 settled on 128 KiB rather than the 64 KiB first planned), so the table's growth is bounded by 90 days of writes, like the other retention
   tables, plus a permanent floor of up to 100 versions per flag ever created (flags are
   archived, not deleted), which grows with flag count, not writes.
   Until part 2 ships, a snapshot can be about 672 KiB (#115's 32 KiB per configuration, 21
@@ -226,7 +226,7 @@ nothing: 0006 is an addition), `podman build`.
 ## 11. Risks & open questions
 
 - History grows with writes for 90 days. Writes are metered, quotas are not enforced today, and
-  until part 2 caps a flag at 64 KiB a snapshot can be ~672 KiB; part 2 should follow promptly.
+  until part 2 caps a flag at 128 KiB a snapshot can be ~672 KiB; part 2 should follow promptly.
   A hard per-flag ceiling would reintroduce caller-driven erasure, so none is set; a per-flag
   write rate limit would not, and is the option if growth becomes a problem.
 - An agent cannot restore a state older than 90 days that has 100 newer versions; the constants
