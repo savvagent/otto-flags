@@ -32,8 +32,18 @@ pub struct UpdateAppArgs {
     pub app: String,
     /// The complete new list of environments. Removing one does not delete
     /// flags' settings for it, but they can no longer be changed or evaluated
-    /// there.
-    pub environments: Vec<String>,
+    /// there. Omit to leave the environments as they are.
+    #[serde(default)]
+    pub environments: Option<Vec<String>>,
+    /// The complete new list of browser origins the app's public client key
+    /// may be used from, for example ["https://app.example.com",
+    /// "https://*.example.com"] (scheme and host, optional port, no path; a
+    /// leading `*.` matches subdomains). An empty list removes the
+    /// restriction. Omit to leave it as it is. Requests that send no `Origin`
+    /// header (native apps, servers) are not checked, and the server key never
+    /// is: this keeps other websites from using the public key, nothing more.
+    #[serde(default)]
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -59,7 +69,8 @@ impl Flags {
     #[tool(
         name = "list_apps",
         description = "The apps in this organization (each codebase or service that evaluates \
-                       flags), with their environments and public client keys. Free.",
+                       flags), with their environments, allowed origins for the public client \
+                       key (empty means unrestricted), and public client keys. Free.",
         annotations(read_only_hint = true)
     )]
     pub async fn list_apps(
@@ -111,8 +122,10 @@ impl Flags {
 
     #[tool(
         name = "update_app",
-        description = "Replace an app's list of environments. Needs the apps:admin scope and an \
-                       owner or admin role.",
+        description = "Replace an app's list of environments and/or the list of browser origins \
+                       its public client key may be used from (allowedOrigins; empty removes the \
+                       restriction). Send at least one. Needs the apps:admin scope and an owner \
+                       or admin role.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -127,13 +140,27 @@ impl Flags {
         let caller = self.caller(&parts)?;
         caller.require_scope(APPS_ADMIN).mcp()?;
         self.require_admin(&caller, APPS_NEED_ADMIN).await?;
+        if args.environments.is_none() && args.allowed_origins.is_none() {
+            return Err(flags_core::Error::Invalid(
+                "send environments, allowedOrigins, or both: there is nothing to change".into(),
+            ))
+            .mcp();
+        }
         let mut tx = self.tx(&caller).await?;
         self.charge(&mut tx, &caller, "update_app").await?;
-        let app = tx.resolve_app(&args.app).await.mcp()?;
-        let app = tx
-            .set_app_environments(&app, &args.environments, caller.user_id)
-            .await
-            .mcp()?;
+        let mut app = tx.resolve_app(&args.app).await.mcp()?;
+        if let Some(environments) = &args.environments {
+            app = tx
+                .set_app_environments(&app, environments, caller.user_id)
+                .await
+                .mcp()?;
+        }
+        if let Some(origins) = &args.allowed_origins {
+            app = tx
+                .set_app_allowed_origins(&app, origins, caller.user_id)
+                .await
+                .mcp()?;
+        }
         tx.commit().await.mcp()?;
         Ok(Json(out::AppOut { app }))
     }

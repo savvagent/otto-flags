@@ -37,6 +37,17 @@ impl ApiError {
         )
     }
 
+    /// A client key used from a browser origin the app does not allow (#143).
+    /// The body names neither the origin list nor the app.
+    pub fn origin_not_allowed() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "origin_not_allowed",
+            "this client key is not allowed from this origin; ask the app's owner or admin to \
+             add it to the app's allowed origins",
+        )
+    }
+
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "invalid_request", message)
     }

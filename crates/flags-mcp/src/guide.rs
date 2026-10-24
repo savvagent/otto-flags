@@ -300,6 +300,7 @@ mod tests {
             ),
             name: "checkout-web".into(),
             environments: vec!["production".into()],
+            allowed_origins: vec![],
             client_key: "sdk_abc123".into(),
             created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
         }
