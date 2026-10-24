@@ -154,6 +154,10 @@ pub struct TokenOut {
 #[serde(rename_all = "camelCase")]
 pub struct UsageOut {
     pub usage: Status,
+    /// This month's closed evaluation hours by key kind: what public client
+    /// keys asked for, what server keys asked for, and how much of the client
+    /// share the hourly ceiling left unbilled.
+    pub evaluations: flags_core::metering::EvaluationSplit,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

@@ -43,7 +43,12 @@ async fn tenant_isolation_is_enforced_on_every_tenant_table(pool: PgPool) {
     let report = db.verify_tenant_isolation().await.expect("isolation");
     let summary = report.summary();
     assert!(summary.contains("otto_app"), "{summary}");
-    for name in ["rollback_policies", "rollback_events", "usage_meter_hourly"] {
+    for name in [
+        "rollback_policies",
+        "rollback_events",
+        "usage_meter_hourly",
+        "usage_meter_daily",
+    ] {
         let table = report
             .tables
             .iter()
@@ -2502,6 +2507,16 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     .await
     .unwrap();
 
+    // ... and a per-day split row (#143).
+    sqlx::query(
+        "INSERT INTO usage_meter_daily (org_id, app_id, day, served_client, served_server, clipped) \
+         SELECT org_id, id, current_date, 3, 2, 1 FROM flag_apps WHERE org_id = $1",
+    )
+    .bind(org)
+    .execute(db.pool())
+    .await
+    .unwrap();
+
     let body = otto_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
@@ -2513,6 +2528,7 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         panic!("first delivery should apply");
     };
     assert_eq!(detail["usage_meter_hourly"], 1, "{detail}");
+    assert_eq!(detail["usage_meter_daily"], 1, "{detail}");
     assert_eq!(detail["rollback_policies"], 1, "{detail}");
     assert_eq!(detail["rollback_events"], 1, "{detail}");
     assert_eq!(detail["usage_outbox_rejected"], 1, "{detail}");
@@ -2524,6 +2540,7 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
         "rollback_policies",
         "rollback_events",
         "usage_meter_hourly",
+        "usage_meter_daily",
         "usage_outbox_rejected",
     ] {
         let left: i64 =
@@ -6986,6 +7003,30 @@ mod metering_flush {
     }
 
     #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn flush_keeps_the_client_share_of_served_apart(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let counter = EvalCounter::default();
+        counter.served(org, app, 2);
+        counter.served_client(org, app, 5);
+        metering::flush(&db, &counter).await.unwrap();
+        counter.served_client(org, app, 1);
+        metering::flush(&db, &counter).await.unwrap();
+
+        // Client answers are served answers; the share only marks what the ceiling applies to.
+        let (served, client): (i64, i64) = sqlx::query_as(
+            "SELECT served, served_client FROM usage_meter_hourly WHERE org_id = $1 AND app_id = $2",
+        )
+        .bind(org)
+        .bind(app)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!((served, client), (8, 6));
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
     async fn flush_skips_zero_pairs(pool: PgPool) {
         let db = db(pool.clone()).await;
         let org = OrgId::new();
@@ -7060,6 +7101,7 @@ mod metering_flush {
             restored.get(&(org, app)),
             Some(&Counts {
                 served: 8,
+                served_client: 0,
                 reported: 3
             })
         );
@@ -7091,6 +7133,7 @@ mod metering_flush {
             counter.take().get(&(org, app)),
             Some(&Counts {
                 served: 9,
+                served_client: 0,
                 reported: 0
             })
         );
@@ -7355,6 +7398,180 @@ mod metering_close {
         q.sort_unstable();
         // 25 → 10 + 10 + 5; 20 → 10 + 10; 10 → 10.
         assert_eq!(q, vec![5, 10, 10, 10, 10, 10]);
+    }
+
+    async fn client_row(
+        pool: &PgPool,
+        org: OrgId,
+        app: FlagAppId,
+        (served, client, reported): (i64, i64, i64),
+    ) -> chrono::DateTime<Utc> {
+        sqlx::query_scalar(
+            "INSERT INTO usage_meter_hourly (org_id, app_id, hour, served, served_client, reported) \
+             VALUES ($1, $2, date_trunc('hour', now() - interval '2 hours', 'UTC'), $3, $4, $5) \
+             RETURNING hour",
+        )
+        .bind(org)
+        .bind(app)
+        .bind(served)
+        .bind(client)
+        .bind(reported)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn daily(pool: &PgPool, org: OrgId, app: FlagAppId) -> Vec<(i64, i64, i64)> {
+        sqlx::query_as(
+            "SELECT served_client, served_server, clipped FROM usage_meter_daily \
+             WHERE org_id = $1 AND app_id = $2 ORDER BY day",
+        )
+        .bind(org)
+        .bind(app)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn client_served_above_the_ceiling_is_not_billed(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        // 1000 answered: 800 to a client key, 200 to a server key. Ceiling 100.
+        let hour = client_row(&pool, org, app, (1000, 800, 0)).await;
+
+        assert_eq!(
+            metering::close_due_at(&db, not_blocked, 100).await.unwrap(),
+            1
+        );
+        // 200 server + 100 of the 800 client.
+        assert_eq!(outbox(&pool).await, vec![billed(org, 300, hour)]);
+        // The split and what the ceiling left out stay visible.
+        assert_eq!(daily(&pool, org, app).await, vec![(800, 200, 700)]);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn the_ceiling_only_clips_what_telemetry_does_not_already_bill(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        // Server-key telemetry reports 600: that is billed whatever the ceiling says.
+        let hour = client_row(&pool, org, app, (1000, 1000, 600)).await;
+
+        metering::close_due_at(&db, not_blocked, 100).await.unwrap();
+        assert_eq!(outbox(&pool).await, vec![billed(org, 600, hour)]);
+        // 1000 would have been billed without the ceiling; 400 of it is not.
+        assert_eq!(daily(&pool, org, app).await, vec![(1000, 0, 400)]);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn below_the_ceiling_nothing_is_clipped_and_a_ceiling_of_zero_bills_no_client_answers(
+        pool: PgPool,
+    ) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let hour = client_row(&pool, org, app, (50, 50, 0)).await;
+        metering::close_due_at(&db, not_blocked, 100).await.unwrap();
+        assert_eq!(outbox(&pool).await, vec![billed(org, 50, hour)]);
+        assert_eq!(daily(&pool, org, app).await, vec![(50, 0, 0)]);
+
+        // The same hour again (a late flush into a closed hour opens a new row).
+        client_row(&pool, org, app, (50, 50, 0)).await;
+        metering::close_due_at(&db, not_blocked, 0).await.unwrap();
+        // Nothing to bill, so no outbox row, and the day's row adds up.
+        assert_eq!(outbox(&pool).await.len(), 1);
+        assert_eq!(daily(&pool, org, app).await, vec![(100, 0, 50)]);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_blocked_org_is_not_billed_but_its_split_is_kept(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let hour = client_row(&pool, org, app, (1000, 800, 0)).await;
+        let lookup = |_| ready(BlockedLookup::Blocked);
+
+        metering::close_due_at(&db, lookup, 100).await.unwrap();
+        assert_eq!(outbox(&pool).await, vec![unbilled(org, hour)]);
+        assert_eq!(daily(&pool, org, app).await, vec![(800, 200, 700)]);
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn a_saturated_client_count_is_clipped_without_overflow(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        let hour = client_row(&pool, org, app, (i64::MAX, i64::MAX, 0)).await;
+
+        metering::close_due_at(&db, not_blocked, 5).await.unwrap();
+        assert_eq!(outbox(&pool).await, vec![billed(org, 5, hour)]);
+        assert_eq!(
+            daily(&pool, org, app).await,
+            vec![(i64::MAX, 0, i64::MAX - 5)]
+        );
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn the_split_reaches_the_orgs_usage_and_only_its_own(pool: PgPool) {
+        use flags_core::metering::MeteringExt;
+        let db = db(pool.clone()).await;
+        let (org, other) = (OrgId::new(), OrgId::new());
+        let (web, api) = (
+            app_for(&db, org, "web").await,
+            app_for(&db, org, "api").await,
+        );
+        let theirs = app_for(&db, other, "web").await;
+        for (o, a, c, s, k) in [
+            (org, web, 800, 200, 700),
+            (org, api, 10, 90, 0),
+            (other, theirs, 5, 5, 5),
+        ] {
+            sqlx::query(
+                "INSERT INTO usage_meter_daily (org_id, app_id, day, served_client, served_server, clipped) \
+                 VALUES ($1, $2, (now() AT TIME ZONE 'UTC')::date, $3, $4, $5), \
+                        ($1, $2, date_trunc('month', now() AT TIME ZONE 'UTC')::date - 1, 1000, 1000, 1000)",
+            )
+            .bind(o)
+            .bind(a)
+            .bind(c)
+            .bind(s)
+            .bind(k)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let mut tx = db.begin(org).await.unwrap();
+        let split = tx.evaluation_split().await.unwrap();
+        tx.commit().await.unwrap();
+        // The row on the last day of last month is not in this month's split.
+        assert_eq!(
+            (split.client_served, split.server_served, split.clipped),
+            (810, 290, 700)
+        );
+        let names: Vec<_> = split.apps.iter().map(|a| a.app_name.as_str()).collect();
+        assert_eq!(names, ["web", "api"], "busiest client-served first");
+        assert!(split.apps.iter().all(|a| a.app_id != theirs));
+    }
+
+    #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+    async fn the_sweep_drops_day_rows_past_retention(pool: PgPool) {
+        let db = db(pool.clone()).await;
+        let org = OrgId::new();
+        let app = app_for(&db, org, "web").await;
+        sqlx::query(
+            "INSERT INTO usage_meter_daily (org_id, app_id, day, served_client) VALUES \
+             ($1, $2, (now() AT TIME ZONE 'UTC')::date - 91, 1), \
+             ($1, $2, (now() AT TIME ZONE 'UTC')::date - 89, 1)",
+        )
+        .bind(org)
+        .bind(app)
+        .execute(&pool)
+        .await
+        .unwrap();
+        flags_core::telemetry::sweep(&db).await.unwrap();
+        assert_eq!(daily(&pool, org, app).await.len(), 1);
     }
 
     #[sqlx::test(migrator = "flags_core::MIGRATOR")]

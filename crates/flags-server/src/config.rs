@@ -28,6 +28,10 @@ pub struct Config {
     pub platform_webhook_secret: String,
     pub extra_allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
+    /// The most evaluations answered to public client keys that are billed per
+    /// app per hour (`FLAGS_CLIENT_EVAL_CEILING_PER_HOUR`); more are served and
+    /// not billed (#143).
+    pub client_eval_ceiling_per_hour: i64,
     /// Retired variables ([`RETIRED`]) that are set in the environment, to be
     /// warned about once logging is up. See [`Config::warn_retired`].
     pub retired_set: Vec<&'static str>,
@@ -113,6 +117,16 @@ impl Config {
             platform_webhook_secret: required("FLAGS_PLATFORM_WEBHOOK_SECRET")?,
             extra_allowed_hosts: list("FLAGS_ALLOWED_HOSTS"),
             allowed_origins: list("FLAGS_ALLOWED_ORIGINS"),
+            client_eval_ceiling_per_hour: parse_var(
+                "FLAGS_CLIENT_EVAL_CEILING_PER_HOUR",
+                &flags_core::metering::DEFAULT_CLIENT_CEILING_PER_HOUR.to_string(),
+                |s| {
+                    s.parse::<i64>()
+                        .ok()
+                        .filter(|n| *n >= 0)
+                        .ok_or_else(|| anyhow!("a whole number of at least 0"))
+                },
+            )?,
             retired_set: retired_set(|name| std::env::var_os(name).is_some()),
             log_format: parse_var("FLAGS_LOG_FORMAT", "text", |s| match s {
                 "text" => Ok(LogFormat::Text),
@@ -166,6 +180,7 @@ impl Config {
             platform_webhook_secret: "otto_whsec_test".into(),
             extra_allowed_hosts: vec![],
             allowed_origins: vec![],
+            client_eval_ceiling_per_hour: flags_core::metering::DEFAULT_CLIENT_CEILING_PER_HOUR,
             retired_set: vec![],
             log_format: LogFormat::Text,
         }
@@ -229,6 +244,19 @@ mod tests {
             c.allowed_hosts(),
             ["flags.example.com", "otto-flags.fly.dev"]
         );
+    }
+
+    #[test]
+    fn the_client_ceiling_defaults_and_takes_zero_but_not_a_negative() {
+        assert_eq!(Config::for_test().client_eval_ceiling_per_hour, 500_000);
+        let parse = |s: &str| {
+            s.parse::<i64>()
+                .ok()
+                .filter(|n| *n >= 0)
+                .ok_or_else(|| anyhow!("a whole number of at least 0"))
+        };
+        assert_eq!(parse("0").unwrap(), 0);
+        assert!(parse("-1").is_err() && parse("lots").is_err());
     }
 
     #[test]

@@ -2899,6 +2899,75 @@ async fn client_key_telemetry_is_never_billed(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn only_the_apps_own_environments_are_counted(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (_, _, key, client_key) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    // The caller names the environment, and a public client key can name any.
+    for k in [&key, &client_key] {
+        let (status, r) = sdk(
+            &s.app,
+            "POST",
+            "/api/evaluate/checkout",
+            k,
+            Some(json!({"context": {"environment": "made-up"}})),
+        )
+        .await;
+        // Answered as ever, just not counted.
+        assert_eq!(status, StatusCode::OK, "{r}");
+        assert_eq!(r["key"], "checkout");
+    }
+    assert!(s.evaluations.take().is_empty());
+
+    evaluate_n(&s, &client_key, "checkout", 2).await;
+    evaluate_n(&s, &key, "checkout", 1).await;
+    let counts = s.evaluations.take();
+    let c = counts.values().next().expect("production is counted");
+    assert_eq!((c.served, c.served_client), (3, 2));
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn client_answers_above_the_ceiling_are_served_not_billed_and_usage_shows_it(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    let org = Uuid::new_v4();
+    let (t, _, key, client_key) = org_with_flag(&s, &platform, org, "checkout").await;
+
+    evaluate_n(&s, &client_key, "checkout", 5).await;
+    evaluate_n(&s, &key, "checkout", 2).await;
+    metering::flush(&s.db, &s.evaluations).await.unwrap();
+    age_hours(s.db.pool()).await;
+    let meter = flags_core::usage::Meter::new(s.platform.clone());
+    metering::close_due_at(
+        &s.db,
+        |org| {
+            let meter = meter.clone();
+            async move { meter.billable_blocked(org).await }
+        },
+        3,
+    )
+    .await
+    .unwrap();
+    flags_core::usage::ship_once(&s.db, &s.platform, &Default::default())
+        .await
+        .unwrap();
+
+    // 2 server answers and 3 of the 5 client answers.
+    let events = metered(&platform, org);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].quantity, Some(5));
+
+    let usage = tool(&s.app, &t, "usage", json!({})).await.unwrap();
+    let e = &usage["evaluations"];
+    assert_eq!(e["clientServed"], 5, "{usage}");
+    assert_eq!(e["serverServed"], 2, "{usage}");
+    assert_eq!(e["clipped"], 2, "{usage}");
+    assert_eq!(e["apps"][0]["clientServed"], 5, "{usage}");
+}
+
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn unknown_flag_telemetry_and_missing_flags_count_nothing(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool, &url).await;

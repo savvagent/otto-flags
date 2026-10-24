@@ -172,15 +172,21 @@ crate module docs.
   policy's `includeClientReports` do a fresh owner/admin lookup at the platform. `flags_core::scopes::KNOWN`/`DEFAULT` match the platform
   registration.
 - **Metering:** MCP tools record a free usage row in their own transaction (nothing an agent does
-  is billed). Production evaluations are counted in memory (`flags_core::metering::EvalCounter`),
+  is billed). Evaluations in an environment the app has are counted in memory
+  (`flags_core::metering::EvalCounter`; any other environment name is answered, not counted),
   flushed to `usage_meter_hourly`, closed hourly into `usage_outbox` on `otto-flags/evaluations` as
-  `GREATEST(served, reported)` (`reported` = server-key telemetry only), unmetered while the org is
-  `billable_blocked`. The SDK path only touches the counter. Reads and dry-runs are never billed.
+  `GREATEST((served - served_client) + LEAST(served_client, ceiling), reported)` (`reported` =
+  server-key telemetry only; `served_client` = answers to a public client key, held to
+  `FLAGS_CLIENT_EVAL_CEILING_PER_HOUR` per app and hour, the rest served and not billed),
+  unmetered while the org is `billable_blocked`. The close also adds each hour to
+  `usage_meter_daily` (per app and UTC day, 90 days) for the `usage` tool's key-kind split. The SDK
+  path only touches the counter. Reads and dry-runs are never billed.
 - **Every flag change is versioned** in `flag_versions` and calls `pg_notify('flag_changes', …)`
   in the same transaction.
 - **Evaluations are counted, not stored:** `flag_eval_hourly` rolls up SDK telemetry only (never
   the evaluate endpoint); error reports are raw and truncated (14 days; rollups 90); no end-user
-  context is persisted. `usage_meter_hourly` holds billing counts per app and hour only.
+  context is persisted. `usage_meter_hourly` holds billing counts per app and hour only, and
+  `usage_meter_daily` their per-day totals.
 - **SDK-reported text is untrusted** when an MCP tool returns it; database error text never
   reaches a tool response.
 - **Rollout bucketing** (SHA-256 of flag key + identifier in `flags_core::eval`) never changes
