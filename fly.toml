@@ -46,11 +46,11 @@ kill_timeout = "15s"
   internal_port = 8080
   force_https = true
   auto_start_machines = true
-  # Suspend when idle and resume on the next request: cheapest, and resuming a
-  # suspended machine is fast enough for an SDK that caches and falls back to
-  # defaults. Raise min_machines_running to 1 once real traffic depends on it.
+  # One machine always runs: resuming a suspended one took 2.2s, longer than a
+  # 2s SDK timeout, so the first evaluation after idle fell back to defaults
+  # (#191). Machines above the minimum still suspend when idle.
   auto_stop_machines = "suspend"
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ["app"]
 
   [http_service.concurrency]
