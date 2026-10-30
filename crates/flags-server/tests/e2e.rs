@@ -283,8 +283,21 @@ async fn start_platform() -> (String, Shared) {
 }
 
 fn token(p: &Shared, org: Uuid, user: Uuid, role: Role, scopes: &[&str]) -> String {
+    token_with_prefix(p, "otto_at_", org, user, role, scopes)
+}
+
+/// A token the mock platform will introspect as active, with the given
+/// prefix in front of a well-formed 43-character body.
+fn token_with_prefix(
+    p: &Shared,
+    prefix: &str,
+    org: Uuid,
+    user: Uuid,
+    role: Role,
+    scopes: &[&str],
+) -> String {
     let t = format!(
-        "otto_at_{}",
+        "{prefix}{}",
         "a".repeat(11) + &Uuid::new_v4().simple().to_string()
     );
     assert!(otto_resource::looks_like_token(&t), "{t}");
@@ -1609,6 +1622,29 @@ async fn rollback_tools_check_their_scopes(pool: PgPool) {
     ] {
         let err = tool(&s.app, t, name, args).await.unwrap_err();
         assert_eq!(err["data"]["code"], "insufficient_scope", "{name}: {err}");
+    }
+}
+
+/// The platform will mint `sav_` tokens once the Savvagent rebrand reaches
+/// phase 2 (savvagent/otto-platform#128), so the service must already accept
+/// them alongside the `otto_` ones it sees today.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn sav_and_otto_tokens_are_both_accepted(pool: PgPool) {
+    let (url, platform) = start_platform().await;
+    let s = server(pool, &url).await;
+    for prefix in ["sav_at_", "sav_pat_", "otto_at_", "otto_pat_"] {
+        let t = token_with_prefix(
+            &platform,
+            prefix,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Role::Member,
+            &["flags:read"],
+        );
+        let who = tool(&s.app, &t, "whoami", json!({}))
+            .await
+            .unwrap_or_else(|e| panic!("{prefix}: {e}"));
+        assert_eq!(who["role"], "member", "{prefix}: {who}");
     }
 }
 
