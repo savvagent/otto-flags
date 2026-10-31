@@ -96,7 +96,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 Render `<Providers>` inside `<body>` in the root layout. Middleware has its own client:
 `initMiddlewareClient(config)` from `@otto-flags/nextjs/middleware`. The config takes the core
-client's fields: `baseUrl` (default `https://otto-flags.savvagent.com`), `environment` (default
+client's fields: `baseUrl` (default `https://flags.savvagent.com`), `environment` (default
 `"production"`), `enableRealtime` (default `true`), `cacheTtl` (milliseconds, default 60000),
 `enableTelemetry` (default `true`), `defaults` and `onError`.
 

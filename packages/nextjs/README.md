@@ -462,7 +462,7 @@ NEXT_PUBLIC_OTTO_FLAGS_API_KEY=sdk_...
 
 # Optional
 OTTO_FLAGS_APP_ID=your-app-id
-OTTO_FLAGS_BASE_URL=https://otto-flags.savvagent.com
+OTTO_FLAGS_BASE_URL=https://flags.savvagent.com
 ```
 
 ## TypeScript Support

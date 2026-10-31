@@ -91,7 +91,7 @@ bootstrapApplication(AppComponent, {
 });
 ```
 
-`config` takes the core client's fields: `baseUrl` (default `https://otto-flags.savvagent.com`),
+`config` takes the core client's fields: `baseUrl` (default `https://flags.savvagent.com`),
 `environment` (default `"production"`), `enableRealtime` (default `true`), `cacheTtl` (milliseconds,
 default 60000), `enableTelemetry` (default `true`), `defaults` and `onError`. `defaultContext`
 applies to every evaluation: `applicationId`, `environment`, `organizationId`, `userId`,

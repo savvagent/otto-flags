@@ -14,7 +14,7 @@ import { OttoFlagsService, OttoFlagsConfig, OTTO_FLAGS_CONFIG } from './service'
  *     OttoFlagsModule.forRoot({
  *       config: {
  *         apiKey: 'sdk_your_api_key',
- *         baseUrl: 'https://otto-flags.savvagent.com'
+ *         baseUrl: 'https://flags.savvagent.com'
  *       },
  *       defaultContext: {
  *         applicationId: 'my-app',

@@ -10,13 +10,13 @@ from otto_flags import AsyncFlagClient, FlagClient, FlagClientConfig
 from otto_flags.cache import AsyncFlagCache, FlagCache
 from tests.conftest import server_body
 
-URL = "https://otto-flags.savvagent.com/api/flags/kill/evaluate"
+URL = "https://flags.savvagent.com/api/flags/kill/evaluate"
 
 
 def _config() -> FlagClientConfig:
     return FlagClientConfig(
         api_key="sdk_test_key_12345",
-        base_url="https://otto-flags.savvagent.com",
+        base_url="https://flags.savvagent.com",
         enable_realtime=False,
         enable_telemetry=False,
     )

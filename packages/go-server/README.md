@@ -72,7 +72,7 @@ func main() {
 config := ottoflags.Config{
     APIKey:          "sdk_your_api_key_here",
     ApplicationID:   "your-app-id",
-    BaseURL:         "https://otto-flags.savvagent.com", // optional
+    BaseURL:         "https://flags.savvagent.com", // optional
     EnableRealtime:  true,                         // default: false; true opens the update stream
     CacheTTL:        60 * time.Second,            // default: 60 seconds
     EnableTelemetry: true,                         // default: true

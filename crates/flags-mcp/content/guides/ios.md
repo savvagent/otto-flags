@@ -54,7 +54,7 @@ let client = OttoFlagsClient(config: config)
 ```
 
 Other `OttoFlagsConfig` parameters, all optional: `apiUrl` (default
-`https://otto-flags.savvagent.com`), `pollingInterval` (seconds, default 60), `enableWebSocket` (ignored), `timeout` (seconds, default
+`https://flags.savvagent.com`), `pollingInterval` (seconds, default 60), `enableWebSocket` (ignored), `timeout` (seconds, default
 30) and `enableRealtime` (default `false`, see below). Pass them in that order. Call
 `client.close()` to stop the stream and release the client when the app no longer needs it.
 

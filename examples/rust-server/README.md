@@ -28,7 +28,7 @@ Example Axum server that evaluates Otto Flags with the Otto Flags Rust Server SD
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `OTTO_FLAGS_SDK_KEY` | yes | | The app's server key (`srv_...`, recommended: it is secret, and its telemetry drives auto-rollback) or its public client key (`sdk_...`) |
-| `OTTO_FLAGS_API_URL` | no | `https://otto-flags.savvagent.com` | Otto Flags API base URL |
+| `OTTO_FLAGS_API_URL` | no | `https://flags.savvagent.com` | Otto Flags API base URL |
 | `OTTO_FLAGS_ENVIRONMENT` | no | `development` | Environment flags are evaluated in |
 | `PORT` | no | `8083` | Port the example listens on |
 | `RUST_LOG` | no | `rust_server_example=info,otto_flags=info,tower_http=info` | Log filter |
@@ -100,7 +100,7 @@ use otto_flags::{Config, Context, FlagClient};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // The base URL defaults to https://otto-flags.savvagent.com; `with_base_url` overrides it.
+    // The base URL defaults to https://flags.savvagent.com; `with_base_url` overrides it.
     let config = Config::new(std::env::var("OTTO_FLAGS_SDK_KEY")?).with_default("new-ui", false);
     let flags = FlagClient::new(config)?;
 

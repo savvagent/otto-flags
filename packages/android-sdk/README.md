@@ -60,7 +60,7 @@ import kotlinx.coroutines.launch
 
 // Configure the SDK
 val config = OttoFlagsConfig(
-    apiUrl = "https://otto-flags.savvagent.com",
+    apiUrl = "https://flags.savvagent.com",
     sdkKey = "your-sdk-key",
     environment = "production"
 )
@@ -172,7 +172,7 @@ class MainActivity : AppCompatActivity() {
 
 ```kotlin
 val config = OttoFlagsConfig(
-    apiUrl = "https://otto-flags.savvagent.com",
+    apiUrl = "https://flags.savvagent.com",
     sdkKey = "your-sdk-key",
     environment = "production",
     pollingInterval = 60_000L,     // Poll every 60 seconds

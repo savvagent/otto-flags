@@ -434,7 +434,7 @@ interface FlagClientConfig {
   apiKey: string;              // SDK key (starts with sdk_)
 
   // Optional - API
-  baseUrl?: string;            // API URL (default: https://otto-flags.savvagent.com)
+  baseUrl?: string;            // API URL (default: https://flags.savvagent.com)
   timeout?: number;            // Request timeout in ms (default: 5000)
 
   // Optional - Caching

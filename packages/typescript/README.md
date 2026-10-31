@@ -29,7 +29,7 @@ import { FlagClient } from '@otto-flags/typescript';
 // Initialize the client
 const client = new FlagClient({
   apiKey: 'sdk_dev_your_api_key_here',
-  baseUrl: 'https://otto-flags.savvagent.com', // Optional: defaults to production
+  baseUrl: 'https://flags.savvagent.com', // Optional: defaults to production
   enableRealtime: true,
   enableTelemetry: true,
 });
@@ -186,7 +186,7 @@ interface FlagClientConfig {
 ```typescript
 const client = new FlagClient({
   apiKey: 'sdk_dev_abc123',
-  baseUrl: 'https://otto-flags.savvagent.com',
+  baseUrl: 'https://flags.savvagent.com',
   environment: 'staging', // Use staging environment flags
   enableRealtime: true,
   cacheTtl: 30000, // 30 seconds

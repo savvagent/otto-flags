@@ -70,7 +70,7 @@ use std::time::Duration;
 
 let config = Config::new("srv_your_server_key_here")
     .with_application_id("your-app-id")
-    .with_base_url("https://otto-flags.savvagent.com")
+    .with_base_url("https://flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_failure_cooldown(Duration::from_secs(5)) // the default
@@ -307,7 +307,7 @@ variable, not its value. Either way any earlier default (else `false`) stays.
 ```rust
 let config = Config::new("srv_key")  // or "sdk_key"
     .with_application_id("app-id")
-    .with_base_url("https://otto-flags.savvagent.com")
+    .with_base_url("https://flags.savvagent.com")
     .with_cache_ttl(Duration::from_secs(60))
     .with_timeout(Duration::from_secs(5))
     .with_failure_cooldown(Duration::from_secs(5)) // the default

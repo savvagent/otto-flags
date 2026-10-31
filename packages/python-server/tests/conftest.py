@@ -15,7 +15,7 @@ def client_config() -> FlagClientConfig:
     return FlagClientConfig(
         api_key="sdk_test_key_12345",
         application_id="test-app",
-        base_url="https://otto-flags.savvagent.com",
+        base_url="https://flags.savvagent.com",
         enable_realtime=False,  # Disable for unit tests
         enable_telemetry=False,  # Disable for unit tests
         cache_ttl=60,
@@ -80,7 +80,7 @@ def mock_flag_response(
         "context": {},
     }
     respx_mock.post(
-        f"https://otto-flags.savvagent.com/api/flags/{flag_key}/evaluate"
+        f"https://flags.savvagent.com/api/flags/{flag_key}/evaluate"
     ).mock(return_value=httpx.Response(200, json=response_data))
 
 
@@ -89,7 +89,7 @@ def mock_flags_list_response(
     flags: list[dict],
 ) -> None:
     """Helper to mock get all flags response."""
-    respx_mock.get("https://otto-flags.savvagent.com/api/sdk/flags").mock(
+    respx_mock.get("https://flags.savvagent.com/api/sdk/flags").mock(
         return_value=httpx.Response(
             200,
             json={

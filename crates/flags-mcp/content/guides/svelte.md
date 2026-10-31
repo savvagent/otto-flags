@@ -71,7 +71,7 @@ Repeat calls are ignored.
 ```
 
 `initOttoFlags` also accepts the client config directly. `config` takes the core client's fields:
-`baseUrl` (default `https://otto-flags.savvagent.com`), `environment` (default `"production"`),
+`baseUrl` (default `https://flags.savvagent.com`), `environment` (default `"production"`),
 `enableRealtime` (default `true`), `cacheTtl` (milliseconds, default 60000), `enableTelemetry`
 (default `true`), `defaults` and `onError`. `defaultContext` applies to every evaluation:
 `environment`, `userId`, `organizationId`, `anonymousId`, `sessionId`, `language` and `attributes`.

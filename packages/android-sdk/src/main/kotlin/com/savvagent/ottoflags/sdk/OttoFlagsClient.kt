@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit
  * Configuration for the Otto Flags SDK client
  */
 data class OttoFlagsConfig(
-    val apiUrl: String = "https://otto-flags.savvagent.com",
+    val apiUrl: String = "https://flags.savvagent.com",
     val sdkKey: String,
     val environment: String = "production",
     val pollingInterval: Long = 60_000L, // milliseconds

@@ -26,7 +26,7 @@ class FlagClientConfig:
     application_id: str | None = None
     """Application ID for application-scoped flags (omit for enterprise flags only)."""
 
-    base_url: str = "https://otto-flags.savvagent.com"
+    base_url: str = "https://flags.savvagent.com"
     """Base URL for the Otto Flags API."""
 
     environment: str = "production"

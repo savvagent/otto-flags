@@ -47,7 +47,7 @@ func main() {
 }
 ```
 
-Other `Config` fields, all optional: `BaseURL` (default `https://otto-flags.savvagent.com`),
+Other `Config` fields, all optional: `BaseURL` (default `https://flags.savvagent.com`),
 `CacheTTL` (default 60 seconds), `Timeout` (default 5 seconds), `EnableRealtime` (default off, see
 below), and `Defaults` (flag key to the value served when evaluation fails). `OnError`
 defaults to printing to standard output, so set it.

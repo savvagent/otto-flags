@@ -71,7 +71,7 @@ async with AsyncFlagClient(config) as client:
 ```
 
 Other `FlagClientConfig` fields, all optional: `base_url` (default
-`https://otto-flags.savvagent.com`), `environment` (default `"production"`), `cache_ttl` (seconds,
+`https://flags.savvagent.com`), `environment` (default `"production"`), `cache_ttl` (seconds,
 default 60), `enable_realtime` (default `True`), `enable_telemetry` (default `True`), `timeout`
 (seconds, default 5.0), `defaults` (flag key to the value served when evaluation fails), and
 `on_error` (a callable that receives SDK errors).

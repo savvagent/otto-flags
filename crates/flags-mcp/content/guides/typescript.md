@@ -67,7 +67,7 @@ client.close();
 
 The constructor throws if `apiKey` is missing or is not a public client key, so a misconfigured
 build fails at start-up. Other `FlagClientConfig` fields, all optional: `baseUrl` (default
-`https://otto-flags.savvagent.com`), `environment` (default `"production"`), `enableRealtime`
+`https://flags.savvagent.com`), `environment` (default `"production"`), `enableRealtime`
 (default `true`), `cacheTtl` (milliseconds, default 60000), `enableTelemetry` (default `true`),
 `defaults` (flag key to the value served when evaluation fails), `onError` (receives SDK errors; the
 default logs to the console), `defaultLanguage`, `disableLanguageDetection`, `retryAttempts`

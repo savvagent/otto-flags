@@ -51,7 +51,7 @@ export class FlagClient {
     this.config = {
       apiKey: config.apiKey,
       applicationId: config.applicationId || '',
-      baseUrl: config.baseUrl || 'https://otto-flags.savvagent.com',
+      baseUrl: config.baseUrl || 'https://flags.savvagent.com',
       environment: config.environment || 'production',
       enableRealtime: config.enableRealtime ?? true,
       cacheTtl: config.cacheTtl || 60000,
