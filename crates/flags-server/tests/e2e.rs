@@ -1652,10 +1652,13 @@ async fn sav_and_otto_tokens_are_both_accepted(pool: PgPool) {
 
 /// Rebrand phase 3 (#194, savvagent/otto-platform#128): configured as
 /// `fly.toml` configures production, the service names itself Savvagent Flags
-/// at https://flags.savvagent.com/mcp, and still serves the legacy
-/// otto-flags.savvagent.com host to MCP clients and SDKs set up before it.
+/// at https://flags.savvagent.com/mcp. The legacy otto-flags.savvagent.com host
+/// (#135) redirects everything but the SDK API, which still serves SDKs built
+/// before the rebrand.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
-async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: PgPool) {
+async fn the_savvagent_host_is_canonical_and_the_legacy_host_redirects_all_but_the_sdk_api(
+    pool: PgPool,
+) {
     const NEW: &str = "https://flags.savvagent.com/mcp";
     let (url, platform) = start_platform().await;
     platform.lock().unwrap().aud = Some(NEW.into());
@@ -1663,10 +1666,8 @@ async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: 
     config.platform_url = url;
     config.public_url = "https://flags.savvagent.com".into();
     config.resource_uri = NEW.into();
-    config.extra_allowed_hosts = vec![
-        "otto-flags.fly.dev".into(),
-        "otto-flags.savvagent.com".into(),
-    ];
+    config.extra_allowed_hosts = vec!["otto-flags.fly.dev".into()];
+    config.redirect_hosts = vec!["otto-flags.savvagent.com".into()];
     let platform_client = platform_client(&config).unwrap();
     let app = router(
         Db::from_pool(pool),
@@ -1719,14 +1720,10 @@ async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: 
         .unwrap()
         .starts_with("Savvagent Flags manages feature flags."));
 
-    // whoami answers on the new host, the legacy host, and the fly.dev name.
+    // whoami answers on the new host and the fly.dev name.
     let whoami = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                         "params": {"name": "whoami", "arguments": {}}});
-    for host in [
-        "flags.savvagent.com",
-        "otto-flags.savvagent.com",
-        "otto-flags.fly.dev",
-    ] {
+    for host in ["flags.savvagent.com", "otto-flags.fly.dev"] {
         let (status, v) = send(&app, mcp(host, whoami.clone())).await;
         assert!(status.is_success(), "{host}: HTTP {status} {v}");
         assert_eq!(
@@ -1734,6 +1731,14 @@ async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: 
             "{host}: {v}"
         );
     }
+    // The legacy host does not serve /mcp: it redirects, path kept.
+    let res = app
+        .clone()
+        .oneshot(mcp("otto-flags.savvagent.com", whoami.clone()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(res.headers()["location"], NEW);
     // Any other host is still refused.
     let (status, _) = send(&app, mcp("evil.example.com", whoami.clone())).await;
     assert!(
@@ -1741,7 +1746,7 @@ async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: 
         "an unlisted host was served: {status}"
     );
 
-    // An SDK built against the legacy host keeps evaluating there.
+    // An SDK built against the legacy host keeps reading flags there.
     let created = tool_at(
         &app,
         "flags.savvagent.com",
@@ -1762,6 +1767,168 @@ async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: 
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{host}: {v}");
+    }
+}
+
+/// What the legacy host does (#135), through the whole router: everything
+/// outside `/api/` is a bodiless 308 to the public origin with path and query
+/// kept, whatever the method; the SDK API is served as on the new host; the new
+/// host redirects nothing.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_legacy_host_redirects_everything_but_the_sdk_api(pool: PgPool) {
+    const OLD: &str = "otto-flags.savvagent.com";
+    let (url, platform) = start_platform().await;
+    let mut config = Config::for_test();
+    config.platform_url = url;
+    config.public_url = "https://flags.savvagent.com".into();
+    config.resource_uri = "https://flags.savvagent.com/mcp".into();
+    config.redirect_hosts = vec![OLD.into()];
+    platform.lock().unwrap().aud = Some(config.resource_uri.clone());
+    let platform_client = platform_client(&config).unwrap();
+    let app = router(
+        Db::from_pool(pool),
+        platform_client,
+        Listener::detached(),
+        Hints::detached(),
+        Arc::new(EvalCounter::default()),
+        &config,
+    );
+    let call = |method: &str, host: &str, uri: &str| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", host)
+            .header("accept", "text/html")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    // Redirected: path and query kept, same method class, no body.
+    for (method, uri, to) in [
+        ("POST", "/mcp", "https://flags.savvagent.com/mcp"),
+        (
+            "GET",
+            "/mcp?a=1&b=%20x",
+            "https://flags.savvagent.com/mcp?a=1&b=%20x",
+        ),
+        ("GET", "/", "https://flags.savvagent.com/"),
+        (
+            "GET",
+            "/?utm_source=old",
+            "https://flags.savvagent.com/?utm_source=old",
+        ),
+        (
+            "GET",
+            "/.well-known/oauth-protected-resource",
+            "https://flags.savvagent.com/.well-known/oauth-protected-resource",
+        ),
+        ("GET", "/llms.txt", "https://flags.savvagent.com/llms.txt"),
+        (
+            "POST",
+            "/platform/webhooks",
+            "https://flags.savvagent.com/platform/webhooks",
+        ),
+        ("GET", "/nope", "https://flags.savvagent.com/nope"),
+    ] {
+        let res = app.clone().oneshot(call(method, OLD, uri)).await.unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::PERMANENT_REDIRECT,
+            "{method} {uri}"
+        );
+        assert_eq!(res.headers()["location"], to, "{method} {uri}");
+        let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert!(body.is_empty(), "{method} {uri}");
+    }
+    // Case and port in the Host header do not dodge it; a hostile
+    // X-Forwarded-Host does not steer it.
+    for host in ["OTTO-FLAGS.savvagent.com", "otto-flags.savvagent.com:443"] {
+        let mut req = call("GET", host, "/mcp");
+        req.headers_mut()
+            .insert("x-forwarded-host", "evil.example.com".parse().unwrap());
+        req.headers_mut()
+            .insert("x-forwarded-proto", "http".parse().unwrap());
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::PERMANENT_REDIRECT, "{host}");
+        assert_eq!(res.headers()["location"], "https://flags.savvagent.com/mcp");
+    }
+
+    // Not redirected on the new host.
+    let (status, _) = send(&app, call("GET", "flags.savvagent.com", "/mcp?a=1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, meta) = send(
+        &app,
+        call(
+            "GET",
+            "flags.savvagent.com",
+            "/.well-known/oauth-protected-resource",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{meta}");
+    let (status, _) = send(&app, call("GET", "flags.savvagent.com", "/nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The SDK API on the old host: served, not redirected: a POST evaluate with
+    // a server key and a flags fetch with a client key are 200s, and a call
+    // without a key is the API's own 401.
+    let admin = token(
+        &platform,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Role::Admin,
+        &["flags:read", "flags:write", "apps:admin"],
+    );
+    let created = tool_at(
+        &app,
+        "flags.savvagent.com",
+        &admin,
+        "create_app",
+        json!({"name": "web"}),
+    )
+    .await;
+    let client_key = created["keys"]["clientKey"].as_str().unwrap();
+    let server_key = created["keys"]["serverKey"].as_str().unwrap();
+    tool_at(
+        &app,
+        "flags.savvagent.com",
+        &admin,
+        "create_flag",
+        json!({"app": "web", "key": "legacy-sdk"}),
+    )
+    .await;
+    for host in [OLD, "flags.savvagent.com"] {
+        let (status, v) = send(
+            &app,
+            Request::post("/api/flags/legacy-sdk/evaluate")
+                .header("host", host)
+                .header("authorization", format!("Bearer {server_key}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"context": {"user_id": "u1", "environment": "production"}}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{host}: {v}");
+        let (status, _) = send(
+            &app,
+            Request::get("/api/sdk/flags")
+                .header("host", host)
+                .header("authorization", format!("Bearer {client_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{host}");
+        let (status, _) = send(&app, call("GET", host, "/api/sdk/flags")).await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{host}: a key is required, not a redirect"
+        );
     }
 }
 

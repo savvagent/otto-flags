@@ -29,6 +29,10 @@ pub struct Config {
     /// lifecycle webhooks.
     pub platform_webhook_secret: String,
     pub extra_allowed_hosts: Vec<String>,
+    /// Old hostnames that only redirect (`FLAGS_REDIRECT_HOSTS`): every path
+    /// but the SDK API answers a 308 to [`Config::public_url`] (#135). Bare
+    /// lowercase hostnames, disjoint from the allowed hosts and the public host.
+    pub redirect_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
     /// The most evaluations answered to public client keys that are billed per
     /// app per hour (`FLAGS_CLIENT_EVAL_CEILING_PER_HOUR`); more are served and
@@ -92,6 +96,12 @@ impl Config {
             Some(v) => v,
             None => format!("{public_url}/mcp"),
         };
+        let extra_allowed_hosts = list("FLAGS_ALLOWED_HOSTS");
+        let redirect_hosts = redirect_hosts(
+            &public_url,
+            &extra_allowed_hosts,
+            list("FLAGS_REDIRECT_HOSTS"),
+        )?;
         Ok(Self {
             // `fly postgres attach` sets DATABASE_URL; FLAGS_DATABASE_URL wins
             // so a shell with another service's DATABASE_URL cannot point this
@@ -117,7 +127,8 @@ impl Config {
             platform_url: url_var("FLAGS_PLATFORM_URL")?,
             introspection_secret: required("FLAGS_INTROSPECTION_SECRET")?,
             platform_webhook_secret: required("FLAGS_PLATFORM_WEBHOOK_SECRET")?,
-            extra_allowed_hosts: list("FLAGS_ALLOWED_HOSTS"),
+            extra_allowed_hosts,
+            redirect_hosts,
             allowed_origins: list("FLAGS_ALLOWED_ORIGINS"),
             client_eval_ceiling_per_hour: parse_var(
                 "FLAGS_CLIENT_EVAL_CEILING_PER_HOUR",
@@ -181,6 +192,7 @@ impl Config {
             introspection_secret: "otto_rs_test".into(),
             platform_webhook_secret: "otto_whsec_test".into(),
             extra_allowed_hosts: vec![],
+            redirect_hosts: vec![],
             allowed_origins: vec![],
             client_eval_ceiling_per_hour: flags_core::metering::DEFAULT_CLIENT_CEILING_PER_HOUR,
             retired_set: vec![],
@@ -218,6 +230,54 @@ fn split_list(v: &str) -> Vec<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+/// Whether `h` is a bare lowercase hostname: dot-separated labels of
+/// `a-z0-9-`, none empty or starting or ending with `-`. No scheme, port,
+/// path, wildcard, uppercase or whitespace, so it compares equal to the host
+/// of a request (which [`crate::redirect`] lowercases and strips of its port).
+fn is_bare_host(h: &str) -> bool {
+    !h.is_empty()
+        && h.len() <= 253
+        && h.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        })
+}
+
+/// Validate `FLAGS_REDIRECT_HOSTS`: each entry a bare lowercase hostname, and
+/// none the public host or one of `allowed` (a host cannot both serve /mcp and
+/// redirect it). Refused at startup, naming the entry.
+fn redirect_hosts(public_url: &str, allowed: &[String], hosts: Vec<String>) -> Result<Vec<String>> {
+    let public_host = url::Url::parse(public_url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string));
+    for h in &hosts {
+        if !is_bare_host(h) {
+            return Err(anyhow!(
+                "FLAGS_REDIRECT_HOSTS entry {h:?} is not a bare lowercase hostname \
+                 (no scheme, port, path or wildcard)"
+            ));
+        }
+        if public_host.as_deref() == Some(h.as_str()) {
+            return Err(anyhow!(
+                "FLAGS_REDIRECT_HOSTS lists {h:?}, which is the public host \
+                 (FLAGS_PUBLIC_URL): it would redirect to itself"
+            ));
+        }
+        if allowed.iter().any(|a| a.eq_ignore_ascii_case(h)) {
+            return Err(anyhow!(
+                "{h:?} is in both FLAGS_REDIRECT_HOSTS and FLAGS_ALLOWED_HOSTS: a host either \
+                 serves /mcp or redirects it"
+            ));
+        }
+    }
+    Ok(hosts)
 }
 
 fn bool_value(s: &str) -> Result<bool> {
@@ -263,11 +323,12 @@ mod tests {
             .unwrap_or_else(|| panic!("fly.toml [env] does not set {key}"))
     }
 
-    /// Rebrand phase 3 (#194): production serves flags.savvagent.com, and
-    /// tokens are audienced for its /mcp, while /mcp still accepts the legacy
-    /// otto-flags.savvagent.com host and the fly.dev name.
+    /// Rebrand phase 3 (#194) and #135: production serves
+    /// flags.savvagent.com, and tokens are audienced for its /mcp. /mcp also
+    /// accepts the fly.dev name; the legacy otto-flags.savvagent.com host only
+    /// redirects (SDK API excepted).
     #[test]
-    fn production_serves_the_savvagent_host_and_keeps_the_legacy_one() {
+    fn production_serves_the_savvagent_host_and_redirects_the_legacy_one() {
         let mut c = Config::for_test();
         c.public_url = fly_env("FLAGS_PUBLIC_URL");
         c.resource_uri = fly_env("FLAGS_RESOURCE_URI");
@@ -276,13 +337,73 @@ mod tests {
         assert_eq!(c.resource_uri, "https://flags.savvagent.com/mcp");
         assert_eq!(
             c.allowed_hosts(),
-            [
-                "flags.savvagent.com",
-                "otto-flags.fly.dev",
-                "otto-flags.savvagent.com"
-            ]
+            ["flags.savvagent.com", "otto-flags.fly.dev"]
+        );
+        // The deployed lists pass the startup validation.
+        assert_eq!(
+            redirect_hosts(
+                &c.public_url,
+                &c.extra_allowed_hosts,
+                split_list(&fly_env("FLAGS_REDIRECT_HOSTS"))
+            )
+            .unwrap(),
+            ["otto-flags.savvagent.com"]
         );
         assert_eq!(fly_env("FLAGS_PLATFORM_URL"), "https://savvagent.com");
+    }
+
+    fn hosts(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn redirect_hosts_take_bare_lowercase_hostnames() {
+        let ok = redirect_hosts(
+            "https://flags.savvagent.com",
+            &hosts(&["otto-flags.fly.dev"]),
+            hosts(&["otto-flags.savvagent.com", "old"]),
+        )
+        .unwrap();
+        assert_eq!(ok, ["otto-flags.savvagent.com", "old"]);
+        for bad in [
+            "https://otto-flags.savvagent.com",
+            "otto-flags.savvagent.com:443",
+            "otto-flags.savvagent.com/",
+            "Otto-Flags.savvagent.com",
+            "*.savvagent.com",
+            "-a.example.com",
+            "a..example.com",
+            "a b",
+            "otto-flags.savvagent.com.",
+        ] {
+            let e = redirect_hosts("https://flags.savvagent.com", &[], hosts(&[bad]))
+                .unwrap_err()
+                .to_string();
+            assert!(e.contains("FLAGS_REDIRECT_HOSTS") && e.contains(bad), "{e}");
+        }
+    }
+
+    #[test]
+    fn a_redirect_host_may_not_also_serve_or_be_the_public_host() {
+        let both = redirect_hosts(
+            "https://flags.savvagent.com",
+            &hosts(&["otto-flags.fly.dev", "otto-flags.savvagent.com"]),
+            hosts(&["otto-flags.savvagent.com"]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            both.contains("both FLAGS_REDIRECT_HOSTS and FLAGS_ALLOWED_HOSTS"),
+            "{both}"
+        );
+        let public = redirect_hosts(
+            "https://flags.savvagent.com",
+            &[],
+            hosts(&["flags.savvagent.com"]),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(public.contains("public host"), "{public}");
     }
 
     #[test]
