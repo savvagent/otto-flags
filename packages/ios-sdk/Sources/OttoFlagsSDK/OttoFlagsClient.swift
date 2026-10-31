@@ -26,7 +26,7 @@ public struct OttoFlagsConfig {
     let enableRealtime: Bool
 
     public init(
-        apiUrl: String = "https://otto-flags.savvagent.com",
+        apiUrl: String = "https://flags.savvagent.com",
         sdkKey: String,
         environment: String = "production",
         pollingInterval: TimeInterval = 60,

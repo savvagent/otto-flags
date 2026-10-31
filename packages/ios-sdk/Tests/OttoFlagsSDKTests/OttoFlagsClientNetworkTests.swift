@@ -230,7 +230,7 @@ final class OttoFlagsClientNetworkTests: XCTestCase {
     func testConfigurationDefaults() {
         let config = OttoFlagsConfig(sdkKey: "test-key")
 
-        XCTAssertEqual(config.apiUrl, "https://otto-flags.savvagent.com")
+        XCTAssertEqual(config.apiUrl, "https://flags.savvagent.com")
         XCTAssertEqual(config.environment, "production")
         XCTAssertEqual(config.pollingInterval, 60)
         XCTAssertTrue(config.enableWebSocket)

@@ -11,7 +11,7 @@ async function main() {
   // Initialize the client
   const client = new FlagClient({
     apiKey: 'sdk_dev_example_key',
-    baseUrl: 'https://otto-flags.savvagent.com',
+    baseUrl: 'https://flags.savvagent.com',
     enableRealtime: true,
     enableTelemetry: true,
     defaults: {

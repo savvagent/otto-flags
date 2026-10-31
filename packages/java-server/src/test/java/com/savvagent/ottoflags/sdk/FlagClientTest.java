@@ -373,7 +373,7 @@ class FlagClientTest {
     void testConfigDefaults() {
         FlagClientConfig config = FlagClientConfig.builder("sdk_test_key").build();
 
-        assertEquals("https://otto-flags.savvagent.com", config.getBaseUrl());
+        assertEquals("https://flags.savvagent.com", config.getBaseUrl());
         assertEquals("", config.getApplicationId());
         assertTrue(config.isEnableRealtime());
         assertTrue(config.isEnableTelemetry());

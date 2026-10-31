@@ -17,7 +17,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// The production Otto Flags API, used when `OTTO_FLAGS_API_URL` is not set.
-const DEFAULT_API_URL: &str = "https://otto-flags.savvagent.com";
+const DEFAULT_API_URL: &str = "https://flags.savvagent.com";
 const DEFAULT_ENVIRONMENT: &str = "development";
 const DEFAULT_PORT: u16 = 8083;
 
@@ -287,7 +287,7 @@ mod tests {
             settings,
             Settings {
                 sdk_key: "sdk_abc".into(),
-                api_url: "https://otto-flags.savvagent.com".into(),
+                api_url: "https://flags.savvagent.com".into(),
                 environment: "development".into(),
                 port: 8083,
             }

@@ -29,7 +29,7 @@ This is an example Android application demonstrating how to integrate and use th
 2. Update the SDK key in `FeatureFlagsViewModel.kt`:
    ```kotlin
    val config = OttoFlagsConfig(
-       apiUrl = "https://otto-flags.savvagent.com",
+       apiUrl = "https://flags.savvagent.com",
        sdkKey = "your-sdk-key",  // Replace with your SDK key
        environment = "production"
    )

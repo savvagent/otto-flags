@@ -49,7 +49,7 @@ fn build_client() -> Result<FlagClient, Box<dyn std::error::Error>> {
 `FlagClient::new` is the only call that returns an error in practice: a key that starts with
 neither of the two key prefixes fails there, so a misconfigured deploy stops at start-up.
 
-Other `Config` builders, all optional: `with_base_url` (default `https://otto-flags.savvagent.com`,
+Other `Config` builders, all optional: `with_base_url` (default `https://flags.savvagent.com`,
 use `https`), `with_cache_ttl` (default 60 seconds), `with_timeout` (default 5 seconds),
 `with_failure_cooldown` (default 5 seconds), `with_telemetry` (default on), `with_realtime`
 (default on, see below), `with_default` (flag key to the value served when evaluation

@@ -81,7 +81,7 @@ interface FlagClientConfig {
   apiKey: string;              // SDK key (sdk_) or Server key (srv_) from dashboard
 
   // Optional
-  baseUrl?: string;            // Your Otto Flags API URL (default: https://otto-flags.savvagent.com)
+  baseUrl?: string;            // Your Otto Flags API URL (default: https://flags.savvagent.com)
   applicationId?: string;      // Application ID for hierarchical flag lookup
 
   // Caching

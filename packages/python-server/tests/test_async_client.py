@@ -17,7 +17,7 @@ def async_config() -> FlagClientConfig:
     return FlagClientConfig(
         api_key="sdk_test_key_12345",
         application_id="test-app",
-        base_url="https://otto-flags.savvagent.com",
+        base_url="https://flags.savvagent.com",
         enable_realtime=False,
         enable_telemetry=False,
         cache_ttl=60,
@@ -56,7 +56,7 @@ class TestAsyncFlagEvaluation:
     @respx.mock
     async def test_evaluate_enabled_flag(self, async_config: FlagClientConfig) -> None:
         """Test evaluating an enabled flag."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={"enabled": True, "flagId": "flag_123"},
@@ -74,7 +74,7 @@ class TestAsyncFlagEvaluation:
     @respx.mock
     async def test_evaluate_disabled_flag(self, async_config: FlagClientConfig) -> None:
         """Test evaluating a disabled flag."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={"enabled": False, "flagId": "flag_123"},
@@ -91,7 +91,7 @@ class TestAsyncFlagEvaluation:
     @respx.mock
     async def test_is_enabled_convenience(self, async_config: FlagClientConfig) -> None:
         """Test is_enabled convenience method."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(200, json={"enabled": True})
         )
 
@@ -102,7 +102,7 @@ class TestAsyncFlagEvaluation:
     @respx.mock
     async def test_evaluate_with_context(self, async_config: FlagClientConfig) -> None:
         """Test evaluation with context."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(200, json={"enabled": True})
         )
 
@@ -116,7 +116,7 @@ class TestAsyncFlagEvaluation:
     @respx.mock
     async def test_evaluate_caching(self, async_config: FlagClientConfig) -> None:
         """Test that evaluations are cached."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(200, json={"enabled": True})
         )
 
@@ -136,7 +136,7 @@ class TestAsyncFlagEvaluation:
         self, async_config: FlagClientConfig
     ) -> None:
         """Test that API errors return default value."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(500, json={"error": "Internal error"})
         )
 
@@ -154,7 +154,7 @@ class TestAsyncDynamicConfiguration:
     @respx.mock
     async def test_get_config_enabled(self, async_config: FlagClientConfig) -> None:
         """Test getting configuration for enabled flag."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/config-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/config-flag/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -175,7 +175,7 @@ class TestAsyncDynamicConfiguration:
         self, async_config: FlagClientConfig
     ) -> None:
         """Test that disabled flag returns default configuration."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/config-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/config-flag/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={"enabled": False, "configuration": {"theme": "dark"}},
@@ -195,7 +195,7 @@ class TestAsyncVariations:
     @respx.mock
     async def test_get_variation(self, async_config: FlagClientConfig) -> None:
         """Test getting variation details."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/experiment/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/experiment/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -221,7 +221,7 @@ class TestAsyncOverrides:
     @respx.mock
     async def test_config_override(self, async_config: FlagClientConfig) -> None:
         """Test setting a configuration override."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={"enabled": True, "configuration": {"original": True}},
@@ -249,7 +249,7 @@ class TestAsyncOverrides:
     @respx.mock
     async def test_variation_override(self, async_config: FlagClientConfig) -> None:
         """Test setting a variation override."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/experiment/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/experiment/evaluate").mock(
             return_value=httpx.Response(
                 200,
                 json={"enabled": True, "variation": "control"},
@@ -271,7 +271,7 @@ class TestAsyncBulkOperations:
     @respx.mock
     async def test_get_all_flags(self, async_config: FlagClientConfig) -> None:
         """Test getting all flags."""
-        respx.get("https://otto-flags.savvagent.com/api/sdk/flags").mock(
+        respx.get("https://flags.savvagent.com/api/sdk/flags").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -300,7 +300,7 @@ class TestAsyncCacheManagement:
     @respx.mock
     async def test_invalidate_cache(self, async_config: FlagClientConfig) -> None:
         """Test cache invalidation."""
-        respx.post("https://otto-flags.savvagent.com/api/flags/test-flag/evaluate").mock(
+        respx.post("https://flags.savvagent.com/api/flags/test-flag/evaluate").mock(
             return_value=httpx.Response(200, json={"enabled": True})
         )
 
@@ -344,7 +344,7 @@ class TestAsyncInvalidFlagKey:
         route = respx.route()
         config = FlagClientConfig(
             api_key="sdk_test_key_12345",
-            base_url="https://otto-flags.savvagent.com",
+            base_url="https://flags.savvagent.com",
             enable_realtime=False,
             enable_telemetry=False,
             defaults={key: True},
@@ -386,7 +386,7 @@ class TestAsyncInvalidFlagKey:
     @respx.mock
     async def test_valid_key_hits_expected_path(self, async_config: FlagClientConfig) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
+            "https://flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         async with AsyncFlagClient(async_config) as client:
             result = await client.evaluate("new-checkout.v2_b")
@@ -398,7 +398,7 @@ class TestAsyncInvalidFlagKey:
     async def test_128_character_key_is_valid(self, async_config: FlagClientConfig) -> None:
         key = "a" * 128
         route = respx.post(
-            f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
+            f"https://flags.savvagent.com/api/flags/{key}/evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         async with AsyncFlagClient(async_config) as client:
             result = await client.evaluate(key)
@@ -409,7 +409,7 @@ class TestAsyncInvalidFlagKey:
     @respx.mock
     async def test_triple_dot_key_is_valid(self, async_config: FlagClientConfig) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/.../evaluate"
+            "https://flags.savvagent.com/api/flags/.../evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         async with AsyncFlagClient(async_config) as client:
             result = await client.evaluate("...")
@@ -428,7 +428,7 @@ class TestAsyncEvaluateContract:
         self, async_config: FlagClientConfig, enabled: bool
     ) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+            "https://flags.savvagent.com/api/flags/checkout/evaluate"
         ).mock(return_value=httpx.Response(200, json=server_body("checkout", enabled)))
         async_config.defaults = {"checkout": not enabled}
         async with AsyncFlagClient(async_config) as client:
@@ -449,7 +449,7 @@ class TestAsyncEvaluateContract:
         self, async_config: FlagClientConfig, body: object
     ) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+            "https://flags.savvagent.com/api/flags/checkout/evaluate"
         ).mock(return_value=httpx.Response(200, json=body))
         errors: list[Exception] = []
         async_config.defaults = {"checkout": False}
@@ -465,7 +465,7 @@ class TestAsyncEvaluateContract:
         assert route.call_count == 2
 
 
-FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+FLAG_URL = "https://flags.savvagent.com/api/flags/checkout/evaluate"
 
 
 def _answer_by_user(request: httpx.Request) -> httpx.Response:
@@ -503,7 +503,7 @@ class TestAsyncContextCache:
 
     async def test_list_fetch_does_not_seed(self, async_config: FlagClientConfig) -> None:
         with respx.mock(assert_all_called=False) as mock:
-            mock.get("https://otto-flags.savvagent.com/api/sdk/flags").mock(
+            mock.get("https://flags.savvagent.com/api/sdk/flags").mock(
                 return_value=httpx.Response(
                     200,
                     json={
@@ -528,7 +528,7 @@ class TestAsyncContextCache:
         assert result.reason == "evaluated"
 
 
-FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+FLAG_URL = "https://flags.savvagent.com/api/flags/checkout/evaluate"
 
 
 class TestResultMetadata:

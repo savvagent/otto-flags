@@ -120,7 +120,7 @@ class TestFlagEvaluation:
     ) -> None:
         """Test that API errors return default value."""
         mock_api.post(
-            "https://otto-flags.savvagent.com/api/flags/test-flag/evaluate"
+            "https://flags.savvagent.com/api/flags/test-flag/evaluate"
         ).mock(return_value=httpx.Response(500, json={"error": "Internal error"}))
 
         result = client.evaluate("test-flag")
@@ -139,7 +139,7 @@ class TestFlagEvaluation:
 
         with respx.mock:
             respx.post(
-                "https://otto-flags.savvagent.com/api/flags/my-flag/evaluate"
+                "https://flags.savvagent.com/api/flags/my-flag/evaluate"
             ).mock(return_value=httpx.Response(500))
 
             with FlagClient(config) as client:
@@ -383,7 +383,7 @@ class TestInvalidFlagKey:
         route = respx.route()
         config = FlagClientConfig(
             api_key="sdk_test_key_12345",
-            base_url="https://otto-flags.savvagent.com",
+            base_url="https://flags.savvagent.com",
             enable_realtime=False,
             enable_telemetry=False,
             defaults={key: True},
@@ -423,7 +423,7 @@ class TestInvalidFlagKey:
     @respx.mock
     def test_valid_key_hits_expected_path(self, client_config: FlagClientConfig) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
+            "https://flags.savvagent.com/api/flags/new-checkout.v2_b/evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate("new-checkout.v2_b")
@@ -434,7 +434,7 @@ class TestInvalidFlagKey:
     def test_128_character_key_is_valid(self, client_config: FlagClientConfig) -> None:
         key = "a" * 128
         route = respx.post(
-            f"https://otto-flags.savvagent.com/api/flags/{key}/evaluate"
+            f"https://flags.savvagent.com/api/flags/{key}/evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate(key)
@@ -444,7 +444,7 @@ class TestInvalidFlagKey:
     @respx.mock
     def test_triple_dot_key_is_valid(self, client_config: FlagClientConfig) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/.../evaluate"
+            "https://flags.savvagent.com/api/flags/.../evaluate"
         ).mock(return_value=httpx.Response(200, json={"enabled": True}))
         with FlagClient(client_config) as client:
             result = client.evaluate("...")
@@ -462,7 +462,7 @@ class TestEvaluateContract:
         self, client_config: FlagClientConfig, enabled: bool
     ) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+            "https://flags.savvagent.com/api/flags/checkout/evaluate"
         ).mock(return_value=httpx.Response(200, json=server_body("checkout", enabled)))
         client_config.defaults = {"checkout": not enabled}
         with FlagClient(client_config) as client:
@@ -482,7 +482,7 @@ class TestEvaluateContract:
         self, client_config: FlagClientConfig, body: object
     ) -> None:
         route = respx.post(
-            "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+            "https://flags.savvagent.com/api/flags/checkout/evaluate"
         ).mock(return_value=httpx.Response(200, json=body))
         errors: list[Exception] = []
         client_config.defaults = {"checkout": False}
@@ -498,7 +498,7 @@ class TestEvaluateContract:
         assert route.call_count == 2
 
 
-FLAG_URL = "https://otto-flags.savvagent.com/api/flags/checkout/evaluate"
+FLAG_URL = "https://flags.savvagent.com/api/flags/checkout/evaluate"
 
 
 def _answer_by_user(request: httpx.Request) -> httpx.Response:

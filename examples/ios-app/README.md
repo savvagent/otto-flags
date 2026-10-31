@@ -27,7 +27,7 @@ This is an example iOS application demonstrating how to integrate and use the Ot
 2. Update the SDK key in `OttoFlagsExampleApp.swift`:
    ```swift
    let config = OttoFlagsConfig(
-       apiUrl: "https://otto-flags.savvagent.com",
+       apiUrl: "https://flags.savvagent.com",
        sdkKey: "your-sdk-key",  // Replace with your SDK key
        environment: "production"
    )

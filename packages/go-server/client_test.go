@@ -59,7 +59,7 @@ func TestConfig_Defaults(t *testing.T) {
 	}
 	defer client.Close()
 
-	if client.config.BaseURL != "https://otto-flags.savvagent.com" {
+	if client.config.BaseURL != "https://flags.savvagent.com" {
 		t.Errorf("BaseURL = %q, want the default", client.config.BaseURL)
 	}
 	if client.config.CacheTTL != 60*time.Second {

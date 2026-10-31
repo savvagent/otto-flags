@@ -56,7 +56,7 @@ import OttoFlagsSDK
 
 // Configure the SDK
 let config = OttoFlagsConfig(
-    apiUrl: "https://otto-flags.savvagent.com",
+    apiUrl: "https://flags.savvagent.com",
     sdkKey: "your-sdk-key",
     environment: "production"
 )
@@ -198,7 +198,7 @@ class ViewController: UIViewController {
 
 ```swift
 let config = OttoFlagsConfig(
-    apiUrl: "https://otto-flags.savvagent.com",
+    apiUrl: "https://flags.savvagent.com",
     sdkKey: "your-sdk-key",
     environment: "production",
     pollingInterval: 60,        // Poll every 60 seconds

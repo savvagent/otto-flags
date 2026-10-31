@@ -42,7 +42,7 @@ func newClient(config Config, streamOpts realtimeOptions) (*FlagClient, error) {
 
 	// Apply defaults
 	if config.BaseURL == "" {
-		config.BaseURL = "https://otto-flags.savvagent.com"
+		config.BaseURL = "https://flags.savvagent.com"
 	}
 	if config.CacheTTL == 0 {
 		config.CacheTTL = 60 * time.Second

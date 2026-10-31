@@ -70,7 +70,7 @@ process.on("SIGTERM", () => client.close());
 
 The constructor throws if the key is missing or malformed, so a misconfigured deploy fails at
 start-up, not per request. Other `FlagClientConfig` fields, all optional: `baseUrl` (default
-`https://otto-flags.savvagent.com`), `environment` (default `"production"`), `enableRealtime`
+`https://flags.savvagent.com`), `environment` (default `"production"`), `enableRealtime`
 (default `true`), `cacheTtl` (milliseconds, default 60000), `enableTelemetry` (default `true`),
 `timeout` (request timeout in milliseconds, default 5000), `defaults` (flag key to the value served
 when evaluation fails) and `onError` (receives SDK errors).
