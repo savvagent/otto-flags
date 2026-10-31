@@ -13,6 +13,9 @@
 //!   everything else                   JSON 404
 //! ```
 //!
+//! A host in `FLAGS_REDIRECT_HOSTS` (the pre-rebrand name) answers every path
+//! except `/api/…` with a 308 to the public origin: see [`redirect`].
+//!
 //! The rollback checker is started separately by [`spawn_checker`] so `main`
 //! can stop it on shutdown; its [`Hints`] handle is passed to [`router`].
 //!
@@ -24,6 +27,7 @@ pub mod config;
 pub mod health;
 pub mod install_page;
 mod llms;
+pub mod redirect;
 
 use std::sync::Arc;
 
@@ -97,7 +101,7 @@ pub fn router_with_meter_health(
         &config.resource_uri,
         &config.platform_url,
     ));
-    health::router(db, meters)
+    let app = health::router(db, meters)
         .merge(mcp)
         .merge(api)
         .merge(llms::router())
@@ -110,10 +114,18 @@ pub fn router_with_meter_health(
                 root(page.clone(), method, headers, uri)
             }),
         )
-        .fallback(not_found)
-        // Request spans without headers: including them would log every
-        // bearer token and SDK key in clear.
-        .layer(TraceLayer::new_for_http())
+        .fallback(not_found);
+    // Inside the trace layer, so redirects are traced like any response.
+    let app = match redirect::Redirects::new(&config.redirect_hosts, &config.public_url) {
+        Some(redirects) => app.layer(axum::middleware::from_fn_with_state(
+            redirects,
+            redirect::layer,
+        )),
+        None => app,
+    };
+    // Request spans without headers: including them would log every
+    // bearer token and SDK key in clear.
+    app.layer(TraceLayer::new_for_http())
 }
 
 /// Start the rollback checker. Returns the [`Hints`] for the SDK API and the

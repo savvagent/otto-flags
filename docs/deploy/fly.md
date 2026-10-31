@@ -16,11 +16,11 @@ platform's webhooks.
         └─► POST /platform/webhooks (org.deleted, member.removed, team.deleted) ─────►
 ```
 
-`https://otto-flags.savvagent.com` is the legacy host, served by the same app until the
-platform turns old hosts into redirects (savvagent/otto-platform#135): `/mcp` accepts it as a
-Host because `FLAGS_ALLOWED_HOSTS` lists it, and `/api/...` does not check Host at all, so SDKs
-built with the old default base URL keep working. Both hosts (and `otto-flags.fly.dev`) need a
-Fly certificate and DNS for as long as they are served.
+`https://otto-flags.savvagent.com` is the legacy host, in `FLAGS_REDIRECT_HOSTS`: every path
+except `/api/...` answers a 308 to `https://flags.savvagent.com` (see "#135: old host
+redirects", below). `/api/...` does not check Host, so SDKs built with the old default base URL
+keep working there. Both hosts (and `otto-flags.fly.dev`) need a Fly certificate and DNS for
+as long as they are served.
 
 The SDK path (`/api/...`) never calls the platform: an SDK key resolves against this
 database alone, so a platform outage does not affect flag evaluation.
@@ -173,6 +173,42 @@ is retried with backoff (about a day of attempts), so nothing is lost. Usage que
 This service has no web console and no OAuth client of its own, so there is no redirect URI to
 register. `FLAGS_*` variable names, the Fly app name `otto-flags`, the meter
 `otto-flags/evaluations` and the service slug `otto-flags` do not change.
+
+## #135: old host redirects (except SDK API)
+
+Part of savvagent/otto-platform#128. `otto-flags.savvagent.com` is in `FLAGS_REDIRECT_HOSTS`
+(and no longer in `FLAGS_ALLOWED_HOSTS`): any request on it for a path outside `/api/` gets
+`308 Permanent Redirect` to `https://flags.savvagent.com` + the same path and query, empty body.
+That covers `/mcp`, the install page, `/.well-known/...`, `/llms.txt`, the health routes and
+`/platform/webhooks` (the platform's webhook already points at the new host, step 2 above).
+`/api/...` is the SDK API (`/api/flags/{key}/evaluate`, `/api/evaluate/{key}`, `/api/sdk/flags`,
+`/api/sdk/enterprise-flags`, `/api/flags/stream`, `/api/telemetry/...`): older SDK builds default
+to the old host and do not follow redirects, so it is served there exactly as on the new host.
+The list is the `SDK_PREFIX` in `crates/flags-server/src/redirect.rs`. The server refuses to
+start when a host is in both variables, is the public host, or is not a bare lowercase hostname.
+
+The old host's Fly certificate and DNS stay, for as long as SDKs call it. After the deploy is
+live, drop the platform alias `https://otto-flags.savvagent.com/mcp` (human-run, platform side):
+
+```bash
+fly ssh console -a otto-platform -C 'otto-platform-server resource drop-alias \
+  https://flags.savvagent.com/mcp https://otto-flags.savvagent.com/mcp'
+```
+
+(check the exact arguments with `resource drop-alias --help` and `resource show` first). Verify
+with curl, after CI deploys the merge:
+
+```bash
+# Redirect: 308, Location on flags.savvagent.com, path and query kept.
+curl -si 'https://otto-flags.savvagent.com/mcp?x=1' | sed -n '1p;/^[Ll]ocation/p'
+curl -si https://otto-flags.savvagent.com/.well-known/oauth-protected-resource | sed -n '1p;/^[Ll]ocation/p'
+curl -si -H 'Accept: text/html' https://otto-flags.savvagent.com/ | sed -n '1p;/^[Ll]ocation/p'
+# SDK API: served, not redirected (401 invalid_key without a key; 200 with one).
+curl -si https://otto-flags.savvagent.com/api/sdk/flags | sed -n '1p;/^[Ll]ocation/p'
+curl -s -H 'Authorization: Bearer sdk_…' https://otto-flags.savvagent.com/api/sdk/flags | head -c 200
+# The new host is unaffected.
+curl -s https://flags.savvagent.com/readyz
+```
 
 ## Deploys
 

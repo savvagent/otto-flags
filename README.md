@@ -23,7 +23,8 @@ checker would judge now), and `rollback_events` (what it did).
 
 **Running apps** evaluate flags through the SDKs below, pointed at
 `https://flags.savvagent.com` with the app's key (the SDKs default to `flags.savvagent.com`; the
-legacy `https://otto-flags.savvagent.com` keeps serving older SDK builds): the public client key (`sdk_…`)
+legacy `https://otto-flags.savvagent.com` keeps serving older SDK builds' `/api/` calls and
+redirects everything else to the new host): the public client key (`sdk_…`)
 in browsers and mobile apps, the secret server key (`srv_…`) on servers. An agent
 creates the app and its keys with `create_app`. The REST contract is
 [docs/SDK-DEVELOPER-GUIDE.md](./docs/SDK-DEVELOPER-GUIDE.md).

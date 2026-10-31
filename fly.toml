@@ -34,12 +34,15 @@ kill_timeout = "15s"
   FLAGS_RESOURCE_URI = "https://flags.savvagent.com/mcp"
   FLAGS_PLATFORM_URL = "https://savvagent.com"
   # Extra Host headers /mcp accepts besides the public host. The fly.dev name
-  # still answers (health checks, debugging). otto-flags.savvagent.com is the
-  # legacy host: MCP clients configured before the rebrand still use it, until
-  # the platform turns old hosts into redirects (savvagent/otto-platform#135).
-  # /api (the SDKs) does not check Host, so SDKs on the old host keep working
-  # whatever this says.
-  FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev,otto-flags.savvagent.com"
+  # still answers (health checks, debugging). The legacy otto-flags.savvagent.com
+  # is no longer listed: it is a redirect host (below).
+  FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev"
+  # Hosts that only redirect (savvagent/otto-platform#135): every path but /api/
+  # answers 308 to FLAGS_PUBLIC_URL with the path and query kept. /api/ (the
+  # SDKs) is served as usual, because SDK builds made before the rebrand default
+  # to this host and do not follow redirects. Must not overlap
+  # FLAGS_ALLOWED_HOSTS or the public host: the server refuses to start.
+  FLAGS_REDIRECT_HOSTS = "otto-flags.savvagent.com"
   # Small: otto-db is a shared 512 MB instance.
   FLAGS_DB_MAX_CONNECTIONS = "5"
   FLAGS_LOG_FORMAT = "json"
