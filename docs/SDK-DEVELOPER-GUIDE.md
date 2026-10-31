@@ -297,7 +297,7 @@ poll of the list catches up).
 // Using @microsoft/fetch-event-source (recommended)
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 
-await fetchEventSource('https://otto-flags.savvagent.com/api/flags/stream', {
+await fetchEventSource('https://flags.savvagent.com/api/flags/stream', {
   method: 'GET',
   headers: {
     'Authorization': `Bearer ${sdkKey}`,

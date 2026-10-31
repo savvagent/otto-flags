@@ -60,7 +60,7 @@ fn respond(e: &Error) -> ErrorData {
     let (rpc, message) = if e.is_internal() {
         let message = match e {
             Error::Platform(_) => {
-                "the otto platform could not be reached to check this; nothing was changed. \
+                "the Savvagent platform could not be reached to check this; nothing was changed. \
                  Retry shortly."
             }
             _ => "the server could not complete this call; nothing was changed. Retry shortly.",
@@ -109,7 +109,7 @@ pub fn from_platform(e: &otto_resource::Error) -> ErrorData {
     );
     ErrorData::new(
         ErrorCode::INTERNAL_ERROR,
-        "the otto platform could not be reached to check this; nothing was changed. Retry shortly.",
+        "the Savvagent platform could not be reached to check this; nothing was changed. Retry shortly.",
         Some(serde_json::json!({ "code": "platform_unavailable", "retriable": e.is_retriable() })),
     )
 }

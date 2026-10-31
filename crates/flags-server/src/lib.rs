@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(h["referrer-policy"], "no-referrer");
         assert_eq!(h["content-security-policy"], install_page::CSP);
         let html = String::from_utf8(body).unwrap();
-        assert!(html.contains("<h1>Use Otto Flags from your AI assistant</h1>"));
+        assert!(html.contains("<h1>Use Savvagent Flags from your AI assistant</h1>"));
         assert!(html.contains(">https://flags.example.com/mcp</code>"));
         assert!(html.contains("href=\"https://platform.example.com/products/flags#connect\""));
     }

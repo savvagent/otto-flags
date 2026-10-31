@@ -78,6 +78,8 @@ struct Platform {
     /// When set, a metered event is rejected as `unknown_meter` unless its
     /// meter is in `declared`, as the real platform does.
     enforce_meters: bool,
+    /// The `aud` introspection reports; [`RESOURCE`] when unset.
+    aud: Option<String>,
 }
 
 /// How the mock answers one meter declaration.
@@ -103,7 +105,7 @@ async fn introspect(
             org_id: Some(*org),
             role: Some(*role),
             scope: Some(scopes.join(" ")),
-            aud: Some(RESOURCE.into()),
+            aud: Some(p.aud.clone().unwrap_or_else(|| RESOURCE.into())),
             exp: Some(chrono::Utc::now().timestamp() + 3600),
             client_id: Some("test-client".into()),
             token_type: Some("Bearer".into()),
@@ -1646,6 +1648,141 @@ async fn sav_and_otto_tokens_are_both_accepted(pool: PgPool) {
             .unwrap_or_else(|e| panic!("{prefix}: {e}"));
         assert_eq!(who["role"], "member", "{prefix}: {who}");
     }
+}
+
+/// Rebrand phase 3 (#194, savvagent/otto-platform#128): configured as
+/// `fly.toml` configures production, the service names itself Savvagent Flags
+/// at https://flags.savvagent.com/mcp, and still serves the legacy
+/// otto-flags.savvagent.com host to MCP clients and SDKs set up before it.
+#[sqlx::test(migrator = "flags_core::MIGRATOR")]
+async fn the_savvagent_host_is_canonical_and_the_legacy_host_still_serves(pool: PgPool) {
+    const NEW: &str = "https://flags.savvagent.com/mcp";
+    let (url, platform) = start_platform().await;
+    platform.lock().unwrap().aud = Some(NEW.into());
+    let mut config = Config::for_test();
+    config.platform_url = url;
+    config.public_url = "https://flags.savvagent.com".into();
+    config.resource_uri = NEW.into();
+    config.extra_allowed_hosts = vec![
+        "otto-flags.fly.dev".into(),
+        "otto-flags.savvagent.com".into(),
+    ];
+    let platform_client = platform_client(&config).unwrap();
+    let app = router(
+        Db::from_pool(pool),
+        platform_client,
+        Listener::detached(),
+        Hints::detached(),
+        Arc::new(EvalCounter::default()),
+        &config,
+    );
+
+    // Protected-resource metadata names the new resource and its name.
+    let (status, meta) = send(
+        &app,
+        Request::get("/.well-known/oauth-protected-resource")
+            .header("host", "flags.savvagent.com")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{meta}");
+    assert_eq!(meta["resource"], NEW);
+    assert_eq!(meta["resource_name"], "Savvagent Flags");
+
+    let admin = token(
+        &platform,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Role::Admin,
+        &["flags:read", "flags:write", "apps:admin"],
+    );
+    let mcp = |host: &'static str, body: Value| {
+        Request::post("/mcp")
+            .header("host", host)
+            .header("authorization", format!("Bearer {admin}"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+
+    // The MCP server introduces itself as savvagent-flags.
+    let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "clientInfo": {"name": "e2e", "version": "0"}}});
+    let (status, v) = send(&app, mcp("flags.savvagent.com", init)).await;
+    assert!(status.is_success(), "HTTP {status} {v}");
+    assert_eq!(v["result"]["serverInfo"]["name"], "savvagent-flags", "{v}");
+    assert!(v["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .starts_with("Savvagent Flags manages feature flags."));
+
+    // whoami answers on the new host, the legacy host, and the fly.dev name.
+    let whoami = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {"name": "whoami", "arguments": {}}});
+    for host in [
+        "flags.savvagent.com",
+        "otto-flags.savvagent.com",
+        "otto-flags.fly.dev",
+    ] {
+        let (status, v) = send(&app, mcp(host, whoami.clone())).await;
+        assert!(status.is_success(), "{host}: HTTP {status} {v}");
+        assert_eq!(
+            v["result"]["structuredContent"]["role"], "admin",
+            "{host}: {v}"
+        );
+    }
+    // Any other host is still refused.
+    let (status, _) = send(&app, mcp("evil.example.com", whoami.clone())).await;
+    assert!(
+        !status.is_success(),
+        "an unlisted host was served: {status}"
+    );
+
+    // An SDK built against the legacy host keeps evaluating there.
+    let created = tool_at(
+        &app,
+        "flags.savvagent.com",
+        &admin,
+        "create_app",
+        json!({"name": "web"}),
+    )
+    .await;
+    let client_key = created["keys"]["clientKey"].as_str().unwrap();
+    for host in ["otto-flags.savvagent.com", "flags.savvagent.com"] {
+        let (status, v) = send(
+            &app,
+            Request::get("/api/sdk/flags")
+                .header("host", host)
+                .header("authorization", format!("Bearer {client_key}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{host}: {v}");
+    }
+}
+
+/// [`tool`] on a given `Host`, for a call that must succeed.
+async fn tool_at(app: &Router, host: &str, token: &str, name: &str, args: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                      "params": {"name": name, "arguments": args}});
+    let (status, v) = send(
+        app,
+        Request::post("/mcp")
+            .header("host", host)
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .body(Body::from(body.to_string()))
+            .unwrap(),
+    )
+    .await;
+    assert!(status.is_success(), "{name}: HTTP {status} {v}");
+    assert!(v["result"]["isError"] != true, "{name}: {v}");
+    v["result"]["structuredContent"].clone()
 }
 
 /// Connector clients (Claude, ChatGPT) read these hints off `tools/list` to
