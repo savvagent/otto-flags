@@ -20,8 +20,8 @@
 //!
 //! The check reads catalogs only, in a transaction it rolls back.
 
-use otto_tenant::ids::OrgId;
-use otto_tenant::Db;
+use savvagent_tenant::ids::OrgId;
+use savvagent_tenant::Db;
 use sqlx::PgConnection;
 
 use crate::error::Result;

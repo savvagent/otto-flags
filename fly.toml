@@ -8,7 +8,7 @@
 # Database: `otto_flags` on `otto-db`, the unmanaged Fly Postgres shared with
 # otto-platform and otto-factory (shared for cost; split before real
 # customers, since each app's attach role is a superuser on the whole
-# instance). Isolation rests on `otto_tenant::Db::begin` issuing
+# instance). Isolation rests on `savvagent_tenant::Db::begin` issuing
 # `SET LOCAL ROLE otto_app`; flags-server proves that at boot.
 #
 # Secrets (`fly secrets set`, never here):

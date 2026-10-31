@@ -20,12 +20,12 @@
 //! The policies bind only a role row-level security applies to, and the pool
 //! may connect as one it does not (production's attach role is a superuser).
 //! So [`begin`] drops into the tenant role for the transaction
-//! (`crate::unpinned::begin_as_tenant_role`), as `otto_tenant::Db::begin` does
+//! (`crate::unpinned::begin_as_tenant_role`), as `savvagent_tenant::Db::begin` does
 //! for pinned transactions, and refuses to run
 //! as a role row-level security does not apply to (#73): the unpinned policies
 //! are then what let maintenance code see across orgs.
 
-use otto_tenant::Db;
+use savvagent_tenant::Db;
 use sqlx::{Postgres, Transaction};
 
 /// Open an unpinned transaction on `db`'s pool, as the tenant role

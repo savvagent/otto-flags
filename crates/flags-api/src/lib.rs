@@ -36,7 +36,7 @@ use flags_core::metering::EvalCounter;
 use flags_core::notify::Listener;
 use flags_core::rollback::Hints;
 use http::{header, HeaderName, Method};
-use otto_tenant::Db;
+use savvagent_tenant::Db;
 use tower_http::cors::{Any, CorsLayer};
 
 pub use error::ApiError;

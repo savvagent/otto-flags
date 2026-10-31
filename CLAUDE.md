@@ -116,8 +116,8 @@ has reviewed or commented on any PR here (#3, #6, #8, #10).
 - Migrations (agent): apply at boot under an advisory lock; confirm in the boot logs. A failure rolls back that migration only (earlier ones in the same boot stay applied) and crash-loops the new machine; check `fly status` as under Ship > verify. The previous release boots against whatever newer migrations did apply: `MIGRATOR` ignores unknown versions (`crates/flags-core/src/migrate.rs`). Recovery, including re-running a deploy (Rob's call), is in `docs/deploy/fly.md` (When a migration fails).
 - New non-secret config key (agent, in the PR): `fly.toml` `[env]`, `.env.example`, and `crates/flags-server/src/config.rs`.
 - New secret (human: Rob, before merge): `fly secrets set -a otto-flags --stage NAME=…`; the PR updates `.env.example` and the secrets table in `docs/deploy/fly.md`.
-- New scope (human: Rob, before merge): the PR updates `flags_core::scopes::KNOWN`/`DEFAULT`; Rob re-runs the platform `otto-platform-server resource register …` from `docs/deploy/fly.md`.
-- otto-platform pin (agent, own PR): `otto-tenant` and `otto-resource` move to the same rev together.
+- New scope (human: Rob, before merge): the PR updates `flags_core::scopes::KNOWN`/`DEFAULT`; Rob re-runs the platform `savvagent-platform-server resource register …` from `docs/deploy/fly.md`.
+- otto-platform pin (agent, own PR): `savvagent-tenant` and `savvagent-resource` move to the same rev together.
 - npm publish (human: Rob): not automated; see Ship > release.
 
 ### Human-only
@@ -125,7 +125,7 @@ Hand these to Rob with the exact command; never run them:
 - Any production write, DDL, `DROP`, or role change on `otto-db` (the shared Fly Postgres also
   hosting `otto_platform` and `otto_factory`; the attach role is superuser on the whole instance).
   Production diagnostics are SELECT-only.
-- `fly secrets set`, and platform-side `otto-platform-server resource …` commands.
+- `fly secrets set`, and platform-side `savvagent-platform-server resource …` commands.
 - A hand `fly deploy`, or re-running a failed CI `deploy` job (only when Rob asks).
 - Anything that adds recurring cost: a bigger VM, `min_machines_running > 0`, a new volume, app,
   database, or paid service.
@@ -146,7 +146,7 @@ crate module docs.
   `crates/flags-core/src/migrate.rs`). Additive only: new columns nullable or defaulted; no drop,
   rename, retype, or new constraint that its reads or writes would trip.
 - **Tenant isolation is RLS under `otto_app`, proven.** Tenant queries are extension-trait methods
-  on `otto_tenant::Tx` in `flags-core`. Every new tenant table enables RLS, grants to `otto_app`,
+  on `savvagent_tenant::Tx` in `flags-core`. Every new tenant table enables RLS, grants to `otto_app`,
   and is covered by `tenant_isolation_is_enforced_on_every_tenant_table`
   (`crates/flags-core/tests/db.rs`); `flags-server` refuses to start if isolation fails at boot.
 - **Composite `(org_id, id)` foreign keys** between tenant tables (FK checks bypass RLS).
@@ -203,7 +203,7 @@ crate module docs.
 - **Licensing:** `crates/` and repo-level files are AGPL-3.0-or-later (`LICENSE`, `NOTICE`);
   `packages/` and `examples/` are MIT, each package with its own `LICENSE` and
   `"license": "MIT"`. Never copy server code into an MIT package.
-- **otto-platform pin:** `otto-tenant` and `otto-resource` share one git rev in the root
+- **otto-platform pin:** `savvagent-tenant` and `savvagent-resource` share one git rev in the root
   `Cargo.toml`, bumped together and deliberately, never tracking a branch.
 
 ## Notes

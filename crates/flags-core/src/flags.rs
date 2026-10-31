@@ -26,8 +26,8 @@
 //! second transaction) holds the flag. Flag writers still serialize: `FOR NO
 //! KEY UPDATE` conflicts with itself.
 
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::{Db, Tx};
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::{Db, Tx};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::FromRow;

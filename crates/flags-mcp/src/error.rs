@@ -88,11 +88,13 @@ fn respond(e: &Error) -> ErrorData {
 /// On the wire, any tenant failure but a bad argument is an opaque, non-retriable
 /// internal error. The log keeps the original, so a pool timeout is still
 /// logged as one.
-pub fn from_tenant(e: otto_tenant::Error) -> ErrorData {
+pub fn from_tenant(e: savvagent_tenant::Error) -> ErrorData {
     let original = Error::Tenant(e);
     let wire = Error::Tenant(match &original {
-        Error::Tenant(otto_tenant::Error::Invalid(m)) => otto_tenant::Error::Invalid(m.clone()),
-        other => otto_tenant::Error::Config(other.to_string()),
+        Error::Tenant(savvagent_tenant::Error::Invalid(m)) => {
+            savvagent_tenant::Error::Invalid(m.clone())
+        }
+        other => savvagent_tenant::Error::Config(other.to_string()),
     });
     if wire.is_internal() {
         log_server_failure(SURFACED, wire.code(), original.failure_reason(), &original);
@@ -100,7 +102,7 @@ pub fn from_tenant(e: otto_tenant::Error) -> ErrorData {
     respond(&wire)
 }
 
-pub fn from_platform(e: &otto_resource::Error) -> ErrorData {
+pub fn from_platform(e: &savvagent_resource::Error) -> ErrorData {
     log_server_failure(
         "platform lookup failed for an MCP caller",
         "platform_unavailable",
@@ -209,12 +211,12 @@ mod tests {
 
     #[test]
     fn tenant_failures_keep_their_wire_answer() {
-        let invalid = from_tenant(otto_tenant::Error::Invalid("bad org".into()));
+        let invalid = from_tenant(savvagent_tenant::Error::Invalid("bad org".into()));
         assert_eq!(invalid.message, "bad org");
         assert_eq!(invalid.data.expect("data")["code"], "invalid_argument");
         for e in [
-            otto_tenant::Error::OrgNotFound(uuid::Uuid::nil().into()),
-            otto_tenant::Error::Db(sqlx_error()),
+            savvagent_tenant::Error::OrgNotFound(uuid::Uuid::nil().into()),
+            savvagent_tenant::Error::Db(sqlx_error()),
         ] {
             let wire = from_tenant(e);
             assert_eq!(wire.code, ErrorCode::INTERNAL_ERROR);

@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use flags_core::apps::AppsExt;
 use flags_core::keys::{self, KeyLookups, LookupBounds, UnknownKeys, KEY_LOOKUP_WAIT};
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Db;
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::Db;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions, PgSslMode};
 use sqlx::PgPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

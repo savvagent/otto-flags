@@ -98,12 +98,12 @@ fn server_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             .local_addr()
             .expect("addr")
             .port();
-        let cfg = otto_resource::ClientConfig::new(
+        let cfg = savvagent_resource::ClientConfig::new(
             format!("http://127.0.0.1:{port}"),
             "https://flags.test/mcp",
             "secret",
         );
-        let client = otto_resource::PlatformClient::new(cfg).expect("client");
+        let client = savvagent_resource::PlatformClient::new(cfg).expect("client");
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -142,7 +142,7 @@ fn server_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             "MARKER_CORE_PLATFORM",
             r#"code="platform_unavailable" reason="http_status" status=503"#,
             Box::new(|| {
-                from_core(&Error::Platform(otto_resource::Error::Status {
+                from_core(&Error::Platform(savvagent_resource::Error::Status {
                     status: 503,
                     body: "MARKER_CORE_PLATFORM".into(),
                 }));
@@ -152,7 +152,8 @@ fn server_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             "MARKER_PLATFORM",
             r#"code="platform_unavailable" reason="decode""#,
             Box::new(|| {
-                let wire = from_platform(&otto_resource::Error::Decode("MARKER_PLATFORM".into()));
+                let wire =
+                    from_platform(&savvagent_resource::Error::Decode("MARKER_PLATFORM".into()));
                 assert!(!wire.message.contains("MARKER"), "{}", wire.message);
                 assert_eq!(
                     wire.data.expect("data")["code"],
@@ -167,7 +168,7 @@ fn server_failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             "MARKER_TENANT",
             r#"code="internal_error" reason="protocol""#,
             Box::new(|| {
-                let wire = from_tenant(otto_tenant::Error::Db(sqlx::Error::Protocol(
+                let wire = from_tenant(savvagent_tenant::Error::Db(sqlx::Error::Protocol(
                     "MARKER_TENANT".into(),
                 )));
                 let data = wire.data.expect("data");

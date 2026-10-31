@@ -13,7 +13,7 @@ use flags_core::usage::{DeclarationHealth, Meter, ShipperConfig};
 use flags_server::{
     platform_client, router_with_meter_health, spawn_checker, watch_checker, Config, LogFormat,
 };
-use otto_tenant::Db;
+use savvagent_tenant::Db;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -288,12 +288,12 @@ async fn sweep_loop(db: Db, mut shutdown: tokio::sync::watch::Receiver<bool>) {
 
 /// Learn at startup whether the platform accepts our credential. Non-fatal:
 /// a platform outage must not stop a restart.
-async fn check_platform(platform: &otto_resource::PlatformClient, config: &Config) {
+async fn check_platform(platform: &savvagent_resource::PlatformClient, config: &Config) {
     match platform.usage_status(uuid::Uuid::nil()).await {
-        Ok(_) | Err(otto_resource::Error::NotFound) => {
+        Ok(_) | Err(savvagent_resource::Error::NotFound) => {
             tracing::info!(platform = %config.platform_url, "the otto platform accepted this service's credential")
         }
-        Err(otto_resource::Error::Unauthorized) => tracing::error!(
+        Err(savvagent_resource::Error::Unauthorized) => tracing::error!(
             platform = %config.platform_url,
             resource_uri = %config.resource_uri,
             "the otto platform REJECTED this service's credential: no token can be validated and \

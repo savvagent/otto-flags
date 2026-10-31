@@ -17,7 +17,7 @@
 use std::collections::{hash_map::Entry, BTreeMap, HashMap};
 
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
-use otto_tenant::{Db, Tx};
+use savvagent_tenant::{Db, Tx};
 use serde::Serialize;
 
 use crate::error::Result;

@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{post, put};
 use axum::{Json, Router};
-use otto_resource::{
+use savvagent_resource::{
     MeterDeclarationBatch, MeterDeclarationReceipt, RejectedEvent, RejectedMeter, UsageBatch,
     UsageReceipt,
 };
@@ -143,7 +143,7 @@ async fn usage_shipping_keeps_platform_text_out_of_logs_and_the_outbox(pool: PgP
     let mut config = flags_server::Config::for_test();
     config.platform_url = url;
     let platform = flags_server::platform_client(&config).unwrap();
-    let db = otto_tenant::Db::from_pool(pool.clone());
+    let db = savvagent_tenant::Db::from_pool(pool.clone());
 
     let event_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO usage_outbox (org_id, user_id, tool, billable) \

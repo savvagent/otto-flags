@@ -16,7 +16,7 @@ use std::time::Duration;
 use flags_core::entitlements::Entitlement;
 use flags_core::ids::FlagId;
 use flags_core::rollback::{Checker, CheckerConfig};
-use otto_tenant::ids::OrgId;
+use savvagent_tenant::ids::OrgId;
 use sqlx::postgres::PgPoolOptions;
 
 #[derive(Clone, Default)]
@@ -61,7 +61,7 @@ async fn checker_failures_log_reasons_above_debug_and_text_only_at_debug() {
         .connect_lazy("postgres://flags:flags@127.0.0.1:1/none")
         .expect("lazy pool");
     pool.close().await;
-    let db = otto_tenant::Db::from_pool(pool);
+    let db = savvagent_tenant::Db::from_pool(pool);
 
     let capture = Capture::default();
     let subscriber = tracing_subscriber::fmt()

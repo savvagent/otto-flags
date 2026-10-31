@@ -83,8 +83,8 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use chrono::{DateTime, Utc};
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::{Db, Tx};
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::{Db, Tx};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -97,7 +97,7 @@ use crate::flags::{self, ChangeMeta, EnvPatch, FeatureFlag, FlagStatus};
 use crate::ids::{FlagAppId, FlagId};
 use crate::keys::KeyKind;
 use crate::platform_events::begin_live;
-use otto_tenant::audit::Entry;
+use savvagent_tenant::audit::Entry;
 
 /// When a policy trips. The defaults are the column defaults of
 /// `rollback_policies` (a test pins that) and are what `flag_health` judges by.
@@ -1529,7 +1529,7 @@ impl Hints {
     /// ```
     /// use flags_core::ids::FlagId;
     /// use flags_core::rollback::Hints;
-    /// use otto_tenant::ids::OrgId;
+    /// use savvagent_tenant::ids::OrgId;
     /// Hints::detached().send(OrgId::new(), vec![FlagId::new()]); // a no-op
     /// ```
     pub fn send(&self, org: OrgId, flags: Vec<FlagId>) {

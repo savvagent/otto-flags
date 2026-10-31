@@ -10,7 +10,7 @@ use axum::extract::State;
 use axum::Json;
 use flags_core::platform_events::{self, Outcome};
 use http::{HeaderMap, StatusCode};
-use otto_resource::webhook::{self, WebhookError};
+use savvagent_resource::webhook::{self, WebhookError};
 
 use crate::error::{ApiError, ApiResult};
 use crate::AppState;

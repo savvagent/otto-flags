@@ -21,12 +21,12 @@ use flags_core::platform_events::begin_live;
 use flags_core::rollback::{CheckerConfig, Hints, Mode, RollbackExt, Thresholds};
 use flags_server::{platform_client, router, spawn_checker, Config};
 use http::{Request, StatusCode};
-use otto_resource::{
+use savvagent_resource::{
     IntrospectionResponse, MemberInfo, MeterDeclarationBatch, MeterDeclarationReceipt, OrgInfo,
     RejectedEvent, Role, TokenKind, UsageBatch, UsageEvent, UsageReceipt, UserInfo,
 };
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Db;
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::Db;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use tower::ServiceExt;
@@ -171,7 +171,7 @@ async fn declare_meters(
             rejected: b
                 .meters
                 .iter()
-                .map(|m| otto_resource::RejectedMeter {
+                .map(|m| savvagent_resource::RejectedMeter {
                     key: m.key.clone(),
                     reason: "outside this service".into(),
                 })
@@ -285,7 +285,7 @@ async fn start_platform() -> (String, Shared) {
 }
 
 fn token(p: &Shared, org: Uuid, user: Uuid, role: Role, scopes: &[&str]) -> String {
-    token_with_prefix(p, "otto_at_", org, user, role, scopes)
+    token_with_prefix(p, "sav_at_", org, user, role, scopes)
 }
 
 /// A token the mock platform will introspect as active, with the given
@@ -302,7 +302,7 @@ fn token_with_prefix(
         "{prefix}{}",
         "a".repeat(11) + &Uuid::new_v4().simple().to_string()
     );
-    assert!(otto_resource::looks_like_token(&t), "{t}");
+    assert!(savvagent_resource::looks_like_token(&t), "{t}");
     let mut p = p.lock().unwrap();
     p.tokens.insert(
         t.clone(),
@@ -322,7 +322,7 @@ fn token_with_prefix(
 struct Server {
     app: Router,
     db: Db,
-    platform: Arc<otto_resource::PlatformClient>,
+    platform: Arc<savvagent_resource::PlatformClient>,
     evaluations: Arc<EvalCounter>,
 }
 
@@ -881,7 +881,7 @@ async fn platform_webhooks_must_be_signed_and_org_deleted_revokes_everything(poo
         .unwrap();
     let key = created["keys"]["serverKey"].as_str().unwrap().to_string();
 
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         Uuid::new_v4(),
         "org.deleted",
         chrono::Utc::now(),
@@ -890,17 +890,20 @@ async fn platform_webhooks_must_be_signed_and_org_deleted_revokes_everything(poo
     let deliver = |sig: String| {
         Request::post("/platform/webhooks")
             .header("host", "flags.example.com")
-            .header(otto_resource::webhook::SIGNATURE_HEADER, sig)
+            .header(savvagent_resource::webhook::SIGNATURE_HEADER, sig)
             .body(Body::from(body.clone()))
             .unwrap()
     };
-    let forged =
-        otto_resource::webhook::sign("otto_whsec_wrong", chrono::Utc::now().timestamp(), &body);
+    let forged = savvagent_resource::webhook::sign(
+        "otto_whsec_wrong",
+        chrono::Utc::now().timestamp(),
+        &body,
+    );
     let (status, _) = send(&s.app, deliver(forged)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let good =
-        otto_resource::webhook::sign("otto_whsec_test", chrono::Utc::now().timestamp(), &body);
+        savvagent_resource::webhook::sign("otto_whsec_test", chrono::Utc::now().timestamp(), &body);
     let (status, outcome) = send(&s.app, deliver(good)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(outcome["result"], "applied");
@@ -1627,14 +1630,16 @@ async fn rollback_tools_check_their_scopes(pool: PgPool) {
     }
 }
 
-/// The platform will mint `sav_` tokens once the Savvagent rebrand reaches
-/// phase 2 (savvagent/otto-platform#128), so the service must already accept
-/// them alongside the `otto_` ones it sees today.
+/// Both sign-in token prefixes the Savvagent platform mints (`sav_at_`,
+/// `sav_pat_`) are accepted. The `otto_` ones no longer are:
+/// `savvagent_resource::looks_like_token` refuses them since the platform's
+/// 0.18.0 (savvagent/otto-platform#128), which retired every token minted
+/// under them.
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
-async fn sav_and_otto_tokens_are_both_accepted(pool: PgPool) {
+async fn sav_and_sav_pat_tokens_are_both_accepted(pool: PgPool) {
     let (url, platform) = start_platform().await;
     let s = server(pool, &url).await;
-    for prefix in ["sav_at_", "sav_pat_", "otto_at_", "otto_pat_"] {
+    for prefix in ["sav_at_", "sav_pat_"] {
         let t = token_with_prefix(
             &platform,
             prefix,
@@ -2993,7 +2998,7 @@ async fn the_usage_shipper_sets_the_maintenance_marker(pool: PgPool) {
             reason: "x".into(),
         }],
     });
-    let db = otto_tenant::Db::from_pool(as_app);
+    let db = savvagent_tenant::Db::from_pool(as_app);
     let n = flags_core::usage::ship_once(&db, &s.platform, &Default::default())
         .await
         .unwrap();

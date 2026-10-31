@@ -293,7 +293,7 @@ mod tests {
         // `FlagApp` derives Serialize but not Deserialize: build it directly.
         FlagApp {
             id: "11111111-2222-3333-4444-555555555555".parse().unwrap(),
-            org_id: otto_tenant::ids::OrgId::from(
+            org_id: savvagent_tenant::ids::OrgId::from(
                 "66666666-7777-8888-9999-000000000000"
                     .parse::<uuid::Uuid>()
                     .unwrap(),

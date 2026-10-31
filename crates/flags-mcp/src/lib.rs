@@ -9,7 +9,7 @@
 //! ```
 //!
 //! No SQL lives here: every statement is a `flags-core` method on a pinned
-//! [`otto_tenant::Tx`]. Nothing is client-specific: plain Streamable HTTP and
+//! [`savvagent_tenant::Tx`]. Nothing is client-specific: plain Streamable HTTP and
 //! plain JSON Schema, so every MCP-speaking agent gets the same surface.
 
 pub mod auth;
@@ -24,10 +24,10 @@ use axum::routing::{any_service, get};
 use axum::Router;
 use flags_core::entitlements::Entitlements;
 use flags_core::usage::Meter;
-use otto_resource::PlatformClient;
-use otto_tenant::Db;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
+use savvagent_resource::PlatformClient;
+use savvagent_tenant::Db;
 
 /// The `llms.txt` served at `/llms.txt` and kept byte-identical at the repository root.
 pub const LLMS_TXT: &str = include_str!("../content/llms.txt");
