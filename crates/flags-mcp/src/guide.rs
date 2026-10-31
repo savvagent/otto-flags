@@ -220,7 +220,7 @@ fn environments_text(app: Option<&FlagApp>) -> String {
 /// `git merge-base --is-ancestor <new> origin/main`. Bumping means changing this constant and every
 /// literal copy in `AGENTS.md` and both `llms.txt` files; `every_full_sha_is_the_sdk_ref` fails
 /// until all agree.
-pub const SDK_REF: &str = "4c5afb7f5efabfbf32dad22e6252aa6f26e59a66";
+pub const SDK_REF: &str = "7212a8233fc2823f305073e88840a600a2083a66";
 
 /// Renders the guide for `language`, filled from `app` when given, below the integration recipe.
 ///
@@ -1157,7 +1157,7 @@ mod tests {
             "cargo add otto-flags --git https://x/y --rev abc123",
             "pip install \"otto-flags @ git+https://x/y@main\"",
             "git checkout main",
-            "git checkout 4c5afb7f5efabfbf32dad22e6252aa6f26e59a66",
+            "git checkout 7212a8233fc2823f305073e88840a600a2083a66",
             "otto-flags = \"0.1\"",
             "otto-flags = { version = \"0.1\" }",
             "otto-flags = { git = \"https://x/y\" }",
