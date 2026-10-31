@@ -1,6 +1,6 @@
-# Otto Flags
+# Savvagent Flags
 
-otto-flags is a feature flag platform built for agentic coding agents to manage, not
+Savvagent Flags (this repository, otto-flags) is a feature flag platform built for agentic coding agents to manage, not
 for humans to click through. **See [VISION.md](./VISION.md) for the full scope and
 vision** — the short version: flag *management* (create, target, roll out, roll back,
 assess risk) is an MCP tool surface an agent calls; flag *evaluation* inside a running
@@ -9,9 +9,9 @@ trip.
 
 ## Using it
 
-**Agents** connect an MCP client to `https://otto-flags.savvagent.com/mcp`. There is
-nothing to install: the client is sent to the otto platform to sign in (one account
-covers every otto service), then calls tools such as `create_flag`,
+**Agents** connect an MCP client to `https://flags.savvagent.com/mcp`. There is
+nothing to install: the client is sent to the Savvagent platform to sign in (one account
+covers every Savvagent service), then calls tools such as `create_flag`,
 `set_flag_environment`, `flag_health`, and `rollback_flag`. Call `whoami` first. To wire an
 SDK into a project, call `sdk_guide` with the project's language (and the app, to have its id
 filled in).
@@ -22,7 +22,8 @@ behind it say it is hurting the app. Manage it with `set_rollback_policy`,
 checker would judge now), and `rollback_events` (what it did).
 
 **Running apps** evaluate flags through the SDKs below, pointed at
-`https://otto-flags.savvagent.com` with the app's key: the public client key (`sdk_…`)
+`https://flags.savvagent.com` with the app's key (the SDKs' built-in default is still the
+legacy `https://otto-flags.savvagent.com`, which keeps serving them): the public client key (`sdk_…`)
 in browsers and mobile apps, the secret server key (`srv_…`) on servers. An agent
 creates the app and its keys with `create_app`. The REST contract is
 [docs/SDK-DEVELOPER-GUIDE.md](./docs/SDK-DEVELOPER-GUIDE.md).
@@ -139,7 +140,7 @@ yarn add @otto-flags/sdk
 import { OttoFlagsClient } from '@otto-flags/sdk';
 
 const client = new OttoFlagsClient({
-  apiUrl: 'https://otto-flags.savvagent.com',
+  apiUrl: 'https://flags.savvagent.com',
   sdkKey: 'your-sdk-key',
   environment: 'production',
 });

@@ -49,7 +49,7 @@ fn guide_error(e: GuideError) -> ErrorData {
 impl Flags {
     #[tool(
         name = "sdk_guide",
-        description = "How to add an Otto Flags SDK to a project in one language or framework: \
+        description = "How to add a Savvagent Flags SDK to a project in one language or framework: \
                        an ordered integrate-end-to-end recipe (including who stores the server \
                        key and how to verify), then install (pinned to a commit), initialize, \
                        evaluate a flag, and framework snippets. Pass `app` to fill in that app's \

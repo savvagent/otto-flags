@@ -22,7 +22,7 @@ pub struct NoArgs {}
 impl Flags {
     #[tool(
         name = "whoami",
-        description = "Who this token says you are: your user, the one organization it opens, your \
+        description = "Who this token says you are at Savvagent Flags: your user, the one organization it opens, your \
                        role there, the scopes it carries, and where the organization stands on \
                        billing: `meters` (this month's usage), `budget`, and `blockedReason`. \
                        Every tool is free; billing is on production evaluations by the SDKs \

@@ -63,7 +63,7 @@ pub enum Error {
     /// The platform could not confirm the entitlement; fails closed. The text
     /// is ours, never the platform's.
     #[error(
-        "the otto platform could not confirm that this organization's plan includes {feature}; \
+        "the Savvagent platform could not confirm that this organization's plan includes {feature}; \
          nothing was changed. Retry shortly."
     )]
     EntitlementUnavailable { feature: String },

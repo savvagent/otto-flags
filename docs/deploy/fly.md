@@ -1,13 +1,13 @@
 # Hosting: Fly.io
 
-otto-flags runs as one Fly app, `otto-flags` (org `savvagent`, region `iad`), serving every
-surface on one port: the MCP endpoint agents use, the SDK API running apps use, and the
+Savvagent Flags (this repo, otto-flags) runs as one Fly app, `otto-flags` (org `savvagent`,
+region `iad`), at `https://flags.savvagent.com`, serving every surface on one port: the MCP endpoint agents use, the SDK API running apps use, and the
 platform's webhooks.
 
 ## Topology
 
 ```
-  otto-platform  (https://otto.savvagent.com)         otto-flags  (https://otto-flags.savvagent.com)
+  otto-platform  (https://savvagent.com)             otto-flags  (https://flags.savvagent.com)
   OAuth AS, orgs, members, billing                     POST /mcp          agents, bearer tokens
   db: otto_platform ◄──── same instance ────►          /api/...           SDKs, sdk_/srv_ keys
                                                        db: otto_flags     apps, flags, versions, telemetry
@@ -15,6 +15,12 @@ platform's webhooks.
         │  POST /internal/usage                          ◄──── background shipper (usage_outbox)
         └─► POST /platform/webhooks (org.deleted, member.removed, team.deleted) ─────►
 ```
+
+`https://otto-flags.savvagent.com` is the legacy host, served by the same app until the
+platform turns old hosts into redirects (savvagent/otto-platform#135): `/mcp` accepts it as a
+Host because `FLAGS_ALLOWED_HOSTS` lists it, and `/api/...` does not check Host at all, so SDKs
+built with the old default base URL keep working. Both hosts (and `otto-flags.fly.dev`) need a
+Fly certificate and DNS for as long as they are served.
 
 The SDK path (`/api/...`) never calls the platform: an SDK key resolves against this
 database alone, so a platform outage does not affect flag evaluation.
@@ -64,8 +70,8 @@ database alone, so a platform outage does not affect flag evaluation.
 | Secret | What | Where from |
 |---|---|---|
 | `DATABASE_URL` | Postgres URL for `otto_flags` | `fly postgres attach` |
-| `FLAGS_INTROSPECTION_SECRET` | `otto_rs_…`, authenticates every call to the platform | `resource rotate-secret` |
-| `FLAGS_PLATFORM_WEBHOOK_SECRET` | `otto_whsec_…`, verifies platform webhooks | `resource set-webhook` |
+| `FLAGS_INTROSPECTION_SECRET` | `sav_rs_…` (`otto_rs_…` before the rebrand), authenticates every call to the platform | `resource rotate-secret` |
+| `FLAGS_PLATFORM_WEBHOOK_SECRET` | `sav_whsec_…` (`otto_whsec_…` before the rebrand), verifies platform webhooks | `resource set-webhook` |
 
 Everything else is in `fly.toml`'s `[env]`.
 
@@ -74,6 +80,9 @@ secret, unsetting it is cosmetic and Rob's (secrets are human-only):
 `fly secrets unset -a otto-flags FLAGS_ENFORCE_QUOTAS`.
 
 ## First deploy (done 2026-10-09)
+
+Historical: this is how the service was first set up, under its pre-rebrand host. The
+resource is now `https://flags.savvagent.com/mcp`; see Savvagent rebrand below.
 
 ```bash
 # 1. App and database
@@ -104,6 +113,66 @@ The scope list is `flags_core::scopes::KNOWN` and the defaults `flags_core::scop
 keep the registration in step when a release adds a scope. `FLAGS_RESOURCE_URI` must be
 exactly the registered URI: it is the token audience and the HTTP Basic user on every
 platform call.
+
+## Savvagent rebrand (phase 3, #194)
+
+Part of savvagent/otto-platform#128. Every step is human-run (Rob). Already done before the
+PR merges: the platform registry lists `https://flags.savvagent.com/mcp` ("Savvagent Flags")
+as the canonical URI with `https://otto-flags.savvagent.com/mcp` as an alias until
+2027-06-30 (see `resource show`), so the platform accepts this service under either URI with
+its existing credential; `flags.savvagent.com` is a CNAME to `otto-flags.fly.dev` with a Fly
+certificate. Merge after otto-cxp's phase 3 (savvagent/otto-cxp#59) is live.
+
+```bash
+# 0. Preflight (read-only): the canonical URI, its alias, and the current webhook.
+fly ssh console -a otto-platform -C 'otto-platform-server resource show \
+  https://flags.savvagent.com/mcp'
+curl -s https://flags.savvagent.com/healthz
+
+# 1. Merge the PR: CI deploys fly.toml's [env], the Fly env flip:
+#      FLAGS_PUBLIC_URL     https://otto-flags.savvagent.com     -> https://flags.savvagent.com
+#      FLAGS_RESOURCE_URI   https://otto-flags.savvagent.com/mcp -> https://flags.savvagent.com/mcp
+#      FLAGS_ALLOWED_HOSTS  otto-flags.fly.dev                   -> otto-flags.fly.dev,otto-flags.savvagent.com
+#    The existing otto_rs_ credential still authenticates under the new URI. Check the boot
+#    log says "the otto platform accepted this service's credential".
+curl -s https://flags.savvagent.com/.well-known/oauth-protected-resource
+#    -> "resource":"https://flags.savvagent.com/mcp","resource_name":"Savvagent Flags"
+
+# 2. Point the platform's lifecycle webhook at the new host (prints sav_whsec_… once).
+fly ssh console -a otto-platform -C 'otto-platform-server resource set-webhook \
+  https://flags.savvagent.com/mcp https://flags.savvagent.com/platform/webhooks'
+
+# 3. Issue a new introspection credential (prints sav_rs_… once). The old one stops working
+#    at once: introspection and usage shipping fail until step 4 lands, so run 3 and 4
+#    back to back.
+fly ssh console -a otto-platform -C 'otto-platform-server resource rotate-secret \
+  https://flags.savvagent.com/mcp'
+
+# 4. Both secrets in one set, which restarts the machines on them.
+fly secrets set -a otto-flags \
+  FLAGS_INTROSPECTION_SECRET='sav_rs_…' FLAGS_PLATFORM_WEBHOOK_SECRET='sav_whsec_…'
+fly logs -a otto-flags --no-tail   # "the otto platform accepted this service's credential"
+```
+
+A webhook the platform sends between steps 2 and 4 fails its signature check here (`401`) and
+is retried with backoff (about a day of attempts), so nothing is lost. Usage queued in
+`usage_outbox` during step 3's gap ships on the next pass.
+
+5. MCP clients: re-point each one at the new URI under the new name. For Claude Code
+   (`~/.claude.json`), per scope the entry was added in:
+
+   ```bash
+   claude mcp remove otto-flags
+   claude mcp add --transport http savvagent-flags https://flags.savvagent.com/mcp
+   ```
+
+   then `/mcp` to sign in, and call `whoami` through it. Tool names change prefix
+   (`mcp__otto-flags__…` to `mcp__savvagent-flags__…`), so update any allow-lists that name
+   them. Until then the old entry keeps working through the legacy host.
+
+This service has no web console and no OAuth client of its own, so there is no redirect URI to
+register. `FLAGS_*` variable names, the Fly app name `otto-flags`, the meter
+`otto-flags/evaluations` and the service slug `otto-flags` do not change.
 
 ## Deploys
 
@@ -435,12 +504,12 @@ SELECT count(*) FILTER (WHERE tripped_at IS NULL) AS armed, count(*) AS total FR
 ## Checking it
 
 ```bash
-curl -s https://otto-flags.savvagent.com/readyz
-curl -s https://otto-flags.savvagent.com/.well-known/oauth-protected-resource
+curl -s https://flags.savvagent.com/readyz
+curl -s https://flags.savvagent.com/.well-known/oauth-protected-resource
 fly logs -a otto-flags   # look for "the otto platform accepted this service's credential"
 ```
 
-Then point an MCP client at `https://otto-flags.savvagent.com/mcp`: it is sent to the
+Then point an MCP client at `https://flags.savvagent.com/mcp`: it is sent to the
 platform to sign in and `whoami` answers with the platform's records.
 
 Usage backlog (should drain to 0 within seconds of activity):

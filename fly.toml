@@ -1,7 +1,9 @@
 # otto-flags on Fly.io, org "savvagent". See docs/deploy/fly.md.
 #
-# A resource server of the otto platform (https://otto.savvagent.com): identity,
-# OAuth, orgs, and billing live there; this app holds only flags.
+# Savvagent Flags, served at https://flags.savvagent.com. A resource server of
+# the Savvagent platform (https://savvagent.com): identity, OAuth, orgs, and
+# billing live there; this app holds only flags. The Fly app keeps its
+# otto-flags name, and the FLAGS_* variables keep theirs.
 #
 # Database: `otto_flags` on `otto-db`, the unmanaged Fly Postgres shared with
 # otto-platform and otto-factory (shared for cost; split before real
@@ -11,8 +13,8 @@
 #
 # Secrets (`fly secrets set`, never here):
 #   DATABASE_URL                    from `fly postgres attach`
-#   FLAGS_INTROSPECTION_SECRET      otto_rs_...    from `resource rotate-secret`
-#   FLAGS_PLATFORM_WEBHOOK_SECRET   otto_whsec_... from `resource set-webhook`
+#   FLAGS_INTROSPECTION_SECRET      sav_rs_... (or otto_rs_...)       from `resource rotate-secret`
+#   FLAGS_PLATFORM_WEBHOOK_SECRET   sav_whsec_... (or otto_whsec_...) from `resource set-webhook`
 
 app = "otto-flags"
 primary_region = "iad"
@@ -27,13 +29,17 @@ kill_timeout = "15s"
 
 [env]
   FLAGS_BIND = "0.0.0.0:8080"
-  FLAGS_PUBLIC_URL = "https://otto-flags.savvagent.com"
+  FLAGS_PUBLIC_URL = "https://flags.savvagent.com"
   # The token audience: exactly the resource_uri registered at the platform.
-  FLAGS_RESOURCE_URI = "https://otto-flags.savvagent.com/mcp"
+  FLAGS_RESOURCE_URI = "https://flags.savvagent.com/mcp"
   FLAGS_PLATFORM_URL = "https://savvagent.com"
-  # The fly.dev name still answers (health checks, debugging); /mcp has to be
-  # told to accept it as a Host.
-  FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev"
+  # Extra Host headers /mcp accepts besides the public host. The fly.dev name
+  # still answers (health checks, debugging). otto-flags.savvagent.com is the
+  # legacy host: MCP clients configured before the rebrand still use it, until
+  # the platform turns old hosts into redirects (savvagent/otto-platform#135).
+  # /api (the SDKs) does not check Host, so SDKs on the old host keep working
+  # whatever this says.
+  FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev,otto-flags.savvagent.com"
   # Small: otto-db is a shared 512 MB instance.
   FLAGS_DB_MAX_CONNECTIONS = "5"
   FLAGS_LOG_FORMAT = "json"

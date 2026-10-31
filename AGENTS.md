@@ -1,8 +1,8 @@
 # AGENTS.md
 
-otto-flags is a feature flag service. Agents manage flags over MCP (`/mcp`); running apps
+Savvagent Flags (this repository, otto-flags) is a feature flag service. Agents manage flags over MCP (`/mcp`); running apps
 evaluate them through SDKs over REST (`/api/...`). The server is at
-https://otto-flags.savvagent.com.
+https://flags.savvagent.com.
 
 ## Wiring an SDK into a project
 
@@ -14,7 +14,7 @@ Pick the first route that works:
    and what is billed), then gives install, initialization, and usage steps, filled in with
    the app's id, name, environments and public client key. Without `app` it uses the
    organization's only app, or lists the apps to choose from.
-2. Without MCP, read `https://otto-flags.savvagent.com/llms.txt` (the root `llms.txt` in
+2. Without MCP, read `https://flags.savvagent.com/llms.txt` (the root `llms.txt` in
    this repository is the same file).
 3. Otherwise read `packages/<dir>/README.md` for the language you need (for example
    `packages/python-server`, `packages/go-server`, `packages/react`).

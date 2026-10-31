@@ -6,7 +6,7 @@
 //! list, so the three cannot drift.
 
 /// What this resource server is called on a consent screen and in its metadata.
-pub const RESOURCE_NAME: &str = "otto-flags";
+pub const RESOURCE_NAME: &str = "Savvagent Flags";
 
 /// Read apps, flags, history, and health; dry-run evaluation.
 pub const FLAGS_READ: &str = "flags:read";

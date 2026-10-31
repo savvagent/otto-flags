@@ -1,7 +1,7 @@
-//! The page a person's browser gets at `/`: how to add otto-flags to an AI
+//! The page a person's browser gets at `/`: how to add Savvagent Flags to an AI
 //! assistant as a connector (#71).
 //!
-//! otto-flags has no web console. People reach it from an AI assistant, and
+//! Savvagent Flags has no web console. People reach it from an AI assistant, and
 //! apps reach it through the SDKs, but "Open console" links on the platform
 //! send browsers to this origin, where the JSON 404 tells a person nothing.
 //! So `/` serves this page, and only to a request that looks like a person's
@@ -284,8 +284,9 @@ mod tests {
         let html = page.html();
         assert!(!html.contains("{{"), "a placeholder is left");
         assert_eq!(html.matches("https://flags.example.com/mcp").count(), 3);
-        assert!(html
-            .contains("claude mcp add --transport http otto-flags https://flags.example.com/mcp"));
+        assert!(html.contains(
+            "claude mcp add --transport http savvagent-flags https://flags.example.com/mcp"
+        ));
         assert!(html.contains("href=\"https://platform.example.com/products/flags#connect\""));
         assert!(html.contains("href=\"https://platform.example.com/\""));
     }

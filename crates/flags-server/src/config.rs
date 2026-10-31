@@ -16,15 +16,17 @@ pub struct Config {
     pub db_max_connections: u32,
     pub run_migrations: bool,
     pub bind: SocketAddr,
-    /// Public origin, e.g. `https://otto-flags.savvagent.com`.
+    /// Public origin, e.g. `https://flags.savvagent.com`.
     pub public_url: String,
     /// Token audience; exactly the `resource_uri` registered at the platform.
     /// Defaults to `{public_url}/mcp`.
     pub resource_uri: String,
     pub platform_url: String,
-    /// `otto_rs_…`: this service's credential at the platform.
+    /// `sav_rs_…` (or the older `otto_rs_…`): this service's credential at the
+    /// platform.
     pub introspection_secret: String,
-    /// `otto_whsec_…`: verifies the platform's lifecycle webhooks.
+    /// `sav_whsec_…` (or the older `otto_whsec_…`): verifies the platform's
+    /// lifecycle webhooks.
     pub platform_webhook_secret: String,
     pub extra_allowed_hosts: Vec<String>,
     pub allowed_origins: Vec<String>,
@@ -208,14 +210,14 @@ fn url_var(name: &str) -> Result<String> {
 }
 
 fn list(name: &str) -> Vec<String> {
-    optional(name)
-        .map(|v| {
-            v.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
+    optional(name).map(|v| split_list(&v)).unwrap_or_default()
+}
+
+fn split_list(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn bool_value(s: &str) -> Result<bool> {
@@ -244,6 +246,43 @@ mod tests {
             c.allowed_hosts(),
             ["flags.example.com", "otto-flags.fly.dev"]
         );
+    }
+
+    /// The `[env]` values `fly.toml` deploys, read as `KEY = "value"` lines.
+    fn fly_env(key: &str) -> String {
+        let toml = include_str!("../../../fly.toml");
+        let env = toml
+            .split_once("\n[env]\n")
+            .expect("fly.toml has an [env] table")
+            .1;
+        let env = env.split("\n[").next().unwrap();
+        env.lines()
+            .filter_map(|l| l.trim().split_once(" = "))
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.trim_matches('"').to_string())
+            .unwrap_or_else(|| panic!("fly.toml [env] does not set {key}"))
+    }
+
+    /// Rebrand phase 3 (#194): production serves flags.savvagent.com, and
+    /// tokens are audienced for its /mcp, while /mcp still accepts the legacy
+    /// otto-flags.savvagent.com host and the fly.dev name.
+    #[test]
+    fn production_serves_the_savvagent_host_and_keeps_the_legacy_one() {
+        let mut c = Config::for_test();
+        c.public_url = fly_env("FLAGS_PUBLIC_URL");
+        c.resource_uri = fly_env("FLAGS_RESOURCE_URI");
+        c.extra_allowed_hosts = split_list(&fly_env("FLAGS_ALLOWED_HOSTS"));
+        assert_eq!(c.public_url, "https://flags.savvagent.com");
+        assert_eq!(c.resource_uri, "https://flags.savvagent.com/mcp");
+        assert_eq!(
+            c.allowed_hosts(),
+            [
+                "flags.savvagent.com",
+                "otto-flags.fly.dev",
+                "otto-flags.savvagent.com"
+            ]
+        );
+        assert_eq!(fly_env("FLAGS_PLATFORM_URL"), "https://savvagent.com");
     }
 
     #[test]

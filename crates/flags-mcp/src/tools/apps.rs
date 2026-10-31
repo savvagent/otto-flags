@@ -58,10 +58,10 @@ pub struct RotateKeysArgs {
 
 /// Why managing apps takes an owner or admin.
 const APPS_NEED_ADMIN: &str = "managing apps and their SDK keys needs an owner or admin of this \
-    organization; ask one to do it, or to change your role at the otto platform";
+    organization; ask one to do it, or to change your role at the Savvagent platform";
 
 const KEYS_NOTE: &str = "The server key (srv_…) is a secret and is shown only now: store it in \
-    the application's secret manager as its Otto Flags API key for server-side SDKs. The client \
+    the application's secret manager as its Savvagent Flags API key for server-side SDKs. The client \
     key (sdk_…) is public and can ship in browser or mobile code; list_apps shows it again.";
 
 #[tool_router(router = apps_router, vis = "pub(crate)")]

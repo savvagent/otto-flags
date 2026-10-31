@@ -28,10 +28,13 @@ use rmcp::{tool_handler, ServerHandler};
 use crate::auth::{MissingScope, Principal};
 use crate::error;
 
+/// The MCP `serverInfo.name` this server reports to clients.
+pub const SERVER_NAME: &str = "savvagent-flags";
+
 /// What the server tells an agent before it calls anything. Written as
 /// operating guidance: the moves an agent gets wrong in its first session.
 pub(crate) const INSTRUCTIONS: &str = "\
-otto-flags manages feature flags. You create flags, target them, roll them out, \
+Savvagent Flags manages feature flags. You create flags, target them, roll them out, \
 watch their health, and roll them back here; running applications evaluate them \
 through an SDK, which never goes through you.
 
@@ -172,7 +175,7 @@ impl ServerHandler for Flags {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
         // Left unset this reports rmcp's own crate name and version.
-        info.server_info = Implementation::new("otto-flags", env!("CARGO_PKG_VERSION"));
+        info.server_info = Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION"));
         info.instructions = Some(INSTRUCTIONS.to_string());
         info
     }
