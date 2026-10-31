@@ -30,7 +30,7 @@ kill_timeout = "15s"
   FLAGS_PUBLIC_URL = "https://otto-flags.savvagent.com"
   # The token audience: exactly the resource_uri registered at the platform.
   FLAGS_RESOURCE_URI = "https://otto-flags.savvagent.com/mcp"
-  FLAGS_PLATFORM_URL = "https://otto.savvagent.com"
+  FLAGS_PLATFORM_URL = "https://savvagent.com"
   # The fly.dev name still answers (health checks, debugging); /mcp has to be
   # told to accept it as a Host.
   FLAGS_ALLOWED_HOSTS = "otto-flags.fly.dev"
