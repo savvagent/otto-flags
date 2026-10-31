@@ -33,7 +33,7 @@ async fn state_on_a_pool_of_five(pool: &PgPool, limit: KeyLookups) -> (AppState,
         .await
         .unwrap();
     let mut state = AppState::new(
-        otto_tenant::Db::from_pool(five.clone()),
+        savvagent_tenant::Db::from_pool(five.clone()),
         Listener::detached(),
         Hints::detached(),
         Default::default(),

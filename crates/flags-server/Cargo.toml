@@ -9,8 +9,8 @@ rust-version.workspace = true
 flags-core.workspace = true
 flags-mcp.workspace = true
 flags-api.workspace = true
-otto-tenant.workspace = true
-otto-resource.workspace = true
+savvagent-tenant.workspace = true
+savvagent-resource.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 axum.workspace = true
@@ -29,8 +29,8 @@ anyhow.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true, features = ["util"] }
 chrono.workspace = true
-otto-resource.workspace = true
-otto-tenant.workspace = true
+savvagent-resource.workspace = true
+savvagent-tenant.workspace = true
 flags-core.workspace = true
 sqlx.workspace = true
 serde_json.workspace = true

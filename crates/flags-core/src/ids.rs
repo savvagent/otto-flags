@@ -1,8 +1,8 @@
 //! Typed identifiers for otto-flags' own domain.
 //!
-//! `otto_tenant::OrgId` is reused as-is (it is the tenant boundary shared by
+//! `savvagent_tenant::OrgId` is reused as-is (it is the tenant boundary shared by
 //! every otto-* service); the ids here are local to this database and follow
-//! the same newtype-over-`Uuid` shape for the same reason `otto-tenant`'s
+//! the same newtype-over-`Uuid` shape for the same reason `savvagent-tenant`'s
 //! `ids.rs` gives: the compiler should refuse to pass a `FlagId` where a
 //! `FlagAppId` belongs, since both are `Uuid` on the wire and the mix-up would
 //! otherwise compile and run.
@@ -55,7 +55,7 @@ macro_rules! uuid_id {
             }
         }
 
-        // Written out rather than derived, matching otto_tenant::ids: over the
+        // Written out rather than derived, matching savvagent_tenant::ids: over the
         // wire these are UUID strings, and an MCP client's generated schema
         // should say that rather than naming the wrapper.
         impl schemars::JsonSchema for $name {

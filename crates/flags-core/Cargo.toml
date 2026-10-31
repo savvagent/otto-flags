@@ -6,8 +6,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-otto-tenant.workspace = true
-otto-resource.workspace = true
+savvagent-tenant.workspace = true
+savvagent-resource.workspace = true
 sqlx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -23,8 +23,8 @@ rand.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-otto-resource.workspace = true
-otto-tenant.workspace = true
+savvagent-resource.workspace = true
+savvagent-tenant.workspace = true
 sqlx.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

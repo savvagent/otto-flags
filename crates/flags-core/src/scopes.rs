@@ -1,6 +1,6 @@
 //! The scopes otto-flags' resource server understands.
 //!
-//! Registered with the platform (`otto-platform-server resource register
+//! Registered with the platform (`savvagent-platform-server resource register
 //! --scopes …`, see docs/deploy/fly.md), advertised in
 //! `/.well-known/oauth-protected-resource`, and checked by every tool. One
 //! list, so the three cannot drift.

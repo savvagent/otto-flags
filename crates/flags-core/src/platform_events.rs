@@ -23,10 +23,10 @@
 //! already in flight finishes first and is purged with everything else; one
 //! that starts later sees the tombstone and is refused.
 
-use otto_resource::webhook::{LifecycleEvent, WebhookEvent};
-use otto_tenant::audit::Entry;
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::{Db, Tx};
+use savvagent_resource::webhook::{LifecycleEvent, WebhookEvent};
+use savvagent_tenant::audit::Entry;
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::{Db, Tx};
 use serde::Serialize;
 
 use crate::audit::action;

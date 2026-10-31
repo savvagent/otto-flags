@@ -501,8 +501,8 @@ dependencies = [
  "flags-core",
  "futures",
  "http",
- "otto-resource",
- "otto-tenant",
+ "savvagent-resource",
+ "savvagent-tenant",
  "serde",
  "serde_json",
  "sqlx",
@@ -521,9 +521,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
- "otto-resource",
- "otto-tenant",
  "rand 0.8.8",
+ "savvagent-resource",
+ "savvagent-tenant",
  "schemars",
  "serde",
  "serde_json",
@@ -543,9 +543,9 @@ dependencies = [
  "chrono",
  "flags-core",
  "http",
- "otto-resource",
- "otto-tenant",
  "rmcp",
+ "savvagent-resource",
+ "savvagent-tenant",
  "schemars",
  "serde",
  "serde_json",
@@ -571,8 +571,8 @@ dependencies = [
  "flags-core",
  "flags-mcp",
  "http",
- "otto-resource",
- "otto-tenant",
+ "savvagent-resource",
+ "savvagent-tenant",
  "serde_json",
  "sha2",
  "sqlx",
@@ -1305,45 +1305,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "otto-resource"
-version = "0.14.0"
-source = "git+https://github.com/savvagent/otto-platform?rev=03f52e9f2139d08d60d0695b5cde4834f0cf19c2#03f52e9f2139d08d60d0695b5cde4834f0cf19c2"
-dependencies = [
- "chrono",
- "hex",
- "hmac",
- "moka",
- "percent-encoding",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "otto-tenant"
-version = "0.10.0"
-source = "git+https://github.com/savvagent/otto-platform?rev=bfda55e155be8985761850a7c42980cc926fd4cb#bfda55e155be8985761850a7c42980cc926fd4cb"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "chrono",
- "hmac",
- "rand 0.8.8",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1830,6 +1791,45 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "savvagent-resource"
+version = "0.18.0"
+source = "git+https://github.com/savvagent/otto-platform?rev=063472cdb4eef7229d6732578cf061fd963996a4#063472cdb4eef7229d6732578cf061fd963996a4"
+dependencies = [
+ "chrono",
+ "hex",
+ "hmac",
+ "moka",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "savvagent-tenant"
+version = "0.18.0"
+source = "git+https://github.com/savvagent/otto-platform?rev=063472cdb4eef7229d6732578cf061fd963996a4#063472cdb4eef7229d6732578cf061fd963996a4"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "chrono",
+ "hmac",
+ "rand 0.8.8",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "schemars"

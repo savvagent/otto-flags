@@ -42,9 +42,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use http::{HeaderMap, StatusCode};
-use otto_resource::{PlatformClient, Role, TokenClaims, TokenKind};
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Db;
+use savvagent_resource::{PlatformClient, Role, TokenClaims, TokenKind};
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::Db;
 use uuid::Uuid;
 
 /// Everything the middleware needs, shared by the whole surface.
@@ -305,7 +305,7 @@ fn unavailable() -> Response {
 ///
 /// The scopes come from [`flags_core::scopes::KNOWN`] — what this binary
 /// understands — which is also what the operator registers with the platform
-/// (`otto-platform-server resource register --scopes …`), so what is advertised
+/// (`savvagent-platform-server resource register --scopes …`), so what is advertised
 /// is what the authorization server will issue.
 pub async fn protected_resource_metadata(State(rs): State<Arc<ResourceServer>>) -> Response {
     Json(serde_json::json!({

@@ -2,7 +2,7 @@
 //!
 //! Every message here may be read by an agent deciding its next call, so each
 //! one says what was wrong and, where there is one, what to call instead. Wraps
-//! `otto_tenant::Error` with `#[from]` rather than re-deriving its variants.
+//! `savvagent_tenant::Error` with `#[from]` rather than re-deriving its variants.
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -74,10 +74,10 @@ pub enum Error {
     Busy,
 
     #[error(transparent)]
-    Platform(#[from] otto_resource::Error),
+    Platform(#[from] savvagent_resource::Error),
 
     #[error(transparent)]
-    Tenant(#[from] otto_tenant::Error),
+    Tenant(#[from] savvagent_tenant::Error),
 
     #[error(transparent)]
     Db(#[from] sqlx::Error),
@@ -108,7 +108,7 @@ impl Error {
         match self {
             Error::Db(_) | Error::EntitlementUnavailable { .. } | Error::Busy => true,
             Error::Platform(p) => p.is_retriable(),
-            Error::Tenant(otto_tenant::Error::Db(_)) => true,
+            Error::Tenant(savvagent_tenant::Error::Db(_)) => true,
             _ => false,
         }
     }
@@ -123,7 +123,7 @@ impl Error {
     /// keep retrying a constraint violation or a missing table.
     pub fn is_transient(&self) -> bool {
         match self {
-            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => db_is_transient(e),
+            Error::Db(e) | Error::Tenant(savvagent_tenant::Error::Db(e)) => db_is_transient(e),
             Error::EntitlementUnavailable { .. } | Error::Busy => true,
             Error::Platform(p) => p.is_retriable(),
             _ => false,
@@ -137,7 +137,7 @@ impl Error {
             Error::Db(_) | Error::Platform(_) => true,
             Error::Tenant(t) => !matches!(
                 t,
-                otto_tenant::Error::Invalid(_) | otto_tenant::Error::OrgNotFound(_)
+                savvagent_tenant::Error::Invalid(_) | savvagent_tenant::Error::OrgNotFound(_)
             ),
             _ => false,
         }
@@ -152,7 +152,7 @@ impl Error {
     /// at `info`.
     pub fn failure_reason(&self) -> Failure {
         match self {
-            Error::Db(e) | Error::Tenant(otto_tenant::Error::Db(e)) => db_failure_reason(e),
+            Error::Db(e) | Error::Tenant(savvagent_tenant::Error::Db(e)) => db_failure_reason(e),
             Error::Platform(p) => platform_failure_reason(p),
             _ => Failure::reason(self.code()),
         }
@@ -224,8 +224,8 @@ impl std::fmt::Debug for Sqlstate {
 }
 
 /// [`Error::failure_reason`] for a platform failure the caller holds unwrapped.
-pub fn platform_failure_reason(e: &otto_resource::Error) -> Failure {
-    use otto_resource::Error as E;
+pub fn platform_failure_reason(e: &savvagent_resource::Error) -> Failure {
+    use savvagent_resource::Error as E;
     match e {
         E::Status { status, .. } => Failure {
             status: Some(*status),
@@ -246,9 +246,9 @@ pub fn platform_failure_reason(e: &otto_resource::Error) -> Failure {
 /// the transport error's own predicates (no text), `None` for any other variant.
 /// The platform client sets only a total request timeout, so a connect that
 /// hangs until it fires is `timeout`; `connect` is a refusal, DNS, or TLS failure.
-fn transport_kind(e: &otto_resource::Error) -> Option<&'static str> {
+fn transport_kind(e: &savvagent_resource::Error) -> Option<&'static str> {
     match e {
-        otto_resource::Error::Transport(t) => Some(if t.is_connect() {
+        savvagent_resource::Error::Transport(t) => Some(if t.is_connect() {
             "connect"
         } else if t.is_timeout() {
             "timeout"
@@ -419,10 +419,10 @@ mod tests {
             Error::Db(db("57P01")),
             Error::Db(db("57P02")),
             Error::Db(db("57P03")),
-            Error::Tenant(otto_tenant::Error::Db(db("57P01"))),
-            Error::Tenant(otto_tenant::Error::Db(db("57P03"))),
-            Error::Tenant(otto_tenant::Error::Db(sqlx::Error::PoolTimedOut)),
-            Error::Tenant(otto_tenant::Error::Db(db("40P01"))),
+            Error::Tenant(savvagent_tenant::Error::Db(db("57P01"))),
+            Error::Tenant(savvagent_tenant::Error::Db(db("57P03"))),
+            Error::Tenant(savvagent_tenant::Error::Db(sqlx::Error::PoolTimedOut)),
+            Error::Tenant(savvagent_tenant::Error::Db(db("40P01"))),
             Error::EntitlementUnavailable {
                 feature: "auto_rollback".into(),
             },
@@ -447,8 +447,8 @@ mod tests {
             Error::Db(db("08P01")),
             Error::Db(sqlx::Error::RowNotFound),
             Error::Db(sqlx::Error::Protocol("bad".into())),
-            Error::Tenant(otto_tenant::Error::Db(db("23505"))),
-            Error::Tenant(otto_tenant::Error::Invalid("bad".into())),
+            Error::Tenant(savvagent_tenant::Error::Db(db("23505"))),
+            Error::Tenant(savvagent_tenant::Error::Invalid("bad".into())),
             Error::AccessRevoked,
             Error::Invalid("bad".into()),
         ] {
@@ -487,12 +487,12 @@ mod tests {
                 None,
             ),
             (
-                Error::Tenant(otto_tenant::Error::Db(sqlx::Error::PoolClosed)),
+                Error::Tenant(savvagent_tenant::Error::Db(sqlx::Error::PoolClosed)),
                 "pool_closed",
                 None,
             ),
             (
-                Error::Platform(otto_resource::Error::Status {
+                Error::Platform(savvagent_resource::Error::Status {
                     status: 503,
                     body: "secret".into(),
                 }),
@@ -500,12 +500,12 @@ mod tests {
                 Some(503),
             ),
             (
-                Error::Platform(otto_resource::Error::Unauthorized),
+                Error::Platform(savvagent_resource::Error::Unauthorized),
                 "unauthorized",
                 None,
             ),
             (
-                Error::Tenant(otto_tenant::Error::Config("secret".into())),
+                Error::Tenant(savvagent_tenant::Error::Config("secret".into())),
                 "internal_error",
                 None,
             ),
@@ -516,7 +516,7 @@ mod tests {
             let f = e.failure_reason();
             assert_eq!((f.reason, f.status), (reason, status), "{e:?}");
         }
-        use otto_resource::Error as P;
+        use savvagent_resource::Error as P;
         for (e, reason) in [
             (P::NotFound, "not_found"),
             (P::Decode("secret".into()), "decode"),
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(f.sqlstate(), Some("57P01"));
         assert_eq!(f.transport, None);
 
-        let f = Error::Tenant(otto_tenant::Error::Db(db("22P02"))).failure_reason();
+        let f = Error::Tenant(savvagent_tenant::Error::Db(db("22P02"))).failure_reason();
         assert_eq!(f.reason, "database_error");
         assert_eq!(f.sqlstate(), Some("22P02"));
 
@@ -583,10 +583,14 @@ mod tests {
         }
     }
 
-    async fn transport_failure(base: String, timeout: std::time::Duration) -> otto_resource::Error {
-        let mut cfg = otto_resource::ClientConfig::new(base, "https://flags.test/mcp", "secret");
+    async fn transport_failure(
+        base: String,
+        timeout: std::time::Duration,
+    ) -> savvagent_resource::Error {
+        let mut cfg =
+            savvagent_resource::ClientConfig::new(base, "https://flags.test/mcp", "secret");
         cfg.timeout = timeout;
-        let client = otto_resource::PlatformClient::new(cfg).expect("client");
+        let client = savvagent_resource::PlatformClient::new(cfg).expect("client");
         client
             .usage_status(uuid::Uuid::nil())
             .await

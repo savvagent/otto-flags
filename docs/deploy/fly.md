@@ -90,12 +90,12 @@ fly apps create otto-flags --org savvagent
 fly postgres attach otto-db -a otto-flags --database-name otto_flags   # sets DATABASE_URL
 
 # 2. Register the resource server at the platform (run on the platform's machine)
-fly ssh console -a otto-platform -C 'otto-platform-server resource register \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource register \
   https://otto-flags.savvagent.com/mcp --name otto-flags \
   --scopes flags:read,flags:write,apps:admin --default-scopes flags:read'
-fly ssh console -a otto-platform -C 'otto-platform-server resource rotate-secret \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource rotate-secret \
   https://otto-flags.savvagent.com/mcp'                 # prints otto_rs_… once
-fly ssh console -a otto-platform -C 'otto-platform-server resource set-webhook \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource set-webhook \
   https://otto-flags.savvagent.com/mcp https://otto-flags.savvagent.com/platform/webhooks'
                                                         # prints otto_whsec_… once
 
@@ -125,7 +125,7 @@ certificate. Merge after otto-cxp's phase 3 (savvagent/otto-cxp#59) is live.
 
 ```bash
 # 0. Preflight (read-only): the canonical URI, its alias, and the current webhook.
-fly ssh console -a otto-platform -C 'otto-platform-server resource show \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource show \
   https://flags.savvagent.com/mcp'
 curl -s https://flags.savvagent.com/healthz
 
@@ -139,13 +139,13 @@ curl -s https://flags.savvagent.com/.well-known/oauth-protected-resource
 #    -> "resource":"https://flags.savvagent.com/mcp","resource_name":"Savvagent Flags"
 
 # 2. Point the platform's lifecycle webhook at the new host (prints sav_whsec_… once).
-fly ssh console -a otto-platform -C 'otto-platform-server resource set-webhook \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource set-webhook \
   https://flags.savvagent.com/mcp https://flags.savvagent.com/platform/webhooks'
 
 # 3. Issue a new introspection credential (prints sav_rs_… once). The old one stops working
 #    at once: introspection and usage shipping fail until step 4 lands, so run 3 and 4
 #    back to back.
-fly ssh console -a otto-platform -C 'otto-platform-server resource rotate-secret \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource rotate-secret \
   https://flags.savvagent.com/mcp'
 
 # 4. Both secrets in one set, which restarts the machines on them.
@@ -191,7 +191,7 @@ The old host's Fly certificate and DNS stay, for as long as SDKs call it. After 
 live, drop the platform alias `https://otto-flags.savvagent.com/mcp` (human-run, platform side):
 
 ```bash
-fly ssh console -a otto-platform -C 'otto-platform-server resource drop-alias \
+fly ssh console -a otto-platform -C 'savvagent-platform-server resource drop-alias \
   https://flags.savvagent.com/mcp https://otto-flags.savvagent.com/mcp'
 ```
 

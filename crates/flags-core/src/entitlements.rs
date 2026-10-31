@@ -14,8 +14,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use otto_resource::{PlatformClient, UsageStatus};
-use otto_tenant::ids::OrgId;
+use savvagent_resource::{PlatformClient, UsageStatus};
+use savvagent_tenant::ids::OrgId;
 
 use crate::error::{Error, Result};
 use crate::usage::plan_name;

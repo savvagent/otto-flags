@@ -106,15 +106,15 @@ fn deliver(secret: &str, body: Vec<u8>) -> StatusCode {
             .connect_lazy("postgres://unused@localhost/unused")
             .expect("lazy pool");
         let app = flags_api::router(AppState::new(
-            otto_tenant::Db::from_pool(pool),
+            savvagent_tenant::Db::from_pool(pool),
             Listener::detached(),
             Hints::detached(),
             Default::default(),
             SECRET,
         ));
-        let sig = otto_resource::webhook::sign(secret, chrono::Utc::now().timestamp(), &body);
+        let sig = savvagent_resource::webhook::sign(secret, chrono::Utc::now().timestamp(), &body);
         let req = Request::post("/platform/webhooks")
-            .header(otto_resource::webhook::SIGNATURE_HEADER, sig)
+            .header(savvagent_resource::webhook::SIGNATURE_HEADER, sig)
             .body(Body::from(body))
             .expect("request");
         app.oneshot(req).await.expect("response").status()
@@ -123,7 +123,7 @@ fn deliver(secret: &str, body: Vec<u8>) -> StatusCode {
 
 /// A signed event whose data serde rejects, quoting the value it found.
 fn unreadable_body() -> Vec<u8> {
-    otto_resource::webhook::body(
+    savvagent_resource::webhook::body(
         uuid::Uuid::nil(),
         "org.deleted",
         chrono::Utc::now(),
@@ -162,7 +162,7 @@ fn failures_log_code_and_reason_above_debug_and_text_only_at_debug() {
             "MARKER_PLATFORM",
             r#"code="platform_unavailable" reason="http_status" status=503"#,
             Box::new(|| {
-                let api = ApiError::from(Error::Platform(otto_resource::Error::Status {
+                let api = ApiError::from(Error::Platform(savvagent_resource::Error::Status {
                     status: 503,
                     body: "MARKER_PLATFORM".into(),
                 }));

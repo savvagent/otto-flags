@@ -7,8 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 flags-core.workspace = true
-otto-tenant.workspace = true
-otto-resource.workspace = true
+savvagent-tenant.workspace = true
+savvagent-resource.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true

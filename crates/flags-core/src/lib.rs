@@ -4,11 +4,11 @@
 //! events, change notifications).
 //!
 //! This is otto-flags' own database, separate from the platform's. Tenant
-//! isolation comes from `otto_tenant::{Db, Tx}`: every tenant query is a
-//! method on a [`otto_tenant::Tx`], which cannot exist without an org, and runs
+//! isolation comes from `savvagent_tenant::{Db, Tx}`: every tenant query is a
+//! method on a [`savvagent_tenant::Tx`], which cannot exist without an org, and runs
 //! under row-level security. Query methods are extension traits
 //! ([`apps::AppsExt`], [`flags::FlagsExt`]) because `Tx` is defined in
-//! otto-tenant. Request paths open their transactions with
+//! savvagent-tenant. Request paths open their transactions with
 //! [`platform_events::begin_live`], never `Db::begin` directly, so a deleted
 //! org or removed member is refused; other pinned work (webhooks, the boot
 //! check) uses `platform_events::begin_pinned`. Unpinned access goes through

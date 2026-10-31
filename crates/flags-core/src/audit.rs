@@ -1,4 +1,4 @@
-//! otto-flags' own audit actions, written with `otto_tenant`'s `Tx::audit` in
+//! otto-flags' own audit actions, written with `savvagent_tenant`'s `Tx::audit` in
 //! the same transaction as the change.
 //!
 //! Flag changes are not here: every one of them is already recorded, with a

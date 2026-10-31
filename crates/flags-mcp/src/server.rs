@@ -19,11 +19,11 @@ use std::sync::Arc;
 
 use flags_core::entitlements::Entitlements;
 use flags_core::usage::Meter;
-use otto_resource::PlatformClient;
-use otto_tenant::{Db, Tx};
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::model::{ErrorData, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{tool_handler, ServerHandler};
+use savvagent_resource::PlatformClient;
+use savvagent_tenant::{Db, Tx};
 
 use crate::auth::{MissingScope, Principal};
 use crate::error;
@@ -195,7 +195,7 @@ impl<T> McpResult<T> for flags_core::Result<T> {
     }
 }
 
-impl<T> McpResult<T> for otto_tenant::Result<T> {
+impl<T> McpResult<T> for savvagent_tenant::Result<T> {
     fn mcp(self) -> Result<T, ErrorData> {
         self.map_err(error::from_tenant)
     }
@@ -207,7 +207,7 @@ impl<T> McpResult<T> for Result<T, MissingScope> {
     }
 }
 
-impl<T> McpResult<T> for otto_resource::Result<T> {
+impl<T> McpResult<T> for savvagent_resource::Result<T> {
     fn mcp(self) -> Result<T, ErrorData> {
         self.map_err(|e| error::from_platform(&e))
     }

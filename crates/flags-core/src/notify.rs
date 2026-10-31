@@ -12,8 +12,8 @@
 
 use std::time::Duration;
 
-use otto_tenant::ids::OrgId;
-use otto_tenant::Tx;
+use savvagent_tenant::ids::OrgId;
+use savvagent_tenant::Tx;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;

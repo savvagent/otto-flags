@@ -32,8 +32,8 @@ use std::future::Future;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use otto_tenant::ids::OrgId;
-use otto_tenant::Db;
+use savvagent_tenant::ids::OrgId;
+use savvagent_tenant::Db;
 use sqlx::{Acquire, PgConnection, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -95,7 +95,7 @@ impl Counts {
 /// ```
 /// use flags_core::ids::FlagAppId;
 /// use flags_core::metering::EvalCounter;
-/// use otto_tenant::ids::OrgId;
+/// use savvagent_tenant::ids::OrgId;
 ///
 /// let counter = EvalCounter::default();
 /// let (org, app) = (OrgId::new(), FlagAppId::new());
@@ -372,7 +372,7 @@ pub trait MeteringExt {
     fn evaluation_split(&mut self) -> impl Future<Output = Result<EvaluationSplit>> + Send;
 }
 
-impl MeteringExt for otto_tenant::Tx<'_> {
+impl MeteringExt for savvagent_tenant::Tx<'_> {
     async fn evaluation_split(&mut self) -> Result<EvaluationSplit> {
         let org = self.org();
         let apps: Vec<AppSplit> = sqlx::query_as(&format!(
@@ -507,7 +507,7 @@ SELECT \
 /// `occurred_at = hour`, with the client-key share of `served` held to
 /// [`DEFAULT_CLIENT_CEILING_PER_HOUR`] (production uses
 /// [`close_due_at`] with its configured ceiling), split across several rows if
-/// it exceeds [`otto_resource::MAX_METER_QUANTITY`]. A row with both counts
+/// it exceeds [`savvagent_resource::MAX_METER_QUANTITY`]. A row with both counts
 /// zero is deleted without an outbox row.
 ///
 /// Returns the number of hourly rows closed (deleted), including the ones
@@ -533,7 +533,7 @@ where
     F: FnMut(OrgId) -> Fut,
     Fut: Future<Output = BlockedLookup>,
 {
-    let cap = i64::try_from(otto_resource::MAX_METER_QUANTITY).unwrap_or(i64::MAX);
+    let cap = i64::try_from(savvagent_resource::MAX_METER_QUANTITY).unwrap_or(i64::MAX);
     close(db, lookup, cap, ceiling).await
 }
 

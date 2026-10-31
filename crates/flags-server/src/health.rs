@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use flags_core::usage::DeclarationHealth;
-use otto_tenant::Db;
+use savvagent_tenant::Db;
 
 /// How long a readiness check waits on the database.
 ///

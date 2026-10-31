@@ -33,9 +33,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use otto_tenant::ids::OrgId;
-use otto_tenant::Db;
 use rand::RngCore;
+use savvagent_tenant::ids::OrgId;
+use savvagent_tenant::Db;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;

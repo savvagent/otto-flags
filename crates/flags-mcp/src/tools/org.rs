@@ -63,8 +63,8 @@ impl Flags {
             role: member.as_ref().map(|m| m.role.into()),
             token: out::TokenOut {
                 kind: match caller.kind {
-                    otto_resource::TokenKind::Oauth => "oauth",
-                    otto_resource::TokenKind::Pat => "pat",
+                    savvagent_resource::TokenKind::Oauth => "oauth",
+                    savvagent_resource::TokenKind::Pat => "pat",
                 },
                 client_id: caller.client_id,
                 scopes: caller.scopes,

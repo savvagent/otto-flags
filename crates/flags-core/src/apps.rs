@@ -5,9 +5,9 @@
 //! environment names, and two SDK keys (see [`crate::keys`]). Creating an app
 //! or rotating its keys returns the server key in clear exactly once.
 
-use otto_tenant::audit::Entry;
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Tx;
+use savvagent_tenant::audit::Entry;
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::Tx;
 use serde::Serialize;
 use sqlx::FromRow;
 

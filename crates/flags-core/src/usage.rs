@@ -37,9 +37,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::error::Failure;
-use otto_resource::{MeterDeclaration, PlatformClient, UsageEvent, UsageStatus};
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::{Db, Tx};
+use savvagent_resource::{MeterDeclaration, PlatformClient, UsageEvent, UsageStatus};
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::{Db, Tx};
 use serde::Serialize;
 use sqlx::FromRow;
 use tokio::sync::watch;
@@ -255,8 +255,8 @@ pub struct BudgetReport {
 /// `budget_exceeded`, so a reader always gets a code it can branch on.
 fn blocked_code(reason: Option<&str>) -> &'static str {
     match reason {
-        Some(otto_resource::PAYMENT_REQUIRED) => otto_resource::PAYMENT_REQUIRED,
-        _ => otto_resource::BUDGET_EXCEEDED,
+        Some(savvagent_resource::PAYMENT_REQUIRED) => savvagent_resource::PAYMENT_REQUIRED,
+        _ => savvagent_resource::BUDGET_EXCEEDED,
     }
 }
 
@@ -318,7 +318,7 @@ pub struct ShipperConfig {
 impl Default for ShipperConfig {
     fn default() -> Self {
         Self {
-            batch: otto_resource::MAX_USAGE_BATCH,
+            batch: savvagent_resource::MAX_USAGE_BATCH,
             poll: Duration::from_secs(5),
             claim_lease: Duration::from_secs(120),
             base_backoff: Duration::from_secs(5),
@@ -344,7 +344,7 @@ struct Row {
 #[derive(Debug, thiserror::Error)]
 pub enum ShipError {
     #[error("the platform did not accept the batch: {0}")]
-    Platform(#[from] otto_resource::Error),
+    Platform(#[from] savvagent_resource::Error),
     #[error("outbox database error: {0}")]
     Db(#[from] sqlx::Error),
 }
@@ -571,7 +571,7 @@ async fn refuse_receipt(
     cfg: &ShipperConfig,
 ) -> ShipError {
     tracing::error!("{msg}; keeping every row and retrying");
-    let err = otto_resource::Error::Decode(msg);
+    let err = savvagent_resource::Error::Decode(msg);
     reschedule(db, ids, attempts, &stored_reason(&err), cfg).await;
     err.into()
 }
@@ -614,7 +614,7 @@ async fn reschedule(db: &Db, ids: &[i64], attempts: &[i32], reason: &str, cfg: &
 /// What `usage_outbox.last_error` records for a failed shipment: the
 /// failure's name and HTTP status (`http_status 502`), never its text,
 /// which can carry a platform response body or URL (#44).
-fn stored_reason(e: &otto_resource::Error) -> String {
+fn stored_reason(e: &savvagent_resource::Error) -> String {
     let f = crate::error::platform_failure_reason(e);
     match (f.reason, f.status) {
         (reason, Some(status)) => format!("{reason} {status}"),
@@ -729,7 +729,10 @@ const DECLARE_LOG_EVERY: Duration = Duration::from_secs(60);
 /// [`Failure`] always, and the platform's own words (its error text, or each
 /// rejected meter's reason) only for the `debug` line.
 fn declaration_failure(
-    result: std::result::Result<otto_resource::MeterDeclarationReceipt, otto_resource::Error>,
+    result: std::result::Result<
+        savvagent_resource::MeterDeclarationReceipt,
+        savvagent_resource::Error,
+    >,
 ) -> Option<(Failure, String)> {
     match result {
         Ok(receipt) if receipt.is_complete() => None,
@@ -871,10 +874,12 @@ pub async fn run_reporting(
                     .saturating_mul(1u32 << failures.min(6))
                     .min(Duration::from_secs(60));
                 match &e {
-                    ShipError::Platform(otto_resource::Error::Unauthorized) => tracing::error!(
-                        "the platform rejected this resource server's credential; usage is \
+                    ShipError::Platform(savvagent_resource::Error::Unauthorized) => {
+                        tracing::error!(
+                            "the platform rejected this resource server's credential; usage is \
                          accumulating in the outbox. Check FLAGS_INTROSPECTION_SECRET"
-                    ),
+                        )
+                    }
                     other => {
                         let f = other.failure_reason();
                         tracing::warn!(reason = f.reason, status = f.status, sqlstate = f.sqlstate(), transport = f.transport, retry_in = ?wait, "usage shipping failed");
@@ -904,17 +909,17 @@ mod tests {
 
     #[test]
     fn the_stored_reason_names_the_failure_without_its_text() {
-        let status = otto_resource::Error::Status {
+        let status = savvagent_resource::Error::Status {
             status: 502,
             body: "secret".into(),
         };
         assert_eq!(stored_reason(&status), "http_status 502");
         assert_eq!(
-            stored_reason(&otto_resource::Error::Unauthorized),
+            stored_reason(&savvagent_resource::Error::Unauthorized),
             "unauthorized"
         );
         assert_eq!(
-            stored_reason(&otto_resource::Error::Decode("secret".into())),
+            stored_reason(&savvagent_resource::Error::Decode("secret".into())),
             "decode"
         );
     }
@@ -1057,7 +1062,7 @@ mod tests {
                 let _ = sock.write_all(res.as_bytes()).await;
             }
         });
-        let cfg = otto_resource::ClientConfig::new(
+        let cfg = savvagent_resource::ClientConfig::new(
             format!("http://{addr}"),
             "https://flags.test/mcp",
             "secret",
@@ -1100,7 +1105,7 @@ mod tests {
             .local_addr()
             .expect("addr")
             .port();
-        let cfg = otto_resource::ClientConfig::new(
+        let cfg = savvagent_resource::ClientConfig::new(
             format!("http://127.0.0.1:{port}"),
             "https://flags.test/mcp",
             "secret",
@@ -1114,7 +1119,7 @@ mod tests {
 
     #[test]
     fn ship_errors_name_their_kind_without_the_text() {
-        let platform = ShipError::Platform(otto_resource::Error::Status {
+        let platform = ShipError::Platform(savvagent_resource::Error::Status {
             status: 502,
             body: "secret".into(),
         });

@@ -15,8 +15,8 @@ use flags_core::telemetry::{
 };
 use flags_core::usage;
 use flags_core::{eval, keys, Error};
-use otto_tenant::ids::{OrgId, UserId};
-use otto_tenant::Db;
+use savvagent_tenant::ids::{OrgId, UserId};
+use savvagent_tenant::Db;
 use serde_json::json;
 use sqlx::migrate::{MigrateError, Migration, MigrationType, Migrator};
 use sqlx::postgres::PgPoolOptions;
@@ -2517,13 +2517,13 @@ async fn org_deleted_purges_everything_and_revokes_keys(pool: PgPool) {
     .await
     .unwrap();
 
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
         Utc::now(),
         &json!({"org_id": org.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     let Outcome::Applied { detail } = platform_events::apply(&db, &event).await.unwrap() else {
         panic!("first delivery should apply");
     };
@@ -2610,13 +2610,13 @@ async fn org_deleted_purges_the_audit_trail_as_otto_app(pool: PgPool) {
     assert!(rows > 0 && other_rows > 0);
 
     let app_db = otto_app_db(&pool).await;
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
         Utc::now(),
         &json!({"org_id": org.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     let Outcome::Applied { detail } = platform_events::apply(&app_db, &event).await.unwrap() else {
         panic!("first delivery should apply");
     };
@@ -2665,13 +2665,13 @@ async fn org_deleted_purges_through_public_whatever_the_search_path(pool: PgPool
         .unwrap();
     assert_eq!(decoy, -1, "the unqualified name must resolve to the decoy");
 
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
         Utc::now(),
         &json!({"org_id": org.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     let Outcome::Applied { detail } = platform_events::apply(&app_db, &event).await.unwrap() else {
         panic!("first delivery should apply");
     };
@@ -3260,13 +3260,13 @@ async fn a_removed_member_is_refused_but_others_are_not(pool: PgPool) {
     let db = db(pool.clone()).await;
     let org = OrgId::new();
     let (gone, stays) = (UserId::new(), UserId::new());
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "member.removed",
         Utc::now(),
         &json!({"org_id": org.as_uuid(), "user_id": gone.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     let audited = || async {
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM audit_events \
@@ -3307,13 +3307,13 @@ async fn member_removed_after_org_deleted_writes_no_audit_row(pool: PgPool) {
     assert!(audit_rows(&pool, org).await > 0);
 
     let app_db = otto_app_db(&pool).await;
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
         Utc::now(),
         &json!({"org_id": org.as_uuid()}),
     );
-    let deleted = otto_resource::webhook::parse(&body).unwrap();
+    let deleted = savvagent_resource::webhook::parse(&body).unwrap();
     assert!(matches!(
         platform_events::apply(&app_db, &deleted).await.unwrap(),
         Outcome::Applied { .. }
@@ -3321,13 +3321,13 @@ async fn member_removed_after_org_deleted_writes_no_audit_row(pool: PgPool) {
     assert_eq!(audit_rows(&pool, org).await, 0);
 
     let user = UserId::new();
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "member.removed",
         Utc::now(),
         &json!({"org_id": org.as_uuid(), "user_id": user.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     assert_eq!(
         platform_events::apply(&app_db, &event).await.unwrap(),
         Outcome::Ignored
@@ -3461,7 +3461,7 @@ async fn policy_fixture(
     (app, flag)
 }
 
-async fn audit_actions(tx: &mut otto_tenant::Tx<'_>) -> Vec<String> {
+async fn audit_actions(tx: &mut savvagent_tenant::Tx<'_>) -> Vec<String> {
     sqlx::query_scalar(
         "SELECT action FROM audit_events WHERE action LIKE 'flags.rollback_policy.%' ORDER BY id",
     )
@@ -4131,13 +4131,13 @@ async fn turning_an_environment_back_on_rearms_its_policy(pool: PgPool) {
     )
     .await
     .unwrap();
-    async fn tripped(tx: &mut otto_tenant::Tx<'_>) -> bool {
+    async fn tripped(tx: &mut savvagent_tenant::Tx<'_>) -> bool {
         sqlx::query_scalar("SELECT tripped_at IS NOT NULL FROM rollback_policies")
             .fetch_one(tx.conn())
             .await
             .unwrap()
     }
-    async fn trip(tx: &mut otto_tenant::Tx<'_>) {
+    async fn trip(tx: &mut savvagent_tenant::Tx<'_>) {
         sqlx::query("UPDATE rollback_policies SET tripped_at = now()")
             .execute(tx.conn())
             .await
@@ -4665,13 +4665,13 @@ async fn a_deleted_org_is_not_checked(pool: PgPool) {
     let (app, flag, _) = checker_fixture(&db, org, actor, &["production"], Mode::Enforce).await;
     tripping_telemetry(&db, org, &app).await;
 
-    let body = otto_resource::webhook::body(
+    let body = savvagent_resource::webhook::body(
         uuid::Uuid::new_v4(),
         "org.deleted",
         Utc::now(),
         &json!({"org_id": org.as_uuid()}),
     );
-    let event = otto_resource::webhook::parse(&body).unwrap();
+    let event = savvagent_resource::webhook::parse(&body).unwrap();
     platform_events::apply(&db, &event).await.unwrap();
 
     let err = check_flag(&db, &Entitlement::Granted, org, flag.id)
@@ -5819,9 +5819,9 @@ async fn assert_counts(pool: &PgPool, expected: &[(&str, &str, i64)]) {
 }
 
 /// A delivery of `kind` for `org` with `data`.
-fn delivery(kind: &str, data: serde_json::Value) -> otto_resource::webhook::WebhookEvent {
-    let body = otto_resource::webhook::body(uuid::Uuid::new_v4(), kind, Utc::now(), &data);
-    otto_resource::webhook::parse(&body).unwrap()
+fn delivery(kind: &str, data: serde_json::Value) -> savvagent_resource::webhook::WebhookEvent {
+    let body = savvagent_resource::webhook::body(uuid::Uuid::new_v4(), kind, Utc::now(), &data);
+    savvagent_resource::webhook::parse(&body).unwrap()
 }
 
 /// `team.deleted`'s dedupe marker lands in `public`, so a redelivery is
@@ -6177,7 +6177,7 @@ async fn a_lookup_returns_its_connection_before_it_answers(pool: PgPool) {
     let db = db(pool.clone()).await;
     let unknown = Arc::new(keys::UnknownKeys::new());
     let limit = keys::KeyLookups::new(1, keys::KEY_LOOKUP_WAIT);
-    let all_idle = |db: &otto_tenant::Db| db.pool().num_idle() == db.pool().size() as usize;
+    let all_idle = |db: &savvagent_tenant::Db| db.pool().num_idle() == db.pool().size() as usize;
     for _ in 0..3 {
         let key = keys::NewKey::mint(KeyKind::Client).key;
         assert!(keys::resolve_hash(&db, &keys::hash(&key))
@@ -6240,7 +6240,7 @@ async fn a_dropped_lookup_still_remembers_its_unknown_key(pool: PgPool) {
 ///
 /// Textual, over each workspace crate's non-test `src`: comment lines and the
 /// trailing `#[cfg(test)] mod tests` are skipped (it must be the file's last
-/// item). It counts the ways to an unconstrained connection: `otto_tenant::Db`'s
+/// item). It counts the ways to an unconstrained connection: `savvagent_tenant::Db`'s
 /// `.pool()` and `begin_unpinned`, its audit helpers that run on the pool
 /// (`audit_global`, `audit_for_org`, `audit_trail_for_user`), any `PgPool`
 /// (`PgPoolOptions` included) held or built outside a `Db`, and a connection
@@ -6652,7 +6652,7 @@ async fn stored_oversized_configuration_still_evaluates(pool: PgPool) {
 
 /// Make `n` changes to flag `key` (renames `{key}{i}`), so it gains `n` versions.
 async fn bump(
-    tx: &mut otto_tenant::Tx<'_>,
+    tx: &mut savvagent_tenant::Tx<'_>,
     app: &flags_core::apps::FlagApp,
     key: &str,
     n: usize,
@@ -7785,7 +7785,7 @@ async fn an_app_starts_unrestricted_and_its_origins_are_set_idempotently(pool: P
 }
 
 /// Audit entries for one app, read inside the open transaction.
-async fn app_audits(tx: &mut otto_tenant::Tx<'_>, app: flags_core::ids::FlagAppId) -> i64 {
+async fn app_audits(tx: &mut savvagent_tenant::Tx<'_>, app: flags_core::ids::FlagAppId) -> i64 {
     sqlx::query_scalar("SELECT count(*) FROM audit_events WHERE target_id = $1")
         .bind(app.to_string())
         .fetch_one(tx.conn())

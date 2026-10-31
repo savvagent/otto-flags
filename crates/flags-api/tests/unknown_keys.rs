@@ -15,7 +15,7 @@ use tower::ServiceExt;
 #[sqlx::test(migrator = "flags_core::MIGRATOR")]
 async fn a_repeated_unknown_key_is_refused_from_memory(pool: PgPool) {
     let state = AppState::new(
-        otto_tenant::Db::from_pool(pool),
+        savvagent_tenant::Db::from_pool(pool),
         Listener::detached(),
         Hints::detached(),
         Default::default(),

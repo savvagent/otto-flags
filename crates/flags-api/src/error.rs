@@ -126,8 +126,8 @@ fn warn_due(last: &Mutex<Option<Instant>>, now: Instant) -> bool {
     due
 }
 
-impl From<otto_tenant::Error> for ApiError {
-    fn from(e: otto_tenant::Error) -> Self {
+impl From<savvagent_tenant::Error> for ApiError {
+    fn from(e: savvagent_tenant::Error) -> Self {
         flags_core::Error::from(e).into()
     }
 }

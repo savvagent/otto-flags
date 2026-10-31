@@ -20,7 +20,7 @@
 
 use std::time::Duration;
 
-use otto_tenant::Db;
+use savvagent_tenant::Db;
 use sqlx::pool::PoolConnection;
 use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
@@ -49,10 +49,10 @@ pub(crate) async fn begin(db: &Db) -> sqlx::Result<Transaction<'static, Postgres
 /// `SET LOCAL ROLE`), so they end with the transaction and never leak to the
 /// next user of the connection.
 ///
-/// Whether the role can be assumed is the question `otto_tenant::Db::begin`
+/// Whether the role can be assumed is the question `savvagent_tenant::Db::begin`
 /// asks before its own `SET LOCAL ROLE`, with the same catalog query: its
-/// answer is private to otto-tenant, so it is asked again here, once per
-/// transaction (#79 will use otto-tenant's own). Where it cannot be assumed
+/// answer is private to savvagent-tenant, so it is asked again here, once per
+/// transaction (#79 will use savvagent-tenant's own). Where it cannot be assumed
 /// the role is left alone, as `Db::begin` leaves it, which is only safe when
 /// the pool's own role is subject to row-level security (a managed Postgres
 /// role with no CREATEROLE). `Db::verify_tenant_isolation` checks that once at
